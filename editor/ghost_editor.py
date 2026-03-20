@@ -91,6 +91,11 @@ class GhostEditor(QPlainTextEdit):
         self.line_changes.clear()
         self.line_number_area.update()
 
+    # [NEW] Check if the file has unsaved changes
+    def is_dirty(self):
+        """Returns True if the current text differs from the last saved state."""
+        return self.toPlainText() != self.original_text
+
     def calculate_diff(self):
         """Compares current text to the original state and maps changed lines."""
         current_lines = self.toPlainText().split('\n')

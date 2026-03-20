@@ -6,7 +6,7 @@ import ast
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QProgressBar, QLabel, 
                              QDockWidget, QTreeView, QPlainTextEdit, QTextEdit, 
                              QVBoxLayout, QWidget, QLineEdit, QTabWidget,
-                             QPushButton, QHBoxLayout) 
+                             QPushButton, QHBoxLayout, QMessageBox, QFileDialog)
 from PyQt6.QtCore import QTimer, QThread, Qt, QDir, QProcess
 from PyQt6.QtGui import (QFileSystemModel, QAction, QKeySequence, QTextCursor,
                          QIcon, QPixmap, QPainter, QColor)
@@ -181,8 +181,55 @@ class CodeEditor(QMainWindow):
         
         self._is_loading = False # <-- LOCK OFF (Moved to the very end!)
         return editor
-
+        
+    def closeEvent(self, event):
+        # Check if ANY tabs are dirty
+        unsaved = False
+        for i in range(self.tabs.count()):
+            editor = self.tabs.widget(i)
+            if hasattr(editor, 'is_dirty') and editor.is_dirty():
+                unsaved = True
+                break
+                
+        if unsaved:
+            reply = QMessageBox.question(
+                self, "Unsaved Changes",
+                "You have unsaved files. Do you want to save them before exiting?",
+                QMessageBox.StandardButton.SaveAll | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel
+            )
+            
+            if reply == QMessageBox.StandardButton.SaveAll:
+                for i in range(self.tabs.count()):
+                    editor = self.tabs.widget(i)
+                    if hasattr(editor, 'is_dirty') and editor.is_dirty():
+                        self.save_file(i)
+                event.accept() # Allow the app to close
+            elif reply == QMessageBox.StandardButton.Discard:
+                event.accept() # Close without saving
+            else:
+                event.ignore() # Cancel the close entirely
+        else:
+            event.accept()
+            
     def close_tab(self, index):
+        editor = self.tabs.widget(index)
+        if not editor: return
+
+        # [NEW] Check for unsaved changes before closing the tab
+        if hasattr(editor, 'is_dirty') and editor.is_dirty():
+            filename = self.tabs.tabText(index).replace("*", "")
+            reply = QMessageBox.question(
+                self, "Unsaved Changes",
+                f"Save changes to '{filename}' before closing?",
+                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel
+            )
+
+            if reply == QMessageBox.StandardButton.Save:
+                if not self.save_file(index):
+                    return # Abort close if they cancel the save dialog
+            elif reply == QMessageBox.StandardButton.Cancel:
+                return # Abort close entirely
+
         widget = self.tabs.widget(index)
         if widget:
             widget.deleteLater()
@@ -209,7 +256,39 @@ class CodeEditor(QMainWindow):
             self.add_new_tab(filename, content, file_path)
         except Exception as e:
             print(f"Could not open file: {e}")
+            
+    def save_file(self, index=None):
+        if index is None:
+            index = self.tabs.currentIndex()
+        editor = self.tabs.widget(index)
+        if not editor: return False
 
+        # Ask for a path if this is a new file
+        if not editor.file_path:
+            path, _ = QFileDialog.getSaveFileName(self, "Save File", "", "Python Files (*.py);;HTML Files (*.html);;All Files (*)")
+            if path:
+                editor.file_path = path
+                self.tabs.setTabText(index, os.path.basename(path))
+            else:
+                return False # User canceled the save dialog
+
+        code = editor.toPlainText()
+        try:
+            with open(editor.file_path, "w", encoding="utf-8") as f:
+                f.write(code)
+            
+            # Reset change tracking!
+            editor.set_original_state(code) 
+            
+            # Remove the asterisk from the tab title
+            current_text = self.tabs.tabText(index)
+            if current_text.endswith("*"):
+                self.tabs.setTabText(index, current_text[:-1])
+            return True
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Could not save file: {e}")
+            return False
+            
     # -----------------------------
     # Cross-File Context Engine
     # -----------------------------
@@ -592,9 +671,17 @@ class CodeEditor(QMainWindow):
     def on_text_changed(self):
         editor = self.current_editor()
         
-        # [FIXED] Added a check to make sure the user is actually focused on the editor!
         if not editor or getattr(self, '_is_loading', False) or editor.function_active or not editor.hasFocus():
             return
+
+        # [NEW] Add or remove the asterisk indicator dynamically
+        if hasattr(editor, 'is_dirty'):
+            index = self.tabs.indexOf(editor)
+            current_title = self.tabs.tabText(index)
+            if editor.is_dirty() and not current_title.endswith("*"):
+                self.tabs.setTabText(index, current_title + "*")
+            elif not editor.is_dirty() and current_title.endswith("*"):
+                self.tabs.setTabText(index, current_title[:-1])
 
         self.timer.start(500)
         editor.clear_ghost_text()
