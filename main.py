@@ -9,11 +9,12 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QProgressBar, QLabel,
                              QPushButton, QHBoxLayout, QMessageBox, QFileDialog)
 from PyQt6.QtCore import QTimer, QThread, Qt, QDir, QProcess
 from PyQt6.QtGui import (QFileSystemModel, QAction, QKeySequence, QTextCursor,
-                         QIcon, QPixmap, QPainter, QColor)
+                         QIcon, QPixmap, QPainter, QColor, QShortcut)
 
 from editor.ghost_editor import GhostEditor
 from ai.worker import AIWorker
 from ui.menu import setup_file_menu
+from ui.find_replace import FindReplaceWidget
 
 from editor.highlighter import registry
 from plugins.git_plugin import GitDockWidget
@@ -89,7 +90,7 @@ DOCK_STYLE = """
 class CodeEditor(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Faux-Pilot")
+        self.setWindowTitle("QuillAI")
         self._is_loading = False
         self.current_error_text = ""
 
@@ -116,7 +117,32 @@ class CodeEditor(QMainWindow):
             }
         """)
 
-        self.setCentralWidget(self.tabs)
+        # --------------------------
+        # Layout Assembly (Tabs + Find/Replace)
+        # --------------------------
+        self.central_container = QWidget()
+        self.central_layout = QVBoxLayout(self.central_container)
+        self.central_layout.setContentsMargins(0, 0, 0, 0)
+        self.central_layout.setSpacing(0)
+
+        # Initialize and hide the Find/Replace Panel
+        self.find_replace_panel = FindReplaceWidget(self)
+        self.find_replace_panel.hide()
+
+        self.central_layout.addWidget(self.find_replace_panel)
+        self.central_layout.addWidget(self.tabs)
+        
+        self.setCentralWidget(self.central_container)
+
+        # Keybinds (Find, Replace, Save)
+        self.find_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
+        self.find_shortcut.activated.connect(self.show_find_replace)
+
+        self.replace_shortcut = QShortcut(QKeySequence("Ctrl+H"), self)
+        self.replace_shortcut.activated.connect(self.show_find_replace)
+
+        self.save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
+        self.save_shortcut.activated.connect(self.save_file)
 
         self.timer = QTimer()
         self.timer.setSingleShot(True)
@@ -153,6 +179,13 @@ class CodeEditor(QMainWindow):
 
         # Start with a blank tab
         self.add_new_tab("Untitled", "")
+
+    # -----------------------------
+    # Find / Replace Method
+    # -----------------------------
+    def show_find_replace(self):
+        self.find_replace_panel.show()
+        self.find_replace_panel.focus_find()
 
     # -----------------------------
     # Tab Management Methods
@@ -215,7 +248,7 @@ class CodeEditor(QMainWindow):
         editor = self.tabs.widget(index)
         if not editor: return
 
-        # [NEW] Check for unsaved changes before closing the tab
+        # Check for unsaved changes before closing the tab
         if hasattr(editor, 'is_dirty') and editor.is_dirty():
             filename = self.tabs.tabText(index).replace("*", "")
             reply = QMessageBox.question(
@@ -238,7 +271,7 @@ class CodeEditor(QMainWindow):
             self.add_new_tab("Untitled", "")
 
     def open_file_in_tab(self, file_path):
-        # [NEW] Prevent trying to open directories as text files!
+        # Prevent trying to open directories as text files
         if os.path.isdir(file_path):
             return
 
@@ -277,13 +310,18 @@ class CodeEditor(QMainWindow):
             with open(editor.file_path, "w", encoding="utf-8") as f:
                 f.write(code)
             
-            # Reset change tracking!
+            # Reset change tracking for the gutter
             editor.set_original_state(code) 
             
             # Remove the asterisk from the tab title
             current_text = self.tabs.tabText(index)
             if current_text.endswith("*"):
                 self.tabs.setTabText(index, current_text[:-1])
+
+            # Automatically update the Git tree
+            if hasattr(self, 'git_dock'):
+                self.git_dock.refresh_status()
+
             return True
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Could not save file: {e}")
@@ -361,7 +399,7 @@ class CodeEditor(QMainWindow):
         """)
 
         self.chat_input = QLineEdit()
-        self.chat_input.setPlaceholderText("Ask Faux-Pilot about your code...")
+        self.chat_input.setPlaceholderText("Ask QuillAI about your code...")
         self.chat_input.setStyleSheet("""
             QLineEdit {
                 background-color: #2D2D30;
@@ -387,7 +425,7 @@ class CodeEditor(QMainWindow):
         self.chat_input.clear()
 
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-        self.chat_history.insertPlainText(f"\nYou: {user_text}\n\nFaux-Pilot: ")
+        self.chat_history.insertPlainText(f"\nYou: {user_text}\n\nQuillAI: ")
         self.chat_history.ensureCursorVisible()
 
         editor = self.current_editor()
@@ -438,7 +476,7 @@ class CodeEditor(QMainWindow):
         self.output_editor.setReadOnly(True)
         self.output_editor.setStyleSheet("QPlainTextEdit { background-color: #1E1E1E; color: #CCCCCC; font-family: 'JetBrains Mono', monospace; font-size: 10pt; border: none; }")
         
-        # [NEW] The Explain Error Button
+        # Explain Error Button
         self.explain_error_btn = QPushButton("💡 Explain Error")
         self.explain_error_btn.setStyleSheet("""
             QPushButton {
@@ -466,7 +504,7 @@ class CodeEditor(QMainWindow):
 
         self.output_dock = QDockWidget("Output", self)
         self.output_dock.setStyleSheet(DOCK_STYLE) 
-        self.output_dock.setWidget(output_container) # Set the container instead of just the editor
+        self.output_dock.setWidget(output_container) 
         self.output_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.output_dock)
         self.output_dock.hide()
@@ -478,7 +516,7 @@ class CodeEditor(QMainWindow):
         if self.process.state() == QProcess.ProcessState.Running:
             self.process.kill()
 
-        # [NEW] Reset the error state for a fresh run
+        # Reset the error state for a fresh run
         self.output_editor.clear()
         self.current_error_text = ""
         self.explain_error_btn.hide()
@@ -506,7 +544,7 @@ class CodeEditor(QMainWindow):
         self.output_editor.insertPlainText(stderr)
         self.output_editor.ensureCursorVisible()
         
-        # [NEW] Track the error and show the button!
+        # Track the error and show the button
         self.current_error_text += stderr
         self.explain_error_btn.show()
 
@@ -522,7 +560,7 @@ class CodeEditor(QMainWindow):
 
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
         self.chat_history.insertPlainText(
-            f"\nYou: {user_text}\n[Error Trace Sent]\n\nFaux-Pilot: "
+            f"\nYou: {user_text}\n[Error Trace Sent]\n\nQuillAI: "
         )
         self.chat_history.ensureCursorVisible()
 
@@ -537,9 +575,7 @@ class CodeEditor(QMainWindow):
         if len(cross_file_context) > 2000:
             cross_file_context = "...(truncated)...\n" + cross_file_context[-2000:]
 
-        # =============================
         # Build the mega prompt
-        # =============================
         prompt_with_context = f"""
     {user_text}
 
@@ -559,16 +595,13 @@ class CodeEditor(QMainWindow):
     - Include corrected code if possible
     """
 
-        # =============================
-        # Run AI Worker (chat mode)
-        # =============================
         thread = QThread()
 
         self.chat_worker = AIWorker(
             prompt=prompt_with_context,
             editor_text="",
             cursor_pos=0,
-            is_chat=True  # IMPORTANT
+            is_chat=True
         )
 
         self.chat_worker.moveToThread(thread)
@@ -644,7 +677,6 @@ class CodeEditor(QMainWindow):
 
     def setup_git_panel(self):
         self.git_dock = GitDockWidget(self)
-        # Connect the double-click signal so clicking a Git file opens it in a tab!
         self.git_dock.file_double_clicked.connect(self.open_file_in_tab)
         
         # Dock it to the left, tabbed with the Explorer
@@ -674,7 +706,7 @@ class CodeEditor(QMainWindow):
         if not editor or getattr(self, '_is_loading', False) or editor.function_active or not editor.hasFocus():
             return
 
-        # [NEW] Add or remove the asterisk indicator dynamically
+        # Add or remove the asterisk indicator dynamically
         if hasattr(editor, 'is_dirty'):
             index = self.tabs.indexOf(editor)
             current_title = self.tabs.tabText(index)
