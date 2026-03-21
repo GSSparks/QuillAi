@@ -29,7 +29,9 @@ class SnippetManager:
             "with open (read)": "with open('filename.txt', 'r', encoding='utf-8') as f:\n    content = f.read()",
             "with open (write)": "with open('filename.txt', 'w', encoding='utf-8') as f:\n    f.write(content)",
             "ansible task": "- name: Task Name\n  ansible.builtin.module:\n    key: value",
-            "ansible apt": "- name: Install package\n  apt:\n    name: package_name\n    state: present"
+            "ansible apt": "- name: Install package\n  apt:\n    name: package_name\n    state: present",
+            "nix flake": "{\n  description = \"\";\n\n  inputs = {\n    nixpkgs.url = \"github:NixOS/nixpkgs/nixos-unstable\";\n  };\n\n  outputs = { self, nixpkgs }:\n    let\n      system = \"x86_64-linux\";\n      pkgs = nixpkgs.legacyPackages.${system};\n    in\n    {\n      # Config here\n    };\n}",
+            "nix package": "environment.systemPackages = with pkgs; [\n  \n];",    
         }
 
     def get_snippets(self, prefix=""):
