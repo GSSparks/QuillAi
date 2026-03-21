@@ -139,6 +139,8 @@ class GitDockWidget(QDockWidget):
 
     def run_git_command(self, args):
         try:
+            current_dir = os.getcwd()
+            
             result = subprocess.run(
                 args,
                 cwd=QDir.currentPath(),

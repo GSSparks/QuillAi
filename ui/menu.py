@@ -53,9 +53,17 @@ def setup_file_menu(window):
             selected_files = dialog.selectedFiles()
             if selected_files:
                 path = selected_files[0]
+                
+                # Extract the folder path from the file and change directory!
+                # Example: turns '/home/user/dev/main.py' into '/home/user/dev'
+                file_directory = os.path.dirname(path)
+                os.chdir(file_directory)
+                
                 window.open_file_in_tab(path)
-
-    # [FIXED] Removed the redundant local save_file method!
+                
+                # Force the Git plugin to refresh immediately after the directory changes
+                if hasattr(window, 'git_plugin'):
+                    window.git_plugin.refresh_status()
 
     def save_as_file():
         editor = window.current_editor()
