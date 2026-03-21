@@ -429,23 +429,45 @@ class CodeEditor(QMainWindow):
         if self.tabs.count() == 0:
             self.add_new_tab("Untitled", "")
 
-    def open_file_in_tab(self, file_path):
+    def open_file_in_tab(self, file_path, line_number=None):
         if os.path.isdir(file_path):
             return
 
+        editor_to_focus = None
+
+        # Check if it's already open
         for i in range(self.tabs.count()):
             editor = self.tabs.widget(i)
             if hasattr(editor, 'file_path') and editor.file_path == file_path:
                 self.tabs.setCurrentIndex(i)
+                editor_to_focus = editor
+                break
+
+        # If not open, load it
+        if not editor_to_focus:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                filename = os.path.basename(file_path)
+                editor_to_focus = self.add_new_tab(filename, content, file_path)
+            except Exception as e:
+                print(f"Could not open file: {e}")
                 return
 
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            filename = os.path.basename(file_path)
-            self.add_new_tab(filename, content, file_path)
-        except Exception as e:
-            print(f"Could not open file: {e}")
+        # [NEW] If a line number was provided by Find in Files, jump to it!
+        if editor_to_focus and line_number is not None:
+            cursor = editor_to_focus.textCursor()
+            # Move cursor to the start of the document
+            cursor.movePosition(QTextCursor.MoveOperation.Start)
+            # Move down by (line_number - 1) blocks
+            cursor.movePosition(QTextCursor.MoveOperation.NextBlock, n=line_number - 1)
+            
+            editor_to_focus.setTextCursor(cursor)
+            editor_to_focus.ensureCursorVisible()
+            editor_to_focus.setFocus()
+            
+            # Briefly highlight the line to draw the user's eye to it
+            editor_to_focus.highlight_current_line()
             
     def save_file(self, index=None):
         if index is None or isinstance(index, bool):
