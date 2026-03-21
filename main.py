@@ -981,6 +981,140 @@ class CodeEditor(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+
+    # ==========================================
+    # Global Modern IDE Stylesheet
+    # ==========================================
+    app.setStyleSheet("""
+        /* Base Application Colors */
+        QWidget {
+            background-color: #1E1E1E;
+            color: #D4D4D4;
+        }
+        
+        /* --------------------------------------
+           Panel Dividers (The Splitter)
+           -------------------------------------- */
+        QSplitter::handle {
+            background-color: #333333; /* The crisp 1px line color */
+            margin: 0px;
+        }
+        QSplitter::handle:horizontal {
+            width: 1px; /* 1px width for side-by-side panels */
+        }
+        QSplitter::handle:vertical {
+            height: 1px; /* 1px height for stacked panels (like terminal) */
+        }
+        
+        QSplitter::handle:hover {
+            background-color: #007ACC; 
+        }
+
+        /* --------------------------------------
+           Modern Floating Scrollbars (Global)
+           -------------------------------------- */
+        QScrollBar:vertical {
+            border: none;
+            background: transparent;
+            width: 14px;
+            margin: 0px;
+        }
+        QScrollBar::handle:vertical {
+            background: #424242;
+            min-height: 30px;
+            border-radius: 7px;
+            margin: 2px 3px 2px 3px;
+        }
+        QScrollBar::handle:vertical:hover {
+            background: #4F4F4F;
+        }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+            height: 0px;
+        }
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+            background: none;
+        }
+
+        QScrollBar:horizontal {
+            border: none;
+            background: transparent;
+            height: 14px;
+            margin: 0px;
+        }
+        QScrollBar::handle:horizontal {
+            background: #424242;
+            min-width: 30px;
+            border-radius: 7px;
+            margin: 3px 2px 3px 2px;
+        }
+        QScrollBar::handle:horizontal:hover {
+            background: #4F4F4F;
+        }
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+            width: 0px;
+        }
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+            background: none;
+        }
+
+        /* --------------------------------------
+           Input Boxes (Search, Chat, etc.)
+           -------------------------------------- */
+        QLineEdit, QTextEdit {
+            background-color: #252526;
+            border: 1px solid #3E3E42;
+            border-radius: 4px;
+            padding: 5px 8px;
+            color: #CCCCCC;
+            selection-background-color: #264F78;
+        }
+        QLineEdit:focus, QTextEdit:focus {
+            border: 1px solid #007ACC; /* VS Code Focus Blue */
+        }
+
+        /* --------------------------------------
+           Trees & Lists (Explorer, Find in Files)
+           -------------------------------------- */
+        QTreeView, QListView {
+            background-color: #1E1E1E;
+            border: none;
+            outline: none; /* Removes the ugly dotted focus rectangle */
+        }
+        QTreeView::item, QListView::item {
+            padding: 4px;
+            border-radius: 4px; /* Rounded selection boxes */
+        }
+        QTreeView::item:selected, QListView::item:selected {
+            background-color: #37373D;
+            color: #FFFFFF;
+        }
+        QTreeView::item:hover:!selected, QListView::item:hover:!selected {
+            background-color: #2A2D2E;
+        }
+
+        /* --------------------------------------
+           Buttons
+           -------------------------------------- */
+        QPushButton {
+            background-color: #0E639C;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 6px 14px;
+            font-weight: bold;
+        }
+        QPushButton:hover {
+            background-color: #1177BB;
+        }
+        QPushButton:pressed {
+            background-color: #094771;
+        }
+        QPushButton:disabled {
+            background-color: #333333;
+            color: #888888;
+        }
+    """)    
+    
     window = CodeEditor()
     window.resize(1000, 700)
     window.show()

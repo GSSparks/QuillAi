@@ -1,9 +1,11 @@
 from PyQt6.QtWidgets import QPlainTextEdit, QWidget, QTextEdit, QMenu
-from PyQt6.QtGui import QPainter, QColor, QFontMetrics, QTextCursor, QFont, QTextFormat, QAction, QTextCharFormat, QTextBlockFormat, QTextOption
+from PyQt6.QtGui import QPainter, QColor, QFontMetrics, QTextCursor, QFont, QTextFormat, QAction, QTextCharFormat, QTextBlockFormat, QTextOption, QIcon
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect, QSize, QTimer
 import re
 import ast
 import difflib
+import subprocess
+import json
 
 try:
     import yaml
@@ -60,7 +62,7 @@ class MinimapArea(QPlainTextEdit):
         super().__init__(editor)
         self.editor = editor
         
-        # [FIXED] We removed setDocument() so the minimap is fully independent!
+        # We removed setDocument() so the minimap is fully independent!
         
         self.setReadOnly(True)
         self.setWordWrapMode(QTextOption.WrapMode.NoWrap)
@@ -71,7 +73,7 @@ class MinimapArea(QPlainTextEdit):
             QPlainTextEdit {
                 background-color: #1E1E1E; 
                 color: #888888; 
-                border-left: 1px solid #3E3E42; 
+                border-left: 1px solid #333333; 
                 border-right: none;
                 border-top: none;
                 border-bottom: none;
@@ -147,11 +149,60 @@ class GhostEditor(QPlainTextEdit):
 
     def __init__(self):
         super().__init__()
+        # Comprehensive Modern UI Stylesheet
         self.setStyleSheet("""
             QPlainTextEdit {
                 background-color: #1E1E1E;
-                color: #CCCCCC;
+                color: #D4D4D4; /* Softer, highly readable white/grey */
                 border: none;
+                selection-background-color: #264F78; /* VS Code Blue */
+                selection-color: #FFFFFF;
+            }
+            
+            /* Modern Thin Vertical Scrollbar */
+            QScrollBar:vertical {
+                border: none;
+                background: #1E1E1E;
+                width: 14px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #424242;
+                min-height: 30px;
+                border-radius: 7px;
+                margin: 2px 3px 2px 3px; /* Pushes the handle in so it floats */
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #4F4F4F;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px; /* Hides the ugly up/down arrows */
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+            
+            /* Modern Thin Horizontal Scrollbar */
+            QScrollBar:horizontal {
+                border: none;
+                background: #1E1E1E;
+                height: 14px;
+                margin: 0px;
+            }
+            QScrollBar::handle:horizontal {
+                background: #424242;
+                min-width: 30px;
+                border-radius: 7px;
+                margin: 3px 2px 3px 2px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: #4F4F4F;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+            }
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+                background: none;
             }
         """)
 
@@ -169,6 +220,8 @@ class GhostEditor(QPlainTextEdit):
         font.setPointSize(10)
         font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         self.setFont(font)
+        
+        self.document().setDocumentMargin(12)
 
         self.original_text = ""
         self.line_changes = {} 
@@ -228,7 +281,7 @@ class GhostEditor(QPlainTextEdit):
         self.current_line_selection = []
         if not self.isReadOnly():
             selection = QTextEdit.ExtraSelection()
-            line_color = QColor(60, 60, 60, 100)
+            line_color = QColor("#2A2D2E")
             selection.format.setBackground(line_color)
             selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
 
@@ -333,10 +386,11 @@ class GhostEditor(QPlainTextEdit):
                         msg = f"SC{err.get('code')}: {err.get('message')}"
                         self._draw_error_squiggle(line_idx, col_offset, msg, end_offset)
             except FileNotFoundError:
-                # Shellcheck isn't installed or isn't in PATH
-                pass
-            except Exception:
-                pass
+                # [NEW] Print to the terminal so we can see it!
+                print("LINTER ERROR: shellcheck binary not found in PATH!")
+            except Exception as e:
+                # [NEW] Print any JSON parsing or Subprocess errors
+                print(f"LINTER ERROR: {e}")
 
     def contextMenuEvent(self, event):
         menu = self.createStandardContextMenu(event.pos())
@@ -487,6 +541,14 @@ class GhostEditor(QPlainTextEdit):
     def line_number_area_paint_event(self, event):
         painter = QPainter(self.line_number_area)
         painter.fillRect(event.rect(), QColor(35, 35, 35))
+        
+        # Match the editor background perfectly for a seamless look
+        painter.fillRect(event.rect(), QColor("#1E1E1E"))
+        
+        # Draw a crisp 1px separator line down the right side of the gutter
+        painter.setPen(QColor("#333333"))
+        painter.drawLine(self.line_number_area.width() - 1, event.rect().top(),
+                         self.line_number_area.width() - 1, event.rect().bottom())
 
         block = self.firstVisibleBlock()
         block_number = block.blockNumber()
