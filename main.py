@@ -70,7 +70,6 @@ class CustomFileSystemModel(QFileSystemModel):
                     return self.file_icon
         return super().data(index, role)
 
-# [FIXED] Moved DOCK_STYLE to the global scope!
 DOCK_STYLE = """
     QDockWidget {
         color: #CCCCCC;

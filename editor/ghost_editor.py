@@ -1,11 +1,38 @@
-from PyQt6.QtWidgets import QPlainTextEdit, QWidget, QTextEdit
-from PyQt6.QtGui import QPainter, QColor, QFontMetrics, QTextCursor, QFont, QTextFormat
+from PyQt6.QtWidgets import QPlainTextEdit, QWidget, QTextEdit, QMenu
+from PyQt6.QtGui import QPainter, QColor, QFontMetrics, QTextCursor, QFont, QTextFormat, QAction
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect, QSize, QTimer
 import re
 import ast
 import difflib
 
 from ai.worker import AIWorker
+
+# ==========================================
+# [NEW] Professional Snippet Manager
+# ==========================================
+class SnippetManager:
+    def __init__(self):
+        # Dictionary mapping display names to the actual boilerplate code
+        self.snippets = {
+            "for loop": "for i in range():\n    pass",
+            "if statement": "if condition:\n    pass",
+            "def function": "def function_name():\n    pass",
+            "class definition": "class ClassName:\n    def __init__(self):\n        pass",
+            "try/except": "try:\n    pass\nexcept Exception as e:\n    print(e)",
+            "main block": "if __name__ == '__main__':\n    main()",
+            "list comprehension": "[x for x in items if condition]",
+            "with open (read)": "with open('filename.txt', 'r', encoding='utf-8') as f:\n    content = f.read()",
+            "with open (write)": "with open('filename.txt', 'w', encoding='utf-8') as f:\n    f.write(content)"
+        }
+
+    def get_snippets(self, prefix=""):
+        if not prefix:
+            return self.snippets
+            
+        # Filter snippets if the user typed a prefix (like "for" or "def")
+        filtered = {k: v for k, v in self.snippets.items() if prefix.lower() in k.lower()}
+        return filtered if filtered else self.snippets
+
 
 class LineNumberArea(QWidget):
     def __init__(self, editor):
@@ -18,8 +45,8 @@ class LineNumberArea(QWidget):
     def paintEvent(self, event):
         self.codeEditor.line_number_area_paint_event(event)
 
+
 class GhostEditor(QPlainTextEdit):
-    # [FIXED] Define custom signals to talk to the main window
     ai_started = pyqtSignal()
     ai_finished = pyqtSignal()
 
@@ -34,6 +61,7 @@ class GhostEditor(QPlainTextEdit):
         """)
 
         self.ghost_text = ""
+        self.snippet_manager = SnippetManager() # [NEW] Initialize snippets
 
         # function streaming state
         self.function_cursor = None
@@ -45,33 +73,29 @@ class GhostEditor(QPlainTextEdit):
         font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         self.setFont(font)
 
-        # --- NEW: Change Tracking State ---
+        # --- Change Tracking State ---
         self.original_text = ""
-        self.line_changes = {} # Stores {line_index: 'added' | 'modified'}
+        self.line_changes = {} 
         
         self.diff_timer = QTimer(self)
         self.diff_timer.setSingleShot(True)
         self.diff_timer.timeout.connect(self.calculate_diff)
-        self.textChanged.connect(lambda: self.diff_timer.start(400)) # 400ms debounce
+        self.textChanged.connect(lambda: self.diff_timer.start(400)) 
 
         # --- Line Number Setup ---
         self.line_number_area = LineNumberArea(self)
-
-        # When the document changes size, update the margin
         self.blockCountChanged.connect(self.update_line_number_area_width)
-        # When the editor scrolls, scroll the line numbers
         self.updateRequest.connect(self.update_line_number_area)
-
         self.update_line_number_area_width(0)
         self.setTabStopDistance(4 * self.fontMetrics().horizontalAdvance(' '))
+        
         self.cursorPositionChanged.connect(self.highlight_current_line)
-        self.highlight_current_line() # Call once to highlight line 1 on startup
+        self.highlight_current_line() 
 
     def highlight_current_line(self):
         extra_selections = []
         if not self.isReadOnly():
             selection = QTextEdit.ExtraSelection()
-            # A subtle dark-theme friendly highlight color
             line_color = QColor(60, 60, 60, 100)
             selection.format.setBackground(line_color)
             selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
@@ -83,21 +107,77 @@ class GhostEditor(QPlainTextEdit):
         self.setExtraSelections(extra_selections)
 
     # -----------------------------
+    # [NEW] Snippet Menu Methods
+    # -----------------------------
+    def show_snippet_menu(self):
+        cursor = self.textCursor()
+        
+        # Grab the word immediately to the left of the cursor to use as a search prefix
+        cursor.select(QTextCursor.SelectionType.WordUnderCursor)
+        prefix = cursor.selectedText().strip()
+
+        snippets = self.snippet_manager.get_snippets(prefix)
+
+        if not snippets:
+            return
+
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu { background-color: #252526; color: #CCCCCC; border: 1px solid #3E3E42; font-family: 'Inter', sans-serif; }
+            QMenu::item { padding: 6px 20px; }
+            QMenu::item:selected { background-color: #0E639C; color: white; }
+        """)
+
+        for name, code in snippets.items():
+            action = QAction(name, self)
+            # Pass the snippet code and the prefix length so we know what to replace
+            action.triggered.connect(lambda checked, c=code, p=prefix: self.insert_snippet(c, p))
+            menu.addAction(action)
+
+        # Calculate exact pixel coordinates to pop the menu right under the typing cursor
+        rect = self.cursorRect(self.textCursor())
+        global_pos = self.viewport().mapToGlobal(rect.bottomRight())
+        menu.exec(global_pos)
+
+    def insert_snippet(self, snippet_code, prefix):
+        cursor = self.textCursor()
+        
+        # 1. Delete the trigger word the user typed
+        if prefix:
+            cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.KeepAnchor, len(prefix))
+            cursor.removeSelectedText()
+
+        # 2. Get the current line's indentation level
+        cursor.select(QTextCursor.SelectionType.LineUnderCursor)
+        line_text = cursor.selectedText()
+        cursor.clearSelection()
+        
+        indent_match = re.match(r"^\s*", line_text)
+        base_indent = indent_match.group(0) if indent_match else ""
+
+        # 3. Inject the base indentation into every line of the snippet (except the first)
+        lines = snippet_code.split('\n')
+        formatted_snippet = lines[0] 
+        if len(lines) > 1:
+            for line in lines[1:]:
+                formatted_snippet += "\n" + base_indent + line
+
+        # 4. Insert the perfectly formatted snippet
+        cursor.insertText(formatted_snippet)
+        self.clear_ghost_text()
+
+    # -----------------------------
     # Change Tracking Methods
     # -----------------------------
     def set_original_state(self, text):
-        """Call this when a file is loaded or saved to reset the tracking."""
         self.original_text = text
         self.line_changes.clear()
         self.line_number_area.update()
 
-    # [NEW] Check if the file has unsaved changes
     def is_dirty(self):
-        """Returns True if the current text differs from the last saved state."""
         return self.toPlainText() != self.original_text
 
     def calculate_diff(self):
-        """Compares current text to the original state and maps changed lines."""
         current_lines = self.toPlainText().split('\n')
         original_lines = self.original_text.split('\n')
         
@@ -113,29 +193,24 @@ class GhostEditor(QPlainTextEdit):
                     new_changes[j] = 'added'
                     
         self.line_changes = new_changes
-        self.line_number_area.update() # Force repaint
+        self.line_number_area.update() 
 
     # -----------------------------
     # Line Number Panel
     # -----------------------------
     def line_number_area_width(self):
-        # Calculate how much space we need based on the number of lines
         digits = 1
         max_value = max(1, self.blockCount())
         while max_value >= 10:
             max_value /= 10
             digits += 1
-
-        # 10px padding + width of a character * number of digits + 4px for the color bar
         space = 14 + self.fontMetrics().horizontalAdvance('9') * digits 
         return space
 
     def update_line_number_area_width(self, _):
-        # Push the text editor to the right to make room for the line numbers
         self.setViewportMargins(self.line_number_area_width(), 0, 0, 0)
 
     def update_line_number_area(self, rect, dy):
-        # Handle scrolling
         if dy:
             self.line_number_area.scroll(0, dy)
         else:
@@ -145,15 +220,12 @@ class GhostEditor(QPlainTextEdit):
             self.update_line_number_area_width(0)
 
     def resizeEvent(self, event):
-        # When the window resizes, resize the line number panel
         super().resizeEvent(event)
         cr = self.contentsRect()
         self.line_number_area.setGeometry(QRect(cr.left(), cr.top(), self.line_number_area_width(), cr.height()))
 
     def line_number_area_paint_event(self, event):
         painter = QPainter(self.line_number_area)
-
-        # Lock to dark grey background
         painter.fillRect(event.rect(), QColor(35, 35, 35))
 
         block = self.firstVisibleBlock()
@@ -164,18 +236,12 @@ class GhostEditor(QPlainTextEdit):
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
                 number = str(block_number + 1)
-
-                # Lock to muted grey text
                 painter.setPen(QColor(120, 120, 120))
-
-                # Shift text over slightly so it doesn't overlap the color bar
                 painter.drawText(0, top, self.line_number_area.width() - 8, self.fontMetrics().height(),
                                  Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, number)
 
-                # --- NEW: Draw the modification color bar ---
                 status = self.line_changes.get(block_number)
                 if status:
-                    # Added = Green, Modified = Yellow/Orange
                     color = QColor("#4CAF50") if status == 'added' else QColor("#F0A30A")
                     painter.fillRect(self.line_number_area.width() - 4, top, 4, self.fontMetrics().height(), color)
 
@@ -198,7 +264,6 @@ class GhostEditor(QPlainTextEdit):
     def accept_full_completion(self):
         if not self.ghost_text:
             return
-
         cursor = self.textCursor()
         cursor.insertText(self.ghost_text)
         self.clear_ghost_text()
@@ -206,16 +271,12 @@ class GhostEditor(QPlainTextEdit):
     def accept_next_word(self):
         if not self.ghost_text:
             return
-
         parts = self.ghost_text.lstrip().split(" ", 1)
-
         word = parts[0]
         remainder = parts[1] if len(parts) > 1 else ""
 
         cursor = self.textCursor()
         cursor.insertText(word + " ")
-
-        # shrink ghost text
         self.ghost_text = remainder
         self.viewport().update()
 
@@ -224,7 +285,6 @@ class GhostEditor(QPlainTextEdit):
     # -----------------------------
     def get_ast_context(self):
         text = self.toPlainText()
-
         try:
             tree = ast.parse(text)
         except Exception:
@@ -239,11 +299,7 @@ class GhostEditor(QPlainTextEdit):
             elif isinstance(node, ast.ClassDef):
                 classes.append(node.name)
 
-        context = f"""
-Functions: {functions}
-Classes: {classes}
-"""
-
+        context = f"Functions: {functions}\nClasses: {classes}\n"
         return context + "\n" + text[-1000:]
 
     # -----------------------------
@@ -251,54 +307,31 @@ Classes: {classes}
     # -----------------------------
     def handle_comment_generate(self, comment):
         cursor = self.textCursor()
-
-        # create space below comment
         cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
         cursor.insertBlock()
         cursor.insertBlock()
 
-        # anchor cursor for streaming
         self.function_cursor = self.textCursor()
         self.function_active = True
-
         context = self.get_ast_context()
 
-        prompt = f"""
-Generate a Python function for this comment:
-
-{comment}
-
-Context:
-{context}
-
-Return ONLY code.
-"""
-
+        prompt = f"Generate a Python function for this comment:\n\n{comment}\n\nContext:\n{context}\n\nReturn ONLY code."
         self.start_worker(prompt, generate_function=True)
 
     def replace_selection_with_ai(self):
         cursor = self.textCursor()
-
         if not cursor.hasSelection():
             return
 
-        # [NEW] Fix the PyQt Unicode newline bug
         selected_text = cursor.selectedText().replace('\u2029', '\n')
-
-        prompt = f"""
-Rewrite or improve this Python code:
-
-{selected_text}
-
-Return ONLY code.
-"""
+        prompt = f"Rewrite or improve this Python code:\n\n{selected_text}\n\nReturn ONLY code."
+        
         self.replacement_cursor = cursor
         self.start_worker(prompt, replace_selection=True)
 
     def start_worker(self, prompt, generate_function=False, replace_selection=False):
         self.thread = QThread()
         self.function_output = ""
-
         self.ai_started.emit()
 
         self.worker = AIWorker(
@@ -316,11 +349,9 @@ Return ONLY code.
             self.worker.update_ghost.connect(self.set_ghost_text)
 
         self.worker.function_ready.connect(self.handle_function_output)
-
         self.worker.finished.connect(self.thread.quit)
         self.worker.finished.connect(self.worker.deleteLater)
         self.thread.finished.connect(self.thread.deleteLater)
-
         self.worker.finished.connect(self.finish_function_stream)
         self.worker.finished.connect(self.ai_finished.emit)
 
@@ -331,10 +362,8 @@ Return ONLY code.
     # -----------------------------
     def handle_function_output(self, text):
         if self.function_active and self.function_cursor:
-            # Streams deltas directly into the editor
             self.function_cursor.insertText(text)
         else:
-            # replacement mode: accumulate deltas to insert when finished
             self.function_output += text 
 
     def finish_function_stream(self):
@@ -354,19 +383,21 @@ Return ONLY code.
     # Key handling
     # -----------------------------
     def keyPressEvent(self, event):
-        # Auto-close brackets and quotes
         pairs = {'(': ')', '[': ']', '{': '}', '"': '"', "'": "'"}
         char = event.text()
 
         if char in pairs:
-            # Insert both the opening and closing characters
             super().keyPressEvent(event)
             cursor = self.textCursor()
             cursor.insertText(pairs[char])
-            # Move cursor back one space to sit between them
             cursor.movePosition(QTextCursor.MoveOperation.Left)
             self.setTextCursor(cursor)
             self.clear_ghost_text()
+            return
+
+        # [NEW] Ctrl+Space → Trigger Snippet Menu
+        if event.key() == Qt.Key.Key_Space and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            self.show_snippet_menu()
             return
 
         # TAB → accept full ghost
@@ -388,28 +419,21 @@ Return ONLY code.
         # ENTER handling
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             cursor = self.textCursor()
-
-            # Grab previous line before we hit enter
             cursor.select(QTextCursor.SelectionType.LineUnderCursor)
             previous_line_raw = cursor.selectedText()
             previous_line_stripped = previous_line_raw.strip()
 
-            # Perform normal Enter (moves to next line)
             super().keyPressEvent(event)
 
-            # --- NEW: Smart Auto-Indent ---
-            # 1. Copy whitespace from the line we just left
+            # Smart Auto-Indent
             whitespace_match = re.match(r"^\s*", previous_line_raw)
             indent = whitespace_match.group(0) if whitespace_match else ""
 
-            # 2. Add an extra indent block if the previous line ended with a colon
             if previous_line_stripped.endswith(":"):
-                indent += "    " # 4 spaces
+                indent += "    " 
 
-            # 3. Insert the calculated whitespace
             if indent:
                 self.textCursor().insertText(indent)
-            # ------------------------------
 
             # Check for AI generation triggers
             if previous_line_stripped.startswith("#"):
@@ -418,10 +442,7 @@ Return ONLY code.
             self.clear_ghost_text()
             return
 
-        # default behavior
         super().keyPressEvent(event)
-
-        # clear ghost on typing
         self.clear_ghost_text()
 
     # -----------------------------
@@ -442,13 +463,11 @@ Return ONLY code.
 
         cursor = self.textCursor()
         rect = self.cursorRect(cursor)
-
         fm = QFontMetrics(self.font())
 
         x = rect.left()
         y = rect.top() + fm.ascent()
 
         lines = self.ghost_text.split("\n")
-
         for i, line in enumerate(lines):
             painter.drawText(x, y + i * fm.height(), line)
