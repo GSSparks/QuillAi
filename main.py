@@ -25,6 +25,7 @@ from plugins.python_plugin import PythonPlugin
 from plugins.html_plugin import HTMLPlugin
 from plugins.ansible_plugin import AnsiblePlugin
 from plugins.nix_plugin import NixPlugin
+from plugins.bash_plugin import BashPlugin
 
 registry.register(".html", HTMLPlugin)
 registry.register(".htm", HTMLPlugin)
@@ -32,6 +33,8 @@ registry.register(".py", PythonPlugin)
 registry.register(".yml", AnsiblePlugin)
 registry.register(".yaml", AnsiblePlugin)
 registry.register(".nix", NixPlugin)
+registry.register(".sh", BashPlugin)
+registry.register(".bash", BashPlugin)
 
 # ==========================================
 # [NEW] Chat Syntax Highlighter

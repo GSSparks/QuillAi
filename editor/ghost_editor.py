@@ -278,7 +278,10 @@ class GhostEditor(QPlainTextEdit):
             return
 
         ext = self.file_path.lower()
-
+        
+        # ==========================================
+        # PYTHON LINTING
+        # ==========================================
         if ext.endswith('.py'):
             try:
                 ast.parse(text)
@@ -290,6 +293,9 @@ class GhostEditor(QPlainTextEdit):
             except Exception:
                 pass
 
+        # ==========================================
+        # YAML / ANSIBLE LINTING
+        # ==========================================
         elif ext.endswith(('.yml', '.yaml')) and HAS_YAML:
             try:
                 yaml.safe_load(text)
@@ -300,8 +306,37 @@ class GhostEditor(QPlainTextEdit):
                     self._draw_error_squiggle(line_idx, col_offset, str(e))
             except Exception:
                 pass
+
+        # ==========================================
+        # BASH LINTING via SHELLCHECK
+        # ==========================================
+        elif ext.endswith(('.sh', '.bash')):
+            try:
+                # Pass text to shellcheck via stdin, ask for JSON output
+                process = subprocess.Popen(
+                    ['shellcheck', '-f', 'json', '-'],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                stdout, _ = process.communicate(input=text)
                 
-        self.update_extra_selections()
+                if stdout:
+                    errors = json.loads(stdout)
+                    for err in errors:
+                        # Shellcheck uses 1-based indexing
+                        line_idx = err.get('line', 1) - 1
+                        col_offset = err.get('column', 1) - 1
+                        end_offset = err.get('endColumn', col_offset + 1) - 1
+                        
+                        msg = f"SC{err.get('code')}: {err.get('message')}"
+                        self._draw_error_squiggle(line_idx, col_offset, msg, end_offset)
+            except FileNotFoundError:
+                # Shellcheck isn't installed or isn't in PATH
+                pass
+            except Exception:
+                pass
 
     def contextMenuEvent(self, event):
         menu = self.createStandardContextMenu(event.pos())

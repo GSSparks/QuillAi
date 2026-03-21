@@ -47,6 +47,7 @@
 
         buildInputs = [
           pkgs.qt6.qtwayland
+          pkgs.shellcheck
         ];
 
         # [NEW] Tell the hook which desktop item to build and place in /share/applications/
