@@ -33,6 +33,7 @@
         propagatedBuildInputs = with pythonPackages; [
           pyqt6
           pyyaml
+          requests # <--- [FIXED] Added requests here!
         ];
 
         # Ensure Wayland support is bundled for modern Linux desktops
