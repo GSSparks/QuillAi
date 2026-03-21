@@ -103,21 +103,20 @@ Rules:
             return [
                 {
                     "role": "system",
-                    "content": "You are an inline code completion engine.",
+                    "content": "You are an ultra-strict inline code completion engine. Return ONLY the exact missing characters to be inserted at the cursor. Do NOT use markdown code blocks.",
                 },
                 {
                     "role": "user",
                     "content": f"""
-Continue this code at the cursor position.
-Context BEFORE cursor:
+<context_before>
 {before}
-Context AFTER cursor:
+</context_before>
+<context_after>
 {after}
-Rules:
-- Only return the continuation
-- Do not repeat existing code
-- No markdown
-""",
+</context_after>
+
+Output ONLY the exact missing code that connects the before and after context.
+CRITICAL RULE: You must NOT generate any code that already exists in the <context_after> block! Stop generating immediately if the context naturally connects."""
                 },
             ]
 
@@ -126,18 +125,48 @@ Rules:
         last_emitted = ""
 
         try:
-            response = requests.post(
-                self.api_url,
-                json={
+            # 1. Determine if we are doing a Chat/Edit or a native FIM Completion
+            is_inline_completion = not self.generate_function and not self.is_edit and not self.is_chat
+
+            if is_inline_completion:
+                # ==========================================
+                # LLAMA.CPP NATIVE FIM (/infill)
+                # ==========================================
+                # Convert http://.../v1/chat/completions -> http://.../infill
+                target_url = self.api_url.replace("/v1/chat/completions", "/infill")
+                
+                before = self.editor_text[max(0, self.cursor_pos - 1000):self.cursor_pos]
+                after = self.editor_text[self.cursor_pos:self.cursor_pos + 300]
+                
+                payload = {
+                    "input_prefix": before,
+                    "input_suffix": after,
+                    "temperature": 0.1,
+                    "stream": True,
+                    "n_predict": 60, # llama.cpp uses n_predict instead of max_tokens here
+                    "stop": ["\n\n"] # Keep it from rambling down the page
+                }
+            else:
+                # ==========================================
+                # STANDARD CHAT / EDIT
+                # ==========================================
+                target_url = self.api_url
+                payload = {
                     "model": self.model,
                     "messages": self.build_messages(),
-                    "temperature": 0.2 if not self.is_chat else 0.7, # Slightly more creative for chat
+                    "temperature": 0.2 if not self.is_chat else 0.7,
                     "stream": True,
-                },
+                }
+
+            # 2. Fire the Request
+            response = requests.post(
+                target_url,
+                json=payload,
                 stream=True,
                 timeout=60,
             )
 
+            # 3. Parse the Stream
             for line in response.iter_lines():
                 if self._cancelled:
                     break
@@ -149,16 +178,24 @@ Rules:
                     continue
                 if not decoded.startswith("data: "):
                     continue
+                    
                 data = decoded[6:]
-                if data == "[DONE]":
+                if data.strip() == "[DONE]":
                     break
+                    
                 try:
                     chunk = json.loads(data)
                 except json.JSONDecodeError:
                     continue
 
-                delta_dict = chunk.get("choices", [{}])[0].get("delta", {})
-                content = delta_dict.get("content")
+                # [CRITICAL UPDATE] 
+                # llama.cpp's /infill endpoint puts content at the root of the JSON, 
+                # while OpenAI chat puts it inside choices[0].delta!
+                if is_inline_completion:
+                    content = chunk.get("content")
+                else:
+                    delta_dict = chunk.get("choices", [{}])[0].get("delta", {})
+                    content = delta_dict.get("content")
 
                 if not content:
                     continue
@@ -166,16 +203,12 @@ Rules:
                 raw_output += content
 
                 # -----------------------------
-                # CHAT MODE
+                # ROUTE THE OUTPUT
                 # -----------------------------
                 if self.is_chat:
-                    # Don't clean the code, just stream the raw markdown delta!
                     self.chat_update.emit(content)
                     continue
 
-                # -----------------------------
-                # CODE MODES (Inline, Edit, Function)
-                # -----------------------------
                 cleaned = clean_code(raw_output)
 
                 if self.generate_function or self.is_edit:

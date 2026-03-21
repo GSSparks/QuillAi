@@ -61,9 +61,7 @@ class MinimapArea(QPlainTextEdit):
     def __init__(self, editor):
         super().__init__(editor)
         self.editor = editor
-        
-        # We removed setDocument() so the minimap is fully independent!
-        
+                 
         self.setReadOnly(True)
         self.setWordWrapMode(QTextOption.WrapMode.NoWrap)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -235,6 +233,14 @@ class GhostEditor(QPlainTextEdit):
         self.lint_timer.setSingleShot(True)
         self.lint_timer.timeout.connect(self.run_linter)
         self.textChanged.connect(lambda: self.lint_timer.start(750)) 
+        
+        # ==========================================
+        # AI Inline Completion Timer
+        # ==========================================
+        self.ai_suggest_timer = QTimer(self)
+        self.ai_suggest_timer.setSingleShot(True)
+        self.ai_suggest_timer.timeout.connect(self.trigger_inline_completion)
+        self.textChanged.connect(self.handle_text_changed_for_ai)        
         
         self.current_line_selection = []
         self.lint_selections = []
@@ -411,7 +417,58 @@ class GhostEditor(QPlainTextEdit):
             menu.addAction(fix_action)
             
         menu.exec(event.globalPos())
+        
+    def handle_text_changed_for_ai(self):
+        """Determines IF we should ask for a suggestion based on cursor context."""
+        # 1. Always clear old ghost text the millisecond the user types something new
+        self.clear_ghost_text()
 
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            self.ai_suggest_timer.stop()
+            return
+
+        text = self.toPlainText()
+        pos = cursor.position()
+
+        if pos == 0:
+            self.ai_suggest_timer.stop()
+            return
+
+        # 2. Heuristic: Check the character immediately BEFORE the cursor
+        char_before = text[pos - 1]
+        
+        # If we are in the middle of typing a word (letters, numbers, underscores), DO NOT interrupt.
+        if char_before.isalnum() or char_before == '_':
+            self.ai_suggest_timer.stop()
+            return
+
+        # 3. Heuristic: Check the character immediately AFTER the cursor
+        if pos < len(text):
+            char_after = text[pos]
+            # If we are typing INSIDE an existing word, DO NOT interrupt.
+            if char_after.isalnum() or char_after == '_':
+                self.ai_suggest_timer.stop()
+                return
+
+        # If we survived the checks (e.g., user just hit Space, Enter, or typed a bracket),
+        # start the 500ms countdown. If they keep typing, the timer resets!
+        self.ai_suggest_timer.start(500)
+
+    def trigger_inline_completion(self):
+        """Fires when the user pauses typing at a logical boundary."""
+        try:
+            # Check if the Python variable exists
+            if hasattr(self, 'ai_thread') and self.ai_thread is not None:
+                # If C++ hasn't deleted it yet, check if it's running
+                if self.ai_thread.isRunning():
+                    return
+        except RuntimeError:
+            # Catch the crash! The C++ thread was already deleted by deleteLater().
+            # We safely clear the dead Python pointer so we can start fresh.
+            self.ai_thread = None
+            
+        self.start_worker(prompt="", generate_function=False, replace_selection=False)    
     def trigger_ai_error_fix(self):
         if self.current_syntax_error:
             self.error_help_requested.emit(
@@ -643,7 +700,7 @@ class GhostEditor(QPlainTextEdit):
         self.start_worker(prompt, replace_selection=True)
 
     def start_worker(self, prompt, generate_function=False, replace_selection=False):
-        self.thread = QThread()
+        self.ai_thread = QThread() 
         self.function_output = ""
         self.ai_started.emit()
 
@@ -655,20 +712,22 @@ class GhostEditor(QPlainTextEdit):
             is_edit=replace_selection 
         )
 
-        self.worker.moveToThread(self.thread)
-        self.thread.started.connect(self.worker.run)
+        self.worker.moveToThread(self.ai_thread)
+        self.ai_thread.started.connect(self.worker.run)
 
         if not generate_function and not replace_selection:
             self.worker.update_ghost.connect(self.set_ghost_text)
 
         self.worker.function_ready.connect(self.handle_function_output)
-        self.worker.finished.connect(self.thread.quit)
+        
+        self.worker.finished.connect(self.ai_thread.quit) 
         self.worker.finished.connect(self.worker.deleteLater)
-        self.thread.finished.connect(self.thread.deleteLater)
+        self.ai_thread.finished.connect(self.ai_thread.deleteLater) 
+        
         self.worker.finished.connect(self.finish_function_stream)
         self.worker.finished.connect(self.ai_finished.emit)
 
-        self.thread.start()
+        self.ai_thread.start()
 
     def handle_function_output(self, text):
         if self.function_active and self.function_cursor:
@@ -690,6 +749,13 @@ class GhostEditor(QPlainTextEdit):
         cursor.insertText(self.function_output)
 
     def keyPressEvent(self, event):
+        # Navigation keys should kill the AI countdown immediately
+        if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
+            self.ai_suggest_timer.stop()
+            self.clear_ghost_text()
+            super().keyPressEvent(event)
+            return
+            
         pairs = {'(': ')', '[': ']', '{': '}', '"': '"', "'": "'"}
         char = event.text()
 
