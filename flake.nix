@@ -1,44 +1,68 @@
 {
-  description = "Coding Notepad with PyQt6 and local LLM support";
+  description = "QuillAI - A Privacy-First IDE";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
-    flake-utils.url = "github:numtide/flake-utils";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
-      let
-        pkgs = import nixpkgs { inherit system; };
-        pythonEnv = pkgs.python310.withPackages (ps: with ps; [
-          pyqt6
-          requests
-          pyqt6-sip
-          # Optional: for fancy editor features
-          pygments
-        ]);
-      in {
-        devShell = pkgs.mkShell {
-          name = "coding-notepad-shell";
-          buildInputs = [ pythonEnv ];
-          shellHook = ''
-            echo "Welcome to the Coding Notepad dev environment!"
-            echo "Run your editor with: python main.py"
-          '';
-        };
+  outputs = { self, nixpkgs }:
+    let
+      # Support for standard 64-bit Linux (NixOS)
+      system = "x86_64-linux";
+      pkgs = nixpkgs.legacyPackages.${system};
+      python = pkgs.python3;
+      pythonPackages = python.pkgs;
+    in
+    {
+      packages.${system}.default = pythonPackages.buildPythonApplication {
+        pname = "quillai";
+        version = "1.0.0";
 
-        # Optional: provide a simple runnable package
-        packages.notepad = pkgs.stdenv.mkDerivation {
-          pname = "coding-notepad";
-          version = "0.1";
-          src = ./.;
-          buildInputs = [ pythonEnv ];
-          dontBuild = true;
-          installPhase = ''
-            mkdir -p $out
-            cp -r * $out/
-          '';
-        };
-      }
-    );
+        # We tell Nix we are handling the install phase manually since we don't have a setup.py
+        format = "other";
+
+        src = ./.;
+
+        # These hooks magically fix Qt6 themes, plugins, and Wayland/X11 scaling on NixOS
+        nativeBuildInputs = [
+          pkgs.qt6.wrapQtAppsHook
+          pkgs.makeWrapper
+        ];
+
+        # The Python libraries QuillAI needs to run
+        propagatedBuildInputs = with pythonPackages; [
+          pyqt6
+          pyyaml
+        ];
+
+        # Ensure Wayland support is bundled for modern Linux desktops
+        buildInputs = [
+          pkgs.qt6.qtwayland
+        ];
+
+        installPhase = ''
+          # Create the output directories
+          mkdir -p $out/bin
+          mkdir -p $out/share/quillai
+          
+          # Copy your entire Python project into the Nix store
+          cp -r * $out/share/quillai/
+          
+          # Create the executable wrapper
+          makeWrapper ${python.interpreter} $out/bin/quillai \
+            --add-flags "$out/share/quillai/main.py" \
+            --set PYTHONPATH "$PYTHONPATH:$out/share/quillai" \
+            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.git python ]}
+        '';
+
+        # Ensure the Qt hook processes our newly created executable
+        dontWrapQtApps = false; 
+      };
+
+      # Allow running the app directly via `nix run`
+      apps.${system}.default = {
+        type = "app";
+        program = "${self.packages.${system}.default}/bin/quillai";
+      };
+    };
 }

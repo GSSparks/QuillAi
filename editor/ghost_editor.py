@@ -77,7 +77,7 @@ class MinimapArea(QPlainTextEdit):
         """)
 
         # font size to 4 so it's readable but out of the way
-        font = QFont("JetBrains Mono", 4) 
+        font = QFont("Hack", 4) 
         font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         self.setFont(font)
 
