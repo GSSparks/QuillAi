@@ -141,9 +141,6 @@ class CodeEditor(QMainWindow):
         self.replace_shortcut = QShortcut(QKeySequence("Ctrl+H"), self)
         self.replace_shortcut.activated.connect(self.show_find_replace)
 
-        self.save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
-        self.save_shortcut.activated.connect(self.save_file)
-
         self.timer = QTimer()
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self.ask_ai)
@@ -291,8 +288,10 @@ class CodeEditor(QMainWindow):
             print(f"Could not open file: {e}")
             
     def save_file(self, index=None):
-        if index is None:
+        # [FIXED] PyQt signals pass 'False' instead of 'None'. This forces it to get the active tab!
+        if index is None or isinstance(index, bool):
             index = self.tabs.currentIndex()
+            
         editor = self.tabs.widget(index)
         if not editor: return False
 
@@ -528,7 +527,16 @@ class CodeEditor(QMainWindow):
             with open(editor.file_path, "w", encoding="utf-8") as f:
                 f.write(code)
             script_path = editor.file_path
+            
+            # Reset change tracking
             editor.set_original_state(code)
+            
+            # [FIXED] Remove the asterisk when auto-saving during a run!
+            index = self.tabs.indexOf(editor)
+            current_text = self.tabs.tabText(index)
+            if current_text.endswith("*"):
+                self.tabs.setTabText(index, current_text[:-1])
+                
         else:
             self.temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".py")
             self.temp_file.write(code.encode("utf-8"))
