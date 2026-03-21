@@ -3,12 +3,14 @@ import os
 import tempfile
 import ast
 import re
+import base64
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QProgressBar, QLabel, 
                              QDockWidget, QTreeView, QPlainTextEdit, QTextEdit, 
                              QVBoxLayout, QWidget, QLineEdit, QTabWidget,
-                             QPushButton, QHBoxLayout, QMessageBox, QFileDialog)
-from PyQt6.QtCore import QTimer, QThread, Qt, QDir, QProcess
+                             QPushButton, QHBoxLayout, QMessageBox, QFileDialog,
+                             QTextBrowser)
+from PyQt6.QtCore import QTimer, QThread, Qt, QDir, QProcess, QUrl
 from PyQt6.QtGui import (QFileSystemModel, QAction, QKeySequence, QTextCursor,
                          QIcon, QPixmap, QPainter, QColor, QShortcut,
                          QSyntaxHighlighter, QTextCharFormat, QFont)
@@ -196,6 +198,7 @@ class CodeEditor(QMainWindow):
         self.setWindowTitle("QuillAI")
         self._is_loading = False
         self.current_error_text = ""
+        self.current_ai_raw_text = ""
 
         # --------------------------
         # Tab System Setup
@@ -334,7 +337,9 @@ class CodeEditor(QMainWindow):
         
         # Listen for the user requesting help with a syntax error
         editor.error_help_requested.connect(self.handle_editor_error_help)
-
+        # Connect the Snippet Bridge        
+        editor.send_to_chat_requested.connect(self.load_snippet_to_chat)
+        
         index = self.tabs.addTab(editor, name)
         self.tabs.setCurrentIndex(index)
         
@@ -371,6 +376,7 @@ class CodeEditor(QMainWindow):
         self.chat_worker.moveToThread(thread)
         self.chat_worker.chat_update.connect(self.append_chat_stream)
         
+        self.chat_worker.finished.connect(self.chat_stream_finished)
         self.chat_worker.finished.connect(thread.quit)
         self.chat_worker.finished.connect(self.chat_worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
@@ -586,8 +592,8 @@ class CodeEditor(QMainWindow):
         header_layout.addWidget(clear_btn)
 
         # --- Chat History Box ---
-        self.chat_history = QTextEdit()
-        self.chat_history.setReadOnly(True)
+        self.chat_history = QTextBrowser()
+        self.chat_history.setOpenLinks(False)
         self.chat_history.setStyleSheet("""
             QTextEdit {
                 background-color: #1E1E1E;
@@ -600,6 +606,7 @@ class CodeEditor(QMainWindow):
                 line-height: 1.5;
             }
         """)
+        self.chat_history.anchorClicked.connect(self.handle_chat_link)
         
         # Attach our custom syntax highlighter!
         self.chat_highlighter = ChatHighlighter(self.chat_history.document())
@@ -608,10 +615,12 @@ class CodeEditor(QMainWindow):
         # --- Input Area ---
         input_layout = QHBoxLayout()
         
-        self.chat_input = QLineEdit()
-        self.chat_input.setPlaceholderText("Ask QuillAI about your code...")
+        # [FIXED] Must be QTextEdit for multi-line snippets!
+        self.chat_input = QTextEdit() 
+        self.chat_input.setFixedHeight(70) 
+        self.chat_input.setPlaceholderText("Ask QuillAI about your code... (Ctrl+Enter to send)")
         self.chat_input.setStyleSheet("""
-            QLineEdit {
+            QTextEdit {
                 background-color: #2D2D30;
                 color: #FFFFFF;
                 border: 1px solid #3E3E42;
@@ -620,9 +629,14 @@ class CodeEditor(QMainWindow):
                 font-family: 'Inter', 'SF Pro Text', 'Segoe UI', sans-serif;
                 font-size: 10pt;
             }
-            QLineEdit:focus { border: 1px solid #0E639C; }
+            QTextEdit:focus { border: 1px solid #0E639C; }
         """)
-        self.chat_input.returnPressed.connect(self.send_chat_message)
+  
+        # Standard IDE shortcut: Ctrl+Enter sends the message
+        self.send_shortcut = QShortcut(QKeySequence("Ctrl+Return"), self.chat_input)
+        self.send_shortcut.activated.connect(self.send_chat_message)        
+        
+        # (Removed the returnPressed line since QTextEdit doesn't use it)
 
         send_btn = QPushButton("➤")
         send_btn.setStyleSheet("""
@@ -652,14 +666,17 @@ class CodeEditor(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.chat_dock)
 
     def send_chat_message(self):
-        user_text = self.chat_input.text().strip()
+        # Grab the text and clear the box
+        user_text = self.chat_input.toPlainText().strip() 
         if not user_text: return
         self.chat_input.clear()
-
+        
+        # Post the user's message to the chat history UI
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-        self.chat_history.insertPlainText(f"You: {user_text}\n\nQuillAI: ")
+        self.chat_history.insertPlainText(f"You:\n{user_text}\n\nQuillAI:\n")
         self.chat_history.ensureCursorVisible()
 
+        # Grab the active editor context and imports
         editor = self.current_editor()
         active_code = editor.toPlainText() if editor else ""
         cross_file_context = self.resolve_local_imports(active_code)
@@ -667,26 +684,100 @@ class CodeEditor(QMainWindow):
         if len(active_code) > 2000:
             active_code = "...(truncated)...\n" + active_code[-2000:]
 
+        # Build the final prompt payload
         prompt_with_context = f"{user_text}\n\n[Context: The user is currently editing a file with this code:]\n```python\n{active_code}\n```\n{cross_file_context}"
 
+        # Fire up the background thread!
         thread = QThread()
         self.chat_worker = AIWorker(prompt=prompt_with_context, editor_text="", cursor_pos=0, is_chat=True)
         self.chat_worker.moveToThread(thread)
         self.chat_worker.chat_update.connect(self.append_chat_stream)
+        
+        # Connect the finish signal so we can generate the injection links!
+        self.chat_worker.finished.connect(self.chat_stream_finished)
+        
+        # Standard thread cleanup and UI loading indicators
         self.chat_worker.finished.connect(thread.quit)
         self.chat_worker.finished.connect(self.chat_worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
+        
         self.show_loading_indicator()
         self.chat_worker.finished.connect(self.hide_loading_indicator)
+        
         self.active_threads.append(thread)
         thread.finished.connect(lambda: self.active_threads.remove(thread) if thread in self.active_threads else None)
+        
         thread.started.connect(self.chat_worker.run)
         thread.start()
-
     def append_chat_stream(self, text):
+        self.current_ai_raw_text += text # Track the raw markdown
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
         self.chat_history.insertPlainText(text)
         self.chat_history.ensureCursorVisible()
+
+    # ==========================================
+    # The Two-Way Bridge Methods
+    # ==========================================
+    def load_snippet_to_chat(self, text):
+        """Catches code from the editor and formats it for the chat input."""
+        self.chat_dock.show()
+        current_input = self.chat_input.toPlainText() 
+        new_text = f"```python\n{text}\n```\n"
+        
+        if current_input.strip():
+            final_text = current_input + "\n\n" + new_text
+        else:
+            final_text = new_text
+            
+        self.chat_input.setPlainText(final_text)
+        self.chat_input.setFocus()
+        
+        # Move cursor to the bottom
+        cursor = self.chat_input.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.chat_input.setTextCursor(cursor)
+
+    def chat_stream_finished(self):
+        # 1. Regex to find the code blocks
+        blocks = re.findall(r"```.*?\n(.*?)```", self.current_ai_raw_text, re.DOTALL)
+        
+        if blocks:
+            last_code = blocks[-1].strip()
+            # 2. Encode to Base64 so special characters don't break the URL
+            encoded = base64.b64encode(last_code.encode('utf-8')).decode('utf-8')
+            
+            # 3. Create a STYLED button link
+            # We use a distinct background color and padding to make it look like a button
+            button_style = (
+                "color: #FFFFFF; "
+                "background-color: #0E639C; "
+                "padding: 5px 15px; "
+                "text-decoration: none; "
+                "border-radius: 3px; "
+                "font-family: sans-serif; "
+                "font-weight: bold;"
+            )
+            
+            link_html = f"<br><br><a href='insert:{encoded}' style='{button_style}'>&nbsp;⚡ INSERT CODE AT CURSOR&nbsp;</a><br>"
+            
+            # 4. Use insertHtml so the QTextBrowser renders it!
+            self.chat_history.insertHtml(link_html)
+
+        # Reset for next message
+        self.chat_history.append("<br>")
+        self.current_ai_raw_text = ""
+
+    def handle_chat_link(self, url: QUrl):
+        """Catches clicks on the Insert button and drops code into the editor."""
+        url_str = url.toString()
+        if url_str.startswith("insert:"):
+            encoded_code = url_str.replace("insert:", "")
+            decoded_code = base64.b64decode(encoded_code).decode('utf-8')
+            
+            editor = self.current_editor()
+            if editor:
+                editor.textCursor().insertText(decoded_code)
+                editor.setFocus()
 
     # -----------------------------
     # Runner Methods
@@ -835,6 +926,7 @@ class CodeEditor(QMainWindow):
 
         self.chat_worker.moveToThread(thread)
         self.chat_worker.chat_update.connect(self.append_chat_stream)
+        self.chat_worker.finished.connect(self.chat_stream_finished)
         self.chat_worker.finished.connect(thread.quit)
         self.chat_worker.finished.connect(self.chat_worker.deleteLater)
         thread.finished.connect(thread.deleteLater)

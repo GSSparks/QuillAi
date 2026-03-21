@@ -144,7 +144,8 @@ class GhostEditor(QPlainTextEdit):
     ai_started = pyqtSignal()
     ai_finished = pyqtSignal()
     error_help_requested = pyqtSignal(str, str, int) 
-
+    send_to_chat_requested = pyqtSignal(str)
+    
     def __init__(self):
         super().__init__()
         # Comprehensive Modern UI Stylesheet
@@ -399,11 +400,31 @@ class GhostEditor(QPlainTextEdit):
                 print(f"LINTER ERROR: {e}")
 
     def contextMenuEvent(self, event):
+        # 1. Get the standard menu (Copy, Paste, etc.)
         menu = self.createStandardContextMenu(event.pos())
         
-        cursor = self.cursorForPosition(event.pos())
-        clicked_line = cursor.blockNumber() + 1 
+        # 2. Use the ACTUAL editor cursor to check for highlights
+        active_cursor = self.textCursor()
         
+        # 3. Use a position-based cursor ONLY to check which line was clicked for errors
+        click_cursor = self.cursorForPosition(event.pos())
+        clicked_line = click_cursor.blockNumber() + 1 
+
+        # --- SELECTION CHECK ---
+        if active_cursor.hasSelection():
+            menu.addSeparator()
+            chat_action = QAction("💬 Send to Chat", self)
+            
+            # Use .selectedText() from the active selection
+            # Note: We replace the unicode paragraph separator with a standard newline
+            selected_text = active_cursor.selectedText().replace('\u2029', '\n')
+            
+            chat_action.triggered.connect(
+                lambda: self.send_to_chat_requested.emit(selected_text)
+            )
+            menu.addAction(chat_action)        
+        
+        # --- SYNTAX ERROR CHECK ---
         if self.current_syntax_error and self.current_syntax_error['lineno'] == clicked_line:
             menu.addSeparator()
             
