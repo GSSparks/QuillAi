@@ -2,9 +2,12 @@ import subprocess
 import os
 from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QTreeWidget, 
                              QTreeWidgetItem, QPushButton, QHBoxLayout, 
-                             QLineEdit, QMessageBox, QTreeWidgetItemIterator)
+                             QLineEdit, QMessageBox, QTreeWidgetItemIterator, QMenu) # [NEW] Imported QMenu
 from PyQt6.QtCore import Qt, pyqtSignal, QDir
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor 
+
+# [NEW] Import our fresh Diff Viewer
+from ui.diff_viewer import DiffViewerDialog
 
 class GitDockWidget(QDockWidget):
     file_double_clicked = pyqtSignal(str)
@@ -94,6 +97,10 @@ class GitDockWidget(QDockWidget):
             QTreeWidget::indicator:checked { background-color: #0E639C; border: 1px solid #0E639C; border-radius: 2px; width: 12px; height: 12px; }
         """)
         self.tree.itemDoubleClicked.connect(self.on_item_double_clicked)
+        
+        # [NEW] Enable custom context menus on the tree
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self.show_context_menu)
 
         # --- Commit Area ---
         self.commit_input = QLineEdit()
@@ -123,7 +130,6 @@ class GitDockWidget(QDockWidget):
         """)
         self.commit_btn.clicked.connect(self.commit_changes)
 
-        # Add everything to main layout
         layout.addLayout(btn_layout)
         layout.addWidget(self.tree)
         layout.addWidget(self.commit_input)
@@ -131,9 +137,7 @@ class GitDockWidget(QDockWidget):
         
         self.setWidget(container)
 
-    # --- Git Command Helper ---
     def run_git_command(self, args):
-        """Runs a git command safely and returns (success_bool, output_string)"""
         try:
             result = subprocess.run(
                 args,
@@ -147,7 +151,49 @@ class GitDockWidget(QDockWidget):
         except subprocess.CalledProcessError as e:
             return False, e.stderr.strip()
 
-    # --- Actions ---
+    def show_context_menu(self, position):
+        item = self.tree.itemAt(position)
+        if not item: return
+
+        # Only show the menu for actual files, not the folder headers
+        rel_path = item.data(0, Qt.ItemDataRole.UserRole)
+        if not rel_path: return 
+
+        menu = QMenu()
+        menu.setStyleSheet("""
+            QMenu { background-color: #252526; color: #CCCCCC; border: 1px solid #3E3E42; }
+            QMenu::item { padding: 6px 20px; }
+            QMenu::item:selected { background-color: #0E639C; color: white; }
+        """)
+
+        diff_action = menu.addAction("🔍 View Diff")
+        menu.addSeparator()
+        discard_action = menu.addAction("❌ Discard Changes")
+
+        # Map the right-click position to global screen coordinates
+        action = menu.exec(self.tree.viewport().mapToGlobal(position))
+
+        if action == diff_action:
+            dialog = DiffViewerDialog(rel_path, self)
+            dialog.exec()
+            
+        elif action == discard_action:
+            reply = QMessageBox.question(
+                self, "Discard Changes", 
+                f"Are you sure you want to permanently discard all changes to:\n{rel_path}?\n\nThis cannot be undone.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                # Discard working tree changes
+                self.run_git_command(['git', 'checkout', '--', rel_path])
+                # Also untrack if it was a newly added file
+                self.run_git_command(['git', 'clean', '-fd', rel_path])
+                self.refresh_status()
+                
+                # If the discarded file is open in a tab, we should ideally reload it.
+                # For now, popping up a message is safe.
+                QMessageBox.information(self, "Restored", "Changes discarded. If the file is open, close and reopen it to see the original version.")
+
     def refresh_status(self):
         self.tree.clear()
         
@@ -166,8 +212,7 @@ class GitDockWidget(QDockWidget):
             if len(line) < 3: continue
             
             status = line[:2]
-            file_path = line[3:].strip('"') 
-            file_path = line[2:].strip().strip('"')
+            file_path = line[2:].strip().strip('"') 
             parts = file_path.split('/')
             
             current_parent = self.tree.invisibleRootItem()
@@ -198,7 +243,6 @@ class GitDockWidget(QDockWidget):
             file_item.setForeground(0, QColor(color))
             file_item.setData(0, Qt.ItemDataRole.UserRole, file_path)
             
-            # [NEW] Make the file checkable so we can "git add" it!
             file_item.setFlags(file_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             file_item.setCheckState(0, Qt.CheckState.Unchecked)
             
@@ -212,7 +256,6 @@ class GitDockWidget(QDockWidget):
             QMessageBox.warning(self, "Commit Error", "Please enter a commit message.")
             return
 
-        # 1. Find all checked files
         files_to_add = []
         iterator = QTreeWidgetItemIterator(self.tree)
         while iterator.value():
@@ -226,24 +269,20 @@ class GitDockWidget(QDockWidget):
             QMessageBox.information(self, "Nothing Selected", "Please check the boxes next to the files you want to commit.")
             return
 
-        # 2. Git Add
         add_success, add_err = self.run_git_command(['git', 'add'] + files_to_add)
         if not add_success:
             QMessageBox.critical(self, "Git Add Error", add_err)
             return
 
-        # 3. Git Commit
         commit_success, commit_err = self.run_git_command(['git', 'commit', '-m', message])
         if not commit_success:
             QMessageBox.critical(self, "Git Commit Error", commit_err)
             return
 
-        # 4. Cleanup UI
         self.commit_input.clear()
         self.refresh_status()
         self.commit_btn.setText("✓ Committed!")
         
-        # Reset button text after 2 seconds
         import threading
         threading.Timer(2.0, lambda: self.commit_btn.setText("✓ Commit Selected")).start()
 
@@ -251,8 +290,6 @@ class GitDockWidget(QDockWidget):
         self.push_btn.setText("Pushing...")
         self.push_btn.setEnabled(False)
         
-        # We use QApplication.processEvents() to force the UI to update the button text 
-        # before the synchronous subprocess call freezes the thread for a second.
         from PyQt6.QtWidgets import QApplication
         QApplication.processEvents()
 
