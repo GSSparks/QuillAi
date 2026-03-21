@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import QPlainTextEdit, QWidget, QTextEdit, QMenu
-from PyQt6.QtGui import QPainter, QColor, QFontMetrics, QTextCursor, QFont, QTextFormat, QAction
+from PyQt6.QtGui import QPainter, QColor, QFontMetrics, QTextCursor, QFont, QTextFormat, QAction, QTextCharFormat, QIcon
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect, QSize, QTimer
 import re
 import ast
@@ -8,11 +8,10 @@ import difflib
 from ai.worker import AIWorker
 
 # ==========================================
-# [NEW] Professional Snippet Manager
+# Professional Snippet Manager
 # ==========================================
 class SnippetManager:
     def __init__(self):
-        # Dictionary mapping display names to the actual boilerplate code
         self.snippets = {
             "for loop": "for i in range():\n    pass",
             "if statement": "if condition:\n    pass",
@@ -28,8 +27,6 @@ class SnippetManager:
     def get_snippets(self, prefix=""):
         if not prefix:
             return self.snippets
-            
-        # Filter snippets if the user typed a prefix (like "for" or "def")
         filtered = {k: v for k, v in self.snippets.items() if prefix.lower() in k.lower()}
         return filtered if filtered else self.snippets
 
@@ -49,6 +46,9 @@ class LineNumberArea(QWidget):
 class GhostEditor(QPlainTextEdit):
     ai_started = pyqtSignal()
     ai_finished = pyqtSignal()
+    
+    # [NEW] Signal to tell main.py that the user wants AI help with a syntax error
+    error_help_requested = pyqtSignal(str, str, int) # message, full_code, line_number
 
     def __init__(self):
         super().__init__()
@@ -61,9 +61,8 @@ class GhostEditor(QPlainTextEdit):
         """)
 
         self.ghost_text = ""
-        self.snippet_manager = SnippetManager() # [NEW] Initialize snippets
+        self.snippet_manager = SnippetManager() 
 
-        # function streaming state
         self.function_cursor = None
         self.function_active = False
         self.function_output = ""
@@ -82,6 +81,18 @@ class GhostEditor(QPlainTextEdit):
         self.diff_timer.timeout.connect(self.calculate_diff)
         self.textChanged.connect(lambda: self.diff_timer.start(400)) 
 
+        # --- Real-time Linter Setup ---
+        self.lint_timer = QTimer(self)
+        self.lint_timer.setSingleShot(True)
+        self.lint_timer.timeout.connect(self.run_linter)
+        self.textChanged.connect(lambda: self.lint_timer.start(750)) 
+        
+        self.current_line_selection = []
+        self.lint_selections = []
+        
+        # [NEW] Store the active syntax error so we can send it to the AI
+        self.current_syntax_error = None
+
         # --- Line Number Setup ---
         self.line_number_area = LineNumberArea(self)
         self.blockCountChanged.connect(self.update_line_number_area_width)
@@ -92,8 +103,11 @@ class GhostEditor(QPlainTextEdit):
         self.cursorPositionChanged.connect(self.highlight_current_line)
         self.highlight_current_line() 
 
+    # -----------------------------
+    # Visual Highlights & Linting
+    # -----------------------------
     def highlight_current_line(self):
-        extra_selections = []
+        self.current_line_selection = []
         if not self.isReadOnly():
             selection = QTextEdit.ExtraSelection()
             line_color = QColor(60, 60, 60, 100)
@@ -102,22 +116,105 @@ class GhostEditor(QPlainTextEdit):
 
             selection.cursor = self.textCursor()
             selection.cursor.clearSelection()
-            extra_selections.append(selection)
+            self.current_line_selection.append(selection)
 
-        self.setExtraSelections(extra_selections)
+        self.update_extra_selections()
+
+    def update_extra_selections(self):
+        self.setExtraSelections(self.current_line_selection + self.lint_selections)
+
+    def run_linter(self):
+        self.lint_selections = []
+        self.current_syntax_error = None # Reset error state
+        text = self.toPlainText()
+        
+        if not text.strip():
+            self.update_extra_selections()
+            return
+
+        try:
+            ast.parse(text)
+        except SyntaxError as e:
+            # [NEW] Save the error details so the right-click menu can use them
+            self.current_syntax_error = {
+                'msg': e.msg,
+                'lineno': e.lineno,
+                'offset': e.offset
+            }
+            
+            selection = QTextEdit.ExtraSelection()
+            selection.format.setUnderlineStyle(QTextCharFormat.UnderlineStyle.WaveUnderline)
+            selection.format.setUnderlineColor(QColor("#F44336")) 
+            
+            cursor = QTextCursor(self.document())
+            
+            line_idx = (e.lineno - 1) if e.lineno is not None else 0
+            col_offset = (e.offset - 1) if e.offset is not None else 0
+            
+            cursor.setPosition(self.document().findBlockByNumber(line_idx).position())
+            cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.MoveAnchor, col_offset)
+            
+            if hasattr(e, 'end_offset') and e.end_offset is not None and e.end_offset > e.offset:
+                length = e.end_offset - e.offset
+                cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, length)
+            else:
+                cursor.select(QTextCursor.SelectionType.WordUnderCursor)
+            
+            if not cursor.hasSelection():
+                cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.KeepAnchor, 1)
+
+            selection.cursor = cursor
+            self.lint_selections.append(selection)
+        except Exception:
+            pass
+            
+        self.update_extra_selections()
 
     # -----------------------------
-    # [NEW] Snippet Menu Methods
+    # [NEW] Right-Click Context Menu
+    # -----------------------------
+    def contextMenuEvent(self, event):
+        # Generate the standard PyQt copy/paste menu
+        menu = self.createStandardContextMenu(event.pos())
+        
+        # Figure out which line the user just right-clicked on
+        cursor = self.cursorForPosition(event.pos())
+        clicked_line = cursor.blockNumber() + 1 # 1-based index to match ast.lineno
+        
+        # If there is an error, and the user right-clicked exactly on the error line...
+        if self.current_syntax_error and self.current_syntax_error['lineno'] == clicked_line:
+            menu.addSeparator()
+            
+            fix_action = QAction(QIcon(), "💡 Explain & Fix Error with AI", self)
+            fix_action.triggered.connect(self.trigger_ai_error_fix)
+            
+            # Make it stand out visually in the menu
+            font = fix_action.font()
+            font.setBold(True)
+            fix_action.setFont(font)
+            
+            menu.addAction(fix_action)
+            
+        menu.exec(event.globalPos())
+
+    def trigger_ai_error_fix(self):
+        if self.current_syntax_error:
+            # Tell main.py to open the chat dock and ask the AI!
+            self.error_help_requested.emit(
+                self.current_syntax_error['msg'],
+                self.toPlainText(),
+                self.current_syntax_error['lineno']
+            )
+
+    # -----------------------------
+    # Snippet Menu Methods
     # -----------------------------
     def show_snippet_menu(self):
         cursor = self.textCursor()
-        
-        # Grab the word immediately to the left of the cursor to use as a search prefix
         cursor.select(QTextCursor.SelectionType.WordUnderCursor)
         prefix = cursor.selectedText().strip()
 
         snippets = self.snippet_manager.get_snippets(prefix)
-
         if not snippets:
             return
 
@@ -130,11 +227,9 @@ class GhostEditor(QPlainTextEdit):
 
         for name, code in snippets.items():
             action = QAction(name, self)
-            # Pass the snippet code and the prefix length so we know what to replace
             action.triggered.connect(lambda checked, c=code, p=prefix: self.insert_snippet(c, p))
             menu.addAction(action)
 
-        # Calculate exact pixel coordinates to pop the menu right under the typing cursor
         rect = self.cursorRect(self.textCursor())
         global_pos = self.viewport().mapToGlobal(rect.bottomRight())
         menu.exec(global_pos)
@@ -142,12 +237,10 @@ class GhostEditor(QPlainTextEdit):
     def insert_snippet(self, snippet_code, prefix):
         cursor = self.textCursor()
         
-        # 1. Delete the trigger word the user typed
         if prefix:
             cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.KeepAnchor, len(prefix))
             cursor.removeSelectedText()
 
-        # 2. Get the current line's indentation level
         cursor.select(QTextCursor.SelectionType.LineUnderCursor)
         line_text = cursor.selectedText()
         cursor.clearSelection()
@@ -155,14 +248,12 @@ class GhostEditor(QPlainTextEdit):
         indent_match = re.match(r"^\s*", line_text)
         base_indent = indent_match.group(0) if indent_match else ""
 
-        # 3. Inject the base indentation into every line of the snippet (except the first)
         lines = snippet_code.split('\n')
         formatted_snippet = lines[0] 
         if len(lines) > 1:
             for line in lines[1:]:
                 formatted_snippet += "\n" + base_indent + line
 
-        # 4. Insert the perfectly formatted snippet
         cursor.insertText(formatted_snippet)
         self.clear_ghost_text()
 
@@ -395,28 +486,23 @@ class GhostEditor(QPlainTextEdit):
             self.clear_ghost_text()
             return
 
-        # [NEW] Ctrl+Space → Trigger Snippet Menu
         if event.key() == Qt.Key.Key_Space and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             self.show_snippet_menu()
             return
 
-        # TAB → accept full ghost
         if event.key() == Qt.Key.Key_Tab:
             if self.ghost_text:
                 self.accept_full_completion()
                 return
 
-        # Ctrl + → → accept next word
         if event.key() == Qt.Key.Key_Right and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             self.accept_next_word()
             return
 
-        # Ctrl + E → AI replace
         if event.key() == Qt.Key.Key_E and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             self.replace_selection_with_ai()
             return
 
-        # ENTER handling
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             cursor = self.textCursor()
             cursor.select(QTextCursor.SelectionType.LineUnderCursor)
@@ -425,7 +511,6 @@ class GhostEditor(QPlainTextEdit):
 
             super().keyPressEvent(event)
 
-            # Smart Auto-Indent
             whitespace_match = re.match(r"^\s*", previous_line_raw)
             indent = whitespace_match.group(0) if whitespace_match else ""
 
@@ -435,7 +520,6 @@ class GhostEditor(QPlainTextEdit):
             if indent:
                 self.textCursor().insertText(indent)
 
-            # Check for AI generation triggers
             if previous_line_stripped.startswith("#"):
                 self.handle_comment_generate(previous_line_stripped)
 

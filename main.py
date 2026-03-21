@@ -204,7 +204,9 @@ class CodeEditor(QMainWindow):
         editor.textChanged.connect(self.on_text_changed)
         editor.ai_started.connect(self.show_loading_indicator)
         editor.ai_finished.connect(self.hide_loading_indicator)
-
+        
+        editor.error_help_requested.connect(self.handle_editor_error_help)
+        
         index = self.tabs.addTab(editor, name)
         self.tabs.setCurrentIndex(index)
         
@@ -554,6 +556,53 @@ class CodeEditor(QMainWindow):
         # Track the error and show the button
         self.current_error_text += stderr
         self.explain_error_btn.show()
+
+    def handle_editor_error_help(self, error_msg, code, line_num):
+        # 1. Pop open the Chat Dock so the user can see the answer
+        self.chat_dock.show()
+
+        # 2. Simulate the user asking the question in the chat history
+        user_text = f"I have a SyntaxError on line {line_num}: {error_msg}. Can you help me fix it?"
+        
+        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
+        self.chat_history.insertPlainText(f"\nYou: {user_text}\n\n[Code Context Sent]\n\nQuillAI: ")
+        self.chat_history.ensureCursorVisible()
+
+        # 3. Build the prompt for the AI worker
+        prompt = f"""
+        The user has encountered a SyntaxError in their Python file.
+        
+        Error Message: {error_msg}
+        Error Location: Line {line_num}
+        
+        Full Code:
+        ```python
+        {code}
+        ```
+        
+        Instructions: 
+        1. Briefly explain what the error means and why it happened.
+        2. Provide the corrected code for that line or block.
+        """
+
+        # 4. Spin up the AI Worker to stream the response
+        thread = QThread()
+        self.chat_worker = AIWorker(prompt=prompt, editor_text="", cursor_pos=0, is_chat=True)
+        self.chat_worker.moveToThread(thread)
+        self.chat_worker.chat_update.connect(self.append_chat_stream)
+        
+        self.chat_worker.finished.connect(thread.quit)
+        self.chat_worker.finished.connect(self.chat_worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        
+        self.show_loading_indicator()
+        self.chat_worker.finished.connect(self.hide_loading_indicator)
+        
+        self.active_threads.append(thread)
+        thread.finished.connect(lambda: self.active_threads.remove(thread) if thread in self.active_threads else None)
+        
+        thread.started.connect(self.chat_worker.run)
+        thread.start()
 
     def explain_error(self):
         if not self.current_error_text.strip():
