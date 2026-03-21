@@ -2,6 +2,7 @@ import sys
 import os
 import tempfile
 import ast
+import re
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QProgressBar, QLabel, 
                              QDockWidget, QTreeView, QPlainTextEdit, QTextEdit, 
@@ -9,7 +10,8 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QProgressBar, QLabel,
                              QPushButton, QHBoxLayout, QMessageBox, QFileDialog)
 from PyQt6.QtCore import QTimer, QThread, Qt, QDir, QProcess
 from PyQt6.QtGui import (QFileSystemModel, QAction, QKeySequence, QTextCursor,
-                         QIcon, QPixmap, QPainter, QColor, QShortcut)
+                         QIcon, QPixmap, QPainter, QColor, QShortcut,
+                         QSyntaxHighlighter, QTextCharFormat, QFont)
 
 from editor.ghost_editor import GhostEditor
 from ai.worker import AIWorker
@@ -25,6 +27,99 @@ registry.register(".html", HTMLPlugin)
 registry.register(".htm", HTMLPlugin)
 registry.register(".py", PythonPlugin)
 
+# ==========================================
+# [NEW] Chat Syntax Highlighter
+# ==========================================
+class ChatHighlighter(QSyntaxHighlighter):
+    def __init__(self, document):
+        super().__init__(document)
+        
+        # Conversational Formats
+        self.user_fmt = QTextCharFormat()
+        self.user_fmt.setForeground(QColor("#569CD6")) # Blue
+        self.user_fmt.setFontWeight(QFont.Weight.Bold)
+        
+        self.ai_fmt = QTextCharFormat()
+        self.ai_fmt.setForeground(QColor("#8A2BE2")) # AI Purple
+        self.ai_fmt.setFontWeight(QFont.Weight.Bold)
+
+        # Code Block Formats
+        self.code_bg_fmt = QTextCharFormat()
+        self.code_bg_fmt.setBackground(QColor("#1A1A1C")) # Dark inset background
+        self.code_bg_fmt.setFontFamily("JetBrains Mono")
+        
+        self.keyword_fmt = QTextCharFormat()
+        self.keyword_fmt.setForeground(QColor("#C586C0")) 
+        self.keyword_fmt.setFontFamily("JetBrains Mono")
+
+        self.string_fmt = QTextCharFormat()
+        self.string_fmt.setForeground(QColor("#CE9178"))
+        self.string_fmt.setFontFamily("JetBrains Mono")
+
+        self.comment_fmt = QTextCharFormat()
+        self.comment_fmt.setForeground(QColor("#6A9955"))
+        self.comment_fmt.setFontFamily("JetBrains Mono")
+
+        self.inline_code_fmt = QTextCharFormat()
+        self.inline_code_fmt.setForeground(QColor("#D4D4D4"))
+        self.inline_code_fmt.setBackground(QColor("#2A2A2D"))
+        self.inline_code_fmt.setFontFamily("JetBrains Mono")
+
+        self.keywords = [r'\bdef\b', r'\bclass\b', r'\bimport\b', r'\bfrom\b', r'\bif\b', 
+                         r'\belse\b', r'\belif\b', r'\breturn\b', r'\bfor\b', r'\bwhile\b', 
+                         r'\bin\b', r'\band\b', r'\bor\b', r'\bnot\b', r'\bTrue\b', 
+                         r'\bFalse\b', r'\bNone\b', r'\bpass\b', r'\btry\b', r'\bexcept\b', 
+                         r'\bas\b', r'\bwith\b']
+
+    def highlightBlock(self, text):
+        self.setCurrentBlockState(0)
+        prev_state = self.previousBlockState()
+        text_stripped = text.strip()
+
+        # State Machine: 0 = Normal Chat, 1 = Inside Markdown Code Block
+        if prev_state == 1:
+            if text_stripped.startswith("```"):
+                self.setCurrentBlockState(0)
+                self.setFormat(0, len(text), self.comment_fmt) # Fade out the backticks
+            else:
+                self.setCurrentBlockState(1)
+                self.apply_python_highlighting(text)
+        else:
+            if text_stripped.startswith("```"):
+                self.setCurrentBlockState(1)
+                self.setFormat(0, len(text), self.comment_fmt) 
+            else:
+                self.setCurrentBlockState(0)
+                self.apply_chat_highlighting(text)
+
+    def apply_chat_highlighting(self, text):
+        # Highlight Names
+        for match in re.finditer(r"^You:", text):
+            self.setFormat(match.start(), match.end() - match.start(), self.user_fmt)
+        for match in re.finditer(r"^QuillAI:", text):
+            self.setFormat(match.start(), match.end() - match.start(), self.ai_fmt)
+            
+        # Highlight inline code wrapped in backticks
+        for match in re.finditer(r"`[^`]+`", text):
+            self.setFormat(match.start(), match.end() - match.start(), self.inline_code_fmt)
+
+    def apply_python_highlighting(self, text):
+        # Base background for code lines
+        self.setFormat(0, len(text), self.code_bg_fmt)
+
+        for kw in self.keywords:
+            for match in re.finditer(kw, text):
+                self.setFormat(match.start(), match.end() - match.start(), self.keyword_fmt)
+
+        for match in re.finditer(r'".*?"|\'.*?\'', text):
+            self.setFormat(match.start(), match.end() - match.start(), self.string_fmt)
+
+        for match in re.finditer(r'#.*', text):
+            self.setFormat(match.start(), match.end() - match.start(), self.comment_fmt)
+
+# ==========================================
+# Main Application
+# ==========================================
 class CustomFileSystemModel(QFileSystemModel):
     def __init__(self):
         super().__init__()
@@ -124,7 +219,6 @@ class CodeEditor(QMainWindow):
         self.central_layout.setContentsMargins(0, 0, 0, 0)
         self.central_layout.setSpacing(0)
 
-        # Initialize and hide the Find/Replace Panel
         self.find_replace_panel = FindReplaceWidget(self)
         self.find_replace_panel.hide()
 
@@ -133,7 +227,7 @@ class CodeEditor(QMainWindow):
         
         self.setCentralWidget(self.central_container)
 
-        # Keybinds (Find, Replace, Save)
+        # Keybinds (Find, Replace)
         self.find_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
         self.find_shortcut.activated.connect(self.show_find_replace)
 
@@ -173,7 +267,6 @@ class CodeEditor(QMainWindow):
         self.chat_worker = None
         self.active_threads = []
 
-        # Start with a blank tab
         self.add_new_tab("Untitled", "")
 
     # -----------------------------
@@ -192,7 +285,7 @@ class CodeEditor(QMainWindow):
     def add_new_tab(self, name="Untitled", content="", path=None):
         editor = GhostEditor()
 
-        self._is_loading = True # <-- LOCK ON
+        self._is_loading = True 
         editor.setPlainText(content)
         editor.set_original_state(content)
         editor.file_path = path
@@ -205,16 +298,59 @@ class CodeEditor(QMainWindow):
         editor.ai_started.connect(self.show_loading_indicator)
         editor.ai_finished.connect(self.hide_loading_indicator)
         
+        # Listen for the user requesting help with a syntax error
         editor.error_help_requested.connect(self.handle_editor_error_help)
-        
+
         index = self.tabs.addTab(editor, name)
         self.tabs.setCurrentIndex(index)
         
-        self._is_loading = False # <-- LOCK OFF (Moved to the very end!)
+        self._is_loading = False 
         return editor
+
+    def handle_editor_error_help(self, error_msg, code, line_num):
+        self.chat_dock.show()
+
+        user_text = f"I have a SyntaxError on line {line_num}: {error_msg}. Can you help me fix it?"
+        
+        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
+        self.chat_history.insertPlainText(f"\nYou: {user_text}\n\n[Code Context Sent]\n\nQuillAI: ")
+        self.chat_history.ensureCursorVisible()
+
+        prompt = f"""
+        The user has encountered a SyntaxError in their Python file.
+        
+        Error Message: {error_msg}
+        Error Location: Line {line_num}
+        
+        Full Code:
+        ```python
+        {code}
+        ```
+        
+        Instructions: 
+        1. Briefly explain what the error means and why it happened.
+        2. Provide the corrected code for that line or block.
+        """
+
+        thread = QThread()
+        self.chat_worker = AIWorker(prompt=prompt, editor_text="", cursor_pos=0, is_chat=True)
+        self.chat_worker.moveToThread(thread)
+        self.chat_worker.chat_update.connect(self.append_chat_stream)
+        
+        self.chat_worker.finished.connect(thread.quit)
+        self.chat_worker.finished.connect(self.chat_worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        
+        self.show_loading_indicator()
+        self.chat_worker.finished.connect(self.hide_loading_indicator)
+        
+        self.active_threads.append(thread)
+        thread.finished.connect(lambda: self.active_threads.remove(thread) if thread in self.active_threads else None)
+        
+        thread.started.connect(self.chat_worker.run)
+        thread.start()
         
     def closeEvent(self, event):
-        # Check if ANY tabs are dirty
         unsaved = False
         for i in range(self.tabs.count()):
             editor = self.tabs.widget(i)
@@ -234,11 +370,11 @@ class CodeEditor(QMainWindow):
                     editor = self.tabs.widget(i)
                     if hasattr(editor, 'is_dirty') and editor.is_dirty():
                         self.save_file(i)
-                event.accept() # Allow the app to close
+                event.accept() 
             elif reply == QMessageBox.StandardButton.Discard:
-                event.accept() # Close without saving
+                event.accept() 
             else:
-                event.ignore() # Cancel the close entirely
+                event.ignore() 
         else:
             event.accept()
             
@@ -246,7 +382,6 @@ class CodeEditor(QMainWindow):
         editor = self.tabs.widget(index)
         if not editor: return
 
-        # Check for unsaved changes before closing the tab
         if hasattr(editor, 'is_dirty') and editor.is_dirty():
             filename = self.tabs.tabText(index).replace("*", "")
             reply = QMessageBox.question(
@@ -257,9 +392,9 @@ class CodeEditor(QMainWindow):
 
             if reply == QMessageBox.StandardButton.Save:
                 if not self.save_file(index):
-                    return # Abort close if they cancel the save dialog
+                    return 
             elif reply == QMessageBox.StandardButton.Cancel:
-                return # Abort close entirely
+                return 
 
         widget = self.tabs.widget(index)
         if widget:
@@ -269,11 +404,9 @@ class CodeEditor(QMainWindow):
             self.add_new_tab("Untitled", "")
 
     def open_file_in_tab(self, file_path):
-        # Prevent trying to open directories as text files
         if os.path.isdir(file_path):
             return
 
-        # Prevent opening the same file twice
         for i in range(self.tabs.count()):
             editor = self.tabs.widget(i)
             if hasattr(editor, 'file_path') and editor.file_path == file_path:
@@ -289,36 +422,31 @@ class CodeEditor(QMainWindow):
             print(f"Could not open file: {e}")
             
     def save_file(self, index=None):
-        # [FIXED] PyQt signals pass 'False' instead of 'None'. This forces it to get the active tab!
         if index is None or isinstance(index, bool):
             index = self.tabs.currentIndex()
             
         editor = self.tabs.widget(index)
         if not editor: return False
 
-        # Ask for a path if this is a new file
         if not editor.file_path:
             path, _ = QFileDialog.getSaveFileName(self, "Save File", "", "Python Files (*.py);;HTML Files (*.html);;All Files (*)")
             if path:
                 editor.file_path = path
                 self.tabs.setTabText(index, os.path.basename(path))
             else:
-                return False # User canceled the save dialog
+                return False 
 
         code = editor.toPlainText()
         try:
             with open(editor.file_path, "w", encoding="utf-8") as f:
                 f.write(code)
             
-            # Reset change tracking for the gutter
             editor.set_original_state(code) 
             
-            # Remove the asterisk from the tab title
             current_text = self.tabs.tabText(index)
             if current_text.endswith("*"):
                 self.tabs.setTabText(index, current_text[:-1])
 
-            # Automatically update the Git tree
             if hasattr(self, 'git_dock'):
                 self.git_dock.refresh_status()
 
@@ -339,7 +467,6 @@ class CodeEditor(QMainWindow):
         except Exception:
             return ""
 
-        # Find the project root
         if hasattr(self, 'tree_view') and self.file_model:
             project_root = self.file_model.filePath(self.tree_view.rootIndex())
         elif editor.file_path:
@@ -375,29 +502,56 @@ class CodeEditor(QMainWindow):
         return "".join(imported_context)
 
     # -----------------------------
-    # Chat Panel
+    # [NEW] Beautiful Chat Panel
     # -----------------------------
     def setup_chat_panel(self):
-        self.chat_dock = QDockWidget("AI Chat", self)
+        self.chat_dock = QDockWidget("QuillAI Assistant", self)
         self.chat_dock.setStyleSheet(DOCK_STYLE)
 
         chat_container = QWidget()
+        chat_container.setStyleSheet("QWidget { background-color: #252526; }")
         chat_layout = QVBoxLayout(chat_container)
-        chat_layout.setContentsMargins(5, 5, 5, 5)
+        chat_layout.setContentsMargins(10, 10, 10, 10)
+        chat_layout.setSpacing(10)
 
+        # --- Header ---
+        header_layout = QHBoxLayout()
+        title_label = QLabel("Project Context")
+        title_label.setStyleSheet("color: #888888; font-weight: bold; font-size: 9pt; text-transform: uppercase;")
+        
+        clear_btn = QPushButton("🗑 Clear")
+        clear_btn.setStyleSheet("""
+            QPushButton { background-color: transparent; color: #888888; border: none; font-weight: bold; }
+            QPushButton:hover { color: #F44336; }
+        """)
+        
+        header_layout.addWidget(title_label)
+        header_layout.addStretch()
+        header_layout.addWidget(clear_btn)
+
+        # --- Chat History Box ---
         self.chat_history = QTextEdit()
         self.chat_history.setReadOnly(True)
         self.chat_history.setStyleSheet("""
             QTextEdit {
                 background-color: #1E1E1E;
-                color: #CCCCCC;
+                color: #E0E0E0;
                 font-family: 'Inter', 'SF Pro Text', 'Segoe UI', sans-serif;
                 font-size: 11pt;
                 border: 1px solid #3E3E42;
-                border-radius: 4px;
+                border-radius: 6px;
+                padding: 10px;
+                line-height: 1.5;
             }
         """)
+        
+        # Attach our custom syntax highlighter!
+        self.chat_highlighter = ChatHighlighter(self.chat_history.document())
+        clear_btn.clicked.connect(self.chat_history.clear)
 
+        # --- Input Area ---
+        input_layout = QHBoxLayout()
+        
         self.chat_input = QLineEdit()
         self.chat_input.setPlaceholderText("Ask QuillAI about your code...")
         self.chat_input.setStyleSheet("""
@@ -405,16 +559,38 @@ class CodeEditor(QMainWindow):
                 background-color: #2D2D30;
                 color: #FFFFFF;
                 border: 1px solid #3E3E42;
-                border-radius: 4px;
-                padding: 8px;
+                border-radius: 6px;
+                padding: 10px;
                 font-family: 'Inter', 'SF Pro Text', 'Segoe UI', sans-serif;
                 font-size: 10pt;
             }
+            QLineEdit:focus { border: 1px solid #0E639C; }
         """)
         self.chat_input.returnPressed.connect(self.send_chat_message)
 
+        send_btn = QPushButton("➤")
+        send_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0E639C;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-size: 14pt;
+                padding: 6px 12px;
+            }
+            QPushButton:hover { background-color: #1177BB; }
+            QPushButton:pressed { background-color: #094771; }
+        """)
+        send_btn.clicked.connect(self.send_chat_message)
+
+        input_layout.addWidget(self.chat_input)
+        input_layout.addWidget(send_btn)
+
+        # Build Layout
+        chat_layout.addLayout(header_layout)
         chat_layout.addWidget(self.chat_history)
-        chat_layout.addWidget(self.chat_input)
+        chat_layout.addLayout(input_layout)
+        
         self.chat_dock.setWidget(chat_container)
         self.chat_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.chat_dock)
@@ -425,7 +601,7 @@ class CodeEditor(QMainWindow):
         self.chat_input.clear()
 
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-        self.chat_history.insertPlainText(f"\nYou: {user_text}\n\nQuillAI: ")
+        self.chat_history.insertPlainText(f"You: {user_text}\n\nQuillAI: ")
         self.chat_history.ensureCursorVisible()
 
         editor = self.current_editor()
@@ -467,7 +643,6 @@ class CodeEditor(QMainWindow):
         run_menu.addAction(run_action)
 
     def setup_output_panel(self):
-        # The main container
         output_container = QWidget()
         layout = QVBoxLayout(output_container)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -476,11 +651,10 @@ class CodeEditor(QMainWindow):
         self.output_editor.setReadOnly(True)
         self.output_editor.setStyleSheet("QPlainTextEdit { background-color: #1E1E1E; color: #CCCCCC; font-family: 'JetBrains Mono', monospace; font-size: 10pt; border: none; }")
         
-        # Explain Error Button
         self.explain_error_btn = QPushButton("💡 Explain Error")
         self.explain_error_btn.setStyleSheet("""
             QPushButton {
-                background-color: #8A2BE2; /* A nice AI purple */
+                background-color: #8A2BE2;
                 color: white;
                 border: none;
                 padding: 6px 12px;
@@ -490,13 +664,12 @@ class CodeEditor(QMainWindow):
             }
             QPushButton:hover { background-color: #9B30FF; }
         """)
-        self.explain_error_btn.hide() # Hide it until there is an error
+        self.explain_error_btn.hide() 
         self.explain_error_btn.clicked.connect(self.explain_error)
 
-        # Create a horizontal row just for the button so we can push it to the right
         btn_layout = QHBoxLayout()
         btn_layout.setContentsMargins(5, 5, 5, 5)
-        btn_layout.addStretch() # Pushes the button to the right
+        btn_layout.addStretch() 
         btn_layout.addWidget(self.explain_error_btn)
 
         layout.addWidget(self.output_editor)
@@ -516,7 +689,6 @@ class CodeEditor(QMainWindow):
         if self.process.state() == QProcess.ProcessState.Running:
             self.process.kill()
 
-        # Reset the error state for a fresh run
         self.output_editor.clear()
         self.current_error_text = ""
         self.explain_error_btn.hide()
@@ -529,10 +701,8 @@ class CodeEditor(QMainWindow):
                 f.write(code)
             script_path = editor.file_path
             
-            # Reset change tracking
             editor.set_original_state(code)
             
-            # [FIXED] Remove the asterisk when auto-saving during a run!
             index = self.tabs.indexOf(editor)
             current_text = self.tabs.tabText(index)
             if current_text.endswith("*"):
@@ -553,85 +723,32 @@ class CodeEditor(QMainWindow):
         self.output_editor.insertPlainText(stderr)
         self.output_editor.ensureCursorVisible()
         
-        # Track the error and show the button
         self.current_error_text += stderr
         self.explain_error_btn.show()
-
-    def handle_editor_error_help(self, error_msg, code, line_num):
-        # 1. Pop open the Chat Dock so the user can see the answer
-        self.chat_dock.show()
-
-        # 2. Simulate the user asking the question in the chat history
-        user_text = f"I have a SyntaxError on line {line_num}: {error_msg}. Can you help me fix it?"
-        
-        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-        self.chat_history.insertPlainText(f"\nYou: {user_text}\n\n[Code Context Sent]\n\nQuillAI: ")
-        self.chat_history.ensureCursorVisible()
-
-        # 3. Build the prompt for the AI worker
-        prompt = f"""
-        The user has encountered a SyntaxError in their Python file.
-        
-        Error Message: {error_msg}
-        Error Location: Line {line_num}
-        
-        Full Code:
-        ```python
-        {code}
-        ```
-        
-        Instructions: 
-        1. Briefly explain what the error means and why it happened.
-        2. Provide the corrected code for that line or block.
-        """
-
-        # 4. Spin up the AI Worker to stream the response
-        thread = QThread()
-        self.chat_worker = AIWorker(prompt=prompt, editor_text="", cursor_pos=0, is_chat=True)
-        self.chat_worker.moveToThread(thread)
-        self.chat_worker.chat_update.connect(self.append_chat_stream)
-        
-        self.chat_worker.finished.connect(thread.quit)
-        self.chat_worker.finished.connect(self.chat_worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        
-        self.show_loading_indicator()
-        self.chat_worker.finished.connect(self.hide_loading_indicator)
-        
-        self.active_threads.append(thread)
-        thread.finished.connect(lambda: self.active_threads.remove(thread) if thread in self.active_threads else None)
-        
-        thread.started.connect(self.chat_worker.run)
-        thread.start()
 
     def explain_error(self):
         if not self.current_error_text.strip():
             return
 
-        # Ensure the chat panel is open and visible
         self.chat_dock.show()
         self.explain_error_btn.hide()
 
         user_text = "My script crashed with an error. Can you explain what went wrong and how to fix it?"
 
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-        self.chat_history.insertPlainText(
-            f"\nYou: {user_text}\n[Error Trace Sent]\n\nQuillAI: "
-        )
+        self.chat_history.insertPlainText(f"You: {user_text}\n\n[Error Trace Sent]\n\nQuillAI: ")
         self.chat_history.ensureCursorVisible()
 
         editor = self.current_editor()
         active_code = editor.toPlainText() if editor else ""
         cross_file_context = self.resolve_local_imports(active_code)
 
-        # Trim large inputs
         if len(active_code) > 2000:
             active_code = "...(truncated)...\n" + active_code[-2000:]
 
         if len(cross_file_context) > 2000:
             cross_file_context = "...(truncated)...\n" + cross_file_context[-2000:]
 
-        # Build the mega prompt
         prompt_with_context = f"""
     {user_text}
 
@@ -661,25 +778,14 @@ class CodeEditor(QMainWindow):
         )
 
         self.chat_worker.moveToThread(thread)
-
-        # Stream response into chat
         self.chat_worker.chat_update.connect(self.append_chat_stream)
-
-        # Cleanup
         self.chat_worker.finished.connect(thread.quit)
         self.chat_worker.finished.connect(self.chat_worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-
-        # Loading indicator
         self.show_loading_indicator()
         self.chat_worker.finished.connect(self.hide_loading_indicator)
-
         self.active_threads.append(thread)
-        thread.finished.connect(
-            lambda: self.active_threads.remove(thread)
-            if thread in self.active_threads else None
-        )
-
+        thread.finished.connect(lambda: self.active_threads.remove(thread) if thread in self.active_threads else None)
         thread.started.connect(self.chat_worker.run)
         thread.start()
 
@@ -735,7 +841,6 @@ class CodeEditor(QMainWindow):
         self.git_dock = GitDockWidget(self)
         self.git_dock.file_double_clicked.connect(self.open_file_in_tab)
         
-        # Dock it to the left, tabbed with the Explorer
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.git_dock)
         self.tabifyDockWidget(self.sidebar_dock, self.git_dock)
         
@@ -762,7 +867,6 @@ class CodeEditor(QMainWindow):
         if not editor or getattr(self, '_is_loading', False) or editor.function_active or not editor.hasFocus():
             return
 
-        # Add or remove the asterisk indicator dynamically
         if hasattr(editor, 'is_dirty'):
             index = self.tabs.indexOf(editor)
             current_title = self.tabs.tabText(index)
