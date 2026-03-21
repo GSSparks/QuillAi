@@ -1,9 +1,15 @@
 from PyQt6.QtWidgets import QPlainTextEdit, QWidget, QTextEdit, QMenu
-from PyQt6.QtGui import QPainter, QColor, QFontMetrics, QTextCursor, QFont, QTextFormat, QAction, QTextCharFormat, QIcon
+from PyQt6.QtGui import QPainter, QColor, QFontMetrics, QTextCursor, QFont, QTextFormat, QAction, QTextCharFormat, QTextBlockFormat, QTextOption
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect, QSize, QTimer
 import re
 import ast
 import difflib
+
+try:
+    import yaml
+    HAS_YAML = True
+except ImportError:
+    HAS_YAML = False
 
 from ai.worker import AIWorker
 
@@ -21,7 +27,9 @@ class SnippetManager:
             "main block": "if __name__ == '__main__':\n    main()",
             "list comprehension": "[x for x in items if condition]",
             "with open (read)": "with open('filename.txt', 'r', encoding='utf-8') as f:\n    content = f.read()",
-            "with open (write)": "with open('filename.txt', 'w', encoding='utf-8') as f:\n    f.write(content)"
+            "with open (write)": "with open('filename.txt', 'w', encoding='utf-8') as f:\n    f.write(content)",
+            "ansible task": "- name: Task Name\n  ansible.builtin.module:\n    key: value",
+            "ansible apt": "- name: Install package\n  apt:\n    name: package_name\n    state: present"
         }
 
     def get_snippets(self, prefix=""):
@@ -42,12 +50,98 @@ class LineNumberArea(QWidget):
     def paintEvent(self, event):
         self.codeEditor.line_number_area_paint_event(event)
 
+# ==========================================
+# The "Microcode" Minimap
+# ==========================================
+class MinimapArea(QPlainTextEdit):
+    def __init__(self, editor):
+        super().__init__(editor)
+        self.editor = editor
+        
+        # [FIXED] We removed setDocument() so the minimap is fully independent!
+        
+        self.setReadOnly(True)
+        self.setWordWrapMode(QTextOption.WrapMode.NoWrap)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        
+        self.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #1E1E1E; 
+                color: #888888; 
+                border-left: 1px solid #3E3E42; 
+                border-right: none;
+                border-top: none;
+                border-bottom: none;
+            }
+        """)
 
+        # font size to 4 so it's readable but out of the way
+        font = QFont("JetBrains Mono", 4) 
+        font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+        self.setFont(font)
+
+        # Sync the scrolling
+        self.editor.verticalScrollBar().valueChanged.connect(self.sync_scroll)
+
+    def sync_scroll(self, value):
+        e_max = self.editor.verticalScrollBar().maximum()
+        m_max = self.verticalScrollBar().maximum()
+        if e_max > 0:
+            ratio = value / e_max
+            self.verticalScrollBar().setValue(int(m_max * ratio))
+        self.viewport().update()
+
+    def mousePressEvent(self, event):
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            self.jump_to_click(event.pos())
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            self.jump_to_click(event.pos())
+
+    def jump_to_click(self, pos):
+        cursor = self.cursorForPosition(pos)
+        block_number = cursor.blockNumber()
+        
+        editor_cursor = QTextCursor(self.editor.document().findBlockByNumber(block_number))
+        self.editor.setTextCursor(editor_cursor)
+        self.editor.centerCursor()
+
+    def wheelEvent(self, event):
+        # Forwards all minimap scrolls to the main editor, preventing accidental minimap zooming
+        self.editor.wheelEvent(event)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        
+        painter = QPainter(self.viewport())
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 12))
+
+        fm_editor = QFontMetrics(self.editor.font())
+        visible_lines_editor = self.editor.viewport().height() / (fm_editor.height() * 1.5) 
+
+        fm_minimap = QFontMetrics(self.font())
+        top_block = self.editor.firstVisibleBlock()
+        
+        minimap_block = self.document().findBlockByNumber(top_block.blockNumber())
+        if minimap_block.isValid():
+            geom = self.blockBoundingGeometry(minimap_block).translated(self.contentOffset())
+            
+            rect_y = geom.top()
+            rect_height = visible_lines_editor * (fm_minimap.height() * 1.5) 
+            
+            painter.drawRect(0, int(rect_y), self.width(), int(rect_height))
+
+
+# ==========================================
+# Main Ghost Editor
+# ==========================================
 class GhostEditor(QPlainTextEdit):
     ai_started = pyqtSignal()
     ai_finished = pyqtSignal()
-    
-    error_help_requested = pyqtSignal(str, str, int) # message, full_code, line_number
+    error_help_requested = pyqtSignal(str, str, int) 
 
     def __init__(self):
         super().__init__()
@@ -58,21 +152,22 @@ class GhostEditor(QPlainTextEdit):
                 border: none;
             }
         """)
-        
+
         self.file_path = None
         self.ghost_text = ""
         self.snippet_manager = SnippetManager() 
+        self.setWordWrapMode(QTextOption.WrapMode.NoWrap)
 
         self.function_cursor = None
         self.function_active = False
         self.function_output = ""
 
-        font = QFont("JetBrains Mono")
-        font.setPointSize(11)
+        # Main editor starting font
+        font = QFont("Hack")
+        font.setPointSize(10)
         font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         self.setFont(font)
 
-        # --- Change Tracking State ---
         self.original_text = ""
         self.line_changes = {} 
         
@@ -81,7 +176,6 @@ class GhostEditor(QPlainTextEdit):
         self.diff_timer.timeout.connect(self.calculate_diff)
         self.textChanged.connect(lambda: self.diff_timer.start(400)) 
 
-        # --- Real-time Linter Setup ---
         self.lint_timer = QTimer(self)
         self.lint_timer.setSingleShot(True)
         self.lint_timer.timeout.connect(self.run_linter)
@@ -89,12 +183,13 @@ class GhostEditor(QPlainTextEdit):
         
         self.current_line_selection = []
         self.lint_selections = []
-        
-        # [NEW] Store the active syntax error so we can send it to the AI
         self.current_syntax_error = None
 
-        # --- Line Number Setup ---
         self.line_number_area = LineNumberArea(self)
+        
+        self.minimap_width = 100
+        self.minimap = MinimapArea(self)
+        
         self.blockCountChanged.connect(self.update_line_number_area_width)
         self.updateRequest.connect(self.update_line_number_area)
         self.update_line_number_area_width(0)
@@ -103,9 +198,30 @@ class GhostEditor(QPlainTextEdit):
         self.cursorPositionChanged.connect(self.highlight_current_line)
         self.highlight_current_line() 
 
-    # -----------------------------
-    # Visual Highlights & Linting
-    # -----------------------------
+    def setPlainText(self, text):
+        super().setPlainText(text)
+        
+        # [NEW] Explicitly set the minimap text since they are now decoupled
+        self.minimap.setPlainText(text)
+        
+        # Apply 150% line height to main editor
+        cursor = self.textCursor()
+        cursor.select(QTextCursor.SelectionType.Document)
+        fmt = QTextBlockFormat()
+        fmt.setLineHeight(150, 1) 
+        cursor.mergeBlockFormat(fmt)
+        cursor.clearSelection()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        self.setTextCursor(cursor)
+
+        # Apply 150% line height to the minimap so the lines match up perfectly
+        m_cursor = self.minimap.textCursor()
+        m_cursor.select(QTextCursor.SelectionType.Document)
+        m_cursor.mergeBlockFormat(fmt)
+        m_cursor.clearSelection()
+        m_cursor.movePosition(QTextCursor.MoveOperation.Start)
+        self.minimap.setTextCursor(m_cursor)
+
     def highlight_current_line(self):
         self.current_line_selection = []
         if not self.isReadOnly():
@@ -123,80 +239,80 @@ class GhostEditor(QPlainTextEdit):
     def update_extra_selections(self):
         self.setExtraSelections(self.current_line_selection + self.lint_selections)
 
+    def _draw_error_squiggle(self, line_idx, col_offset, error_msg, end_offset=None):
+        self.current_syntax_error = {
+            'msg': error_msg,
+            'lineno': line_idx + 1,
+            'offset': col_offset
+        }
+        
+        selection = QTextEdit.ExtraSelection()
+        selection.format.setUnderlineStyle(QTextCharFormat.UnderlineStyle.WaveUnderline)
+        selection.format.setUnderlineColor(QColor("#F44336")) 
+        
+        cursor = QTextCursor(self.document())
+        cursor.setPosition(self.document().findBlockByNumber(line_idx).position())
+        cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.MoveAnchor, col_offset)
+        
+        if end_offset is not None and end_offset > col_offset:
+            length = end_offset - col_offset
+            cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, length)
+        else:
+            cursor.select(QTextCursor.SelectionType.WordUnderCursor)
+        
+        if not cursor.hasSelection():
+            cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.KeepAnchor, 1)
+
+        selection.cursor = cursor
+        self.lint_selections.append(selection)
+
     def run_linter(self):
         self.lint_selections = []
-        self.current_syntax_error = None # Reset error state
+        self.current_syntax_error = None 
         text = self.toPlainText()
         
-        if not text.strip():
+        if not text.strip() or not self.file_path:
             self.update_extra_selections()
             return
 
-        # ==========================================
-        # [NEW] Smart Linter Guard
-        # Only parse Python files! Ignore YAML, HTML, etc.
-        # ==========================================
-        if self.file_path and not self.file_path.lower().endswith('.py'):
-            self.update_extra_selections()
-            return
+        ext = self.file_path.lower()
 
-        try:
-            ast.parse(text)
-        except SyntaxError as e:
-            # [NEW] Save the error details so the right-click menu can use them
-            self.current_syntax_error = {
-                'msg': e.msg,
-                'lineno': e.lineno,
-                'offset': e.offset
-            }
-            
-            selection = QTextEdit.ExtraSelection()
-            selection.format.setUnderlineStyle(QTextCharFormat.UnderlineStyle.WaveUnderline)
-            selection.format.setUnderlineColor(QColor("#F44336")) 
-            
-            cursor = QTextCursor(self.document())
-            
-            line_idx = (e.lineno - 1) if e.lineno is not None else 0
-            col_offset = (e.offset - 1) if e.offset is not None else 0
-            
-            cursor.setPosition(self.document().findBlockByNumber(line_idx).position())
-            cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.MoveAnchor, col_offset)
-            
-            if hasattr(e, 'end_offset') and e.end_offset is not None and e.end_offset > e.offset:
-                length = e.end_offset - e.offset
-                cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, length)
-            else:
-                cursor.select(QTextCursor.SelectionType.WordUnderCursor)
-            
-            if not cursor.hasSelection():
-                cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.KeepAnchor, 1)
+        if ext.endswith('.py'):
+            try:
+                ast.parse(text)
+            except SyntaxError as e:
+                line_idx = (e.lineno - 1) if e.lineno is not None else 0
+                col_offset = (e.offset - 1) if e.offset is not None else 0
+                end_offset = (e.end_offset - 1) if hasattr(e, 'end_offset') and e.end_offset is not None else None
+                self._draw_error_squiggle(line_idx, col_offset, e.msg, end_offset)
+            except Exception:
+                pass
 
-            selection.cursor = cursor
-            self.lint_selections.append(selection)
-        except Exception:
-            pass
-            
+        elif ext.endswith(('.yml', '.yaml')) and HAS_YAML:
+            try:
+                yaml.safe_load(text)
+            except yaml.YAMLError as e:
+                if hasattr(e, 'problem_mark') and e.problem_mark is not None:
+                    line_idx = e.problem_mark.line
+                    col_offset = e.problem_mark.column
+                    self._draw_error_squiggle(line_idx, col_offset, str(e))
+            except Exception:
+                pass
+                
         self.update_extra_selections()
 
-    # -----------------------------
-    # [NEW] Right-Click Context Menu
-    # -----------------------------
     def contextMenuEvent(self, event):
-        # Generate the standard PyQt copy/paste menu
         menu = self.createStandardContextMenu(event.pos())
         
-        # Figure out which line the user just right-clicked on
         cursor = self.cursorForPosition(event.pos())
-        clicked_line = cursor.blockNumber() + 1 # 1-based index to match ast.lineno
+        clicked_line = cursor.blockNumber() + 1 
         
-        # If there is an error, and the user right-clicked exactly on the error line...
         if self.current_syntax_error and self.current_syntax_error['lineno'] == clicked_line:
             menu.addSeparator()
             
             fix_action = QAction(QIcon(), "💡 Explain & Fix Error with AI", self)
             fix_action.triggered.connect(self.trigger_ai_error_fix)
             
-            # Make it stand out visually in the menu
             font = fix_action.font()
             font.setBold(True)
             fix_action.setFont(font)
@@ -207,16 +323,12 @@ class GhostEditor(QPlainTextEdit):
 
     def trigger_ai_error_fix(self):
         if self.current_syntax_error:
-            # Tell main.py to open the chat dock and ask the AI!
             self.error_help_requested.emit(
                 self.current_syntax_error['msg'],
                 self.toPlainText(),
                 self.current_syntax_error['lineno']
             )
 
-    # -----------------------------
-    # Snippet Menu Methods
-    # -----------------------------
     def show_snippet_menu(self):
         cursor = self.textCursor()
         cursor.select(QTextCursor.SelectionType.WordUnderCursor)
@@ -265,9 +377,6 @@ class GhostEditor(QPlainTextEdit):
         cursor.insertText(formatted_snippet)
         self.clear_ghost_text()
 
-    # -----------------------------
-    # Change Tracking Methods
-    # -----------------------------
     def set_original_state(self, text):
         self.original_text = text
         self.line_changes.clear()
@@ -277,7 +386,23 @@ class GhostEditor(QPlainTextEdit):
         return self.toPlainText() != self.original_text
 
     def calculate_diff(self):
-        current_lines = self.toPlainText().split('\n')
+        current_text = self.toPlainText()
+        
+        # [NEW] Safely sync the minimap text in the background without causing typing lag
+        if self.minimap.toPlainText() != current_text:
+            scroll = self.minimap.verticalScrollBar().value()
+            self.minimap.setPlainText(current_text)
+            
+            # Re-apply line height format to the minimap
+            m_cursor = self.minimap.textCursor()
+            m_cursor.select(QTextCursor.SelectionType.Document)
+            fmt = QTextBlockFormat()
+            fmt.setLineHeight(150, 1)
+            m_cursor.mergeBlockFormat(fmt)
+            
+            self.minimap.verticalScrollBar().setValue(scroll)
+
+        current_lines = current_text.split('\n')
         original_lines = self.original_text.split('\n')
         
         matcher = difflib.SequenceMatcher(None, original_lines, current_lines)
@@ -294,9 +419,6 @@ class GhostEditor(QPlainTextEdit):
         self.line_changes = new_changes
         self.line_number_area.update() 
 
-    # -----------------------------
-    # Line Number Panel
-    # -----------------------------
     def line_number_area_width(self):
         digits = 1
         max_value = max(1, self.blockCount())
@@ -307,7 +429,7 @@ class GhostEditor(QPlainTextEdit):
         return space
 
     def update_line_number_area_width(self, _):
-        self.setViewportMargins(self.line_number_area_width(), 0, 0, 0)
+        self.setViewportMargins(self.line_number_area_width(), 0, self.minimap_width, 0)
 
     def update_line_number_area(self, rect, dy):
         if dy:
@@ -321,7 +443,9 @@ class GhostEditor(QPlainTextEdit):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         cr = self.contentsRect()
+        
         self.line_number_area.setGeometry(QRect(cr.left(), cr.top(), self.line_number_area_width(), cr.height()))
+        self.minimap.setGeometry(QRect(cr.right() - self.minimap_width, cr.top(), self.minimap_width, cr.height()))
 
     def line_number_area_paint_event(self, event):
         painter = QPainter(self.line_number_area)
@@ -349,9 +473,6 @@ class GhostEditor(QPlainTextEdit):
             bottom = top + round(self.blockBoundingRect(block).height())
             block_number += 1
 
-    # -----------------------------
-    # Ghost handling
-    # -----------------------------
     def set_ghost_text(self, text):
         self.ghost_text = text
         self.viewport().update()
@@ -379,9 +500,6 @@ class GhostEditor(QPlainTextEdit):
         self.ghost_text = remainder
         self.viewport().update()
 
-    # -----------------------------
-    # AST-aware context
-    # -----------------------------
     def get_ast_context(self):
         text = self.toPlainText()
         try:
@@ -401,9 +519,6 @@ class GhostEditor(QPlainTextEdit):
         context = f"Functions: {functions}\nClasses: {classes}\n"
         return context + "\n" + text[-1000:]
 
-    # -----------------------------
-    # AI actions
-    # -----------------------------
     def handle_comment_generate(self, comment):
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
@@ -456,9 +571,6 @@ class GhostEditor(QPlainTextEdit):
 
         self.thread.start()
 
-    # -----------------------------
-    # Apply AI output
-    # -----------------------------
     def handle_function_output(self, text):
         if self.function_active and self.function_cursor:
             self.function_cursor.insertText(text)
@@ -478,9 +590,6 @@ class GhostEditor(QPlainTextEdit):
         cursor.removeSelectedText()
         cursor.insertText(self.function_output)
 
-    # -----------------------------
-    # Key handling
-    # -----------------------------
     def keyPressEvent(self, event):
         pairs = {'(': ')', '[': ']', '{': '}', '"': '"', "'": "'"}
         char = event.text()
@@ -537,29 +646,75 @@ class GhostEditor(QPlainTextEdit):
         super().keyPressEvent(event)
         self.clear_ghost_text()
 
-    # -----------------------------
-    # Paint ghost (inline style)
-    # -----------------------------
+    def wheelEvent(self, event):
+        if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            delta = event.angleDelta().y()
+            if delta > 0:
+                self.zoomIn(1)
+            elif delta < 0:
+                self.zoomOut(1)
+            
+            self.update_line_number_area_width(0)
+            self.minimap.viewport().update()
+            return
+            
+        super().wheelEvent(event)
+
     def paintEvent(self, event):
         super().paintEvent(event)
-
-        if not self.ghost_text:
-            return
 
         painter = QPainter(self.viewport())
         if not painter.isActive():
             return
 
-        painter.setPen(QColor(120, 120, 120, 160))
-        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-
-        cursor = self.textCursor()
-        rect = self.cursorRect(cursor)
         fm = QFontMetrics(self.font())
 
-        x = rect.left()
-        y = rect.top() + fm.ascent()
+        space_width = fm.horizontalAdvance(' ')
+        indent_width = space_width * 4 
+        offset_x = self.contentOffset().x() + self.document().documentMargin()
 
-        lines = self.ghost_text.split("\n")
-        for i, line in enumerate(lines):
-            painter.drawText(x, y + i * fm.height(), line)
+        painter.setPen(QColor(80, 80, 80, 80)) 
+
+        block = self.firstVisibleBlock()
+        top = round(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
+        bottom = top + round(self.blockBoundingRect(block).height())
+
+        previous_indent = 0
+
+        while block.isValid() and top <= event.rect().bottom():
+            if block.isVisible() and bottom >= event.rect().top():
+                text = block.text()
+                
+                if text.strip():
+                    indent_spaces = len(text) - len(text.lstrip(' '))
+                    previous_indent = indent_spaces
+                else:
+                    indent_spaces = previous_indent
+
+                levels = indent_spaces // 4
+                
+                for i in range(1, levels + 1):
+                    x = int(offset_x + (i * indent_width))
+                    painter.drawLine(x, top, x, bottom)
+
+            block = block.next()
+            top = bottom
+            bottom = top + round(self.blockBoundingRect(block).height())
+
+        if self.ghost_text:
+            painter.setPen(QColor(120, 120, 120, 160))
+            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+
+            cursor = self.textCursor()
+            rect = self.cursorRect(cursor)
+            
+            x = rect.left()
+            y = rect.top() + fm.ascent()
+
+            line_spacing = round(self.blockBoundingRect(self.textCursor().block()).height())
+            if line_spacing == 0: 
+                line_spacing = fm.height() * 1.5 
+
+            lines = self.ghost_text.split("\n")
+            for i, line in enumerate(lines):
+                painter.drawText(x, int(y + i * line_spacing), line)
