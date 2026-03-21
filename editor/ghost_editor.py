@@ -47,7 +47,6 @@ class GhostEditor(QPlainTextEdit):
     ai_started = pyqtSignal()
     ai_finished = pyqtSignal()
     
-    # [NEW] Signal to tell main.py that the user wants AI help with a syntax error
     error_help_requested = pyqtSignal(str, str, int) # message, full_code, line_number
 
     def __init__(self):
@@ -59,7 +58,8 @@ class GhostEditor(QPlainTextEdit):
                 border: none;
             }
         """)
-
+        
+        self.file_path = None
         self.ghost_text = ""
         self.snippet_manager = SnippetManager() 
 
@@ -129,6 +129,14 @@ class GhostEditor(QPlainTextEdit):
         text = self.toPlainText()
         
         if not text.strip():
+            self.update_extra_selections()
+            return
+
+        # ==========================================
+        # [NEW] Smart Linter Guard
+        # Only parse Python files! Ignore YAML, HTML, etc.
+        # ==========================================
+        if self.file_path and not self.file_path.lower().endswith('.py'):
             self.update_extra_selections()
             return
 
