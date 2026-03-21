@@ -17,6 +17,7 @@ from editor.ghost_editor import GhostEditor
 from ai.worker import AIWorker
 from ui.menu import setup_file_menu
 from ui.find_replace import FindReplaceWidget
+from ui.find_in_files import FindInFilesWidget
 
 from editor.highlighter import registry
 from plugins.git_plugin import GitDockWidget
@@ -234,6 +235,9 @@ class CodeEditor(QMainWindow):
         self.replace_shortcut = QShortcut(QKeySequence("Ctrl+H"), self)
         self.replace_shortcut.activated.connect(self.show_find_replace)
 
+        self.project_search_shortcut = QShortcut(QKeySequence("Ctrl+Shift+F"), self)
+        self.project_search_shortcut.activated.connect(self.show_project_search) 
+
         self.timer = QTimer()
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self.ask_ai)
@@ -257,6 +261,7 @@ class CodeEditor(QMainWindow):
         self.setup_git_panel()
         self.setup_output_panel()
         self.setup_chat_panel()
+        self.setup_find_in_files_panel()
 
         self.process = QProcess(self)
         self.process.readyReadStandardOutput.connect(self.handle_stdout)
@@ -275,6 +280,27 @@ class CodeEditor(QMainWindow):
     def show_find_replace(self):
         self.find_replace_panel.show()
         self.find_replace_panel.focus_find()
+    
+    def setup_find_in_files_panel(self):
+        self.search_dock = QDockWidget("Find in Files", self)
+        self.search_dock.setStyleSheet(DOCK_STYLE)
+        
+        self.find_in_files_widget = FindInFilesWidget(self)
+        self.find_in_files_widget.open_file_request.connect(self.open_file_in_tab)
+        
+        self.search_dock.setWidget(self.find_in_files_widget)
+        self.search_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
+        
+        # Dock it at the bottom, and tabify it with the Output panel to save space!
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.search_dock)
+        if hasattr(self, 'output_dock'):
+            self.tabifyDockWidget(self.output_dock, self.search_dock)
+        self.search_dock.hide()
+
+    def show_project_search(self):
+        self.search_dock.show()
+        self.search_dock.raise_() # Bring to front if tabbed
+        self.find_in_files_widget.focus_search()
 
     # -----------------------------
     # Tab Management Methods
