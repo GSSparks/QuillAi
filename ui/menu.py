@@ -44,8 +44,20 @@ def setup_file_menu(window):
             selected_files = dialog.selectedFiles()
             if selected_files:
                 folder_path = selected_files[0]
+                
+                # Your existing code that updates the visual file tree
                 if hasattr(window, 'tree_view') and hasattr(window, 'file_model'):
                     window.tree_view.setRootIndex(window.file_model.index(folder_path))
+                
+                # ==========================================
+                # The Git Tracker Fix
+                # ==========================================
+                # Explicitly hand the absolute path to the Git plugin and force a refresh
+                if hasattr(window, 'git_dock'):
+                    window.git_dock.repo_path = folder_path
+                    window.git_dock.refresh_status()
+                else:
+                    print("CRITICAL: Could not find the Git plugin on the main window!")
 
     def open_file():
         dialog = create_themed_dialog("Open File", QFileDialog.AcceptMode.AcceptOpen)
@@ -53,17 +65,14 @@ def setup_file_menu(window):
             selected_files = dialog.selectedFiles()
             if selected_files:
                 path = selected_files[0]
-                
-                # Extract the folder path from the file and change directory!
-                # Example: turns '/home/user/dev/main.py' into '/home/user/dev'
                 file_directory = os.path.dirname(path)
-                os.chdir(file_directory)
                 
                 window.open_file_in_tab(path)
                 
-                # Force the Git plugin to refresh immediately after the directory changes
-                if hasattr(window, 'git_plugin'):
-                    window.git_plugin.refresh_status()
+                # Explicitly tell the plugin the exact absolute path!
+                if hasattr(window, 'git_dock'):
+                    window.git_dock.repo_path = file_directory
+                    window.git_dock.refresh_status()
 
     def save_as_file():
         editor = window.current_editor()

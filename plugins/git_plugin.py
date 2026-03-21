@@ -15,6 +15,7 @@ class GitDockWidget(QDockWidget):
     def __init__(self, parent=None):
         super().__init__("Source Control", parent)
         self.parent_window = parent
+        self.repo_path = None
         
         self.folder_icon = self._create_icon("#D4A373", is_folder=True)
         self.file_icon = self._create_icon("#A9A9A9", is_folder=False)
@@ -139,20 +140,26 @@ class GitDockWidget(QDockWidget):
 
     def run_git_command(self, args):
         try:
-            current_dir = os.getcwd()
+            # [NEW] Use our explicit path. If it's None, fallback to an empty string (current dir)
+            target_dir = self.repo_path if self.repo_path else None
             
             result = subprocess.run(
                 args,
-                cwd=QDir.currentPath(),
+                cwd=target_dir, # <--- We force the absolute path string here!
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 check=True
             )
             return True, result.stdout.strip()
+            
         except subprocess.CalledProcessError as e:
             return False, e.stderr.strip()
-
+        except FileNotFoundError:
+            return False, "Git executable not found in PATH."
+        except Exception as e:
+            return False, str(e)
+            
     def show_context_menu(self, position):
         item = self.tree.itemAt(position)
         if not item: return
@@ -201,7 +208,13 @@ class GitDockWidget(QDockWidget):
         
         success, output = self.run_git_command(['git', 'status', '--porcelain', '-u'])
         if not success:
-            self.tree.addTopLevelItem(QTreeWidgetItem(["Git error or not a repository."]))
+            # 1. Print the actual system error
+            self.tree.addTopLevelItem(QTreeWidgetItem([f"DEBUG ERROR: {output}"]))
+            
+            # 2. Print the path it was TRYING to use
+            attempted_path = self.repo_path if hasattr(self, 'repo_path') else "NO PATH SET"
+            self.tree.addTopLevelItem(QTreeWidgetItem([f"ATTEMPTED DIR: {attempted_path}"]))
+            
             return
             
         if not output:
