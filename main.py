@@ -20,6 +20,8 @@ from ai.worker import AIWorker
 from ui.menu import setup_file_menu
 from ui.find_replace import FindReplaceWidget
 from ui.find_in_files import FindInFilesWidget
+from ui.settings_manager import SettingsManager
+from ui.settings_dialog import SettingsDialog
 
 from editor.highlighter import registry
 from plugins.git_plugin import GitDockWidget
@@ -39,7 +41,7 @@ registry.register(".sh", BashPlugin)
 registry.register(".bash", BashPlugin)
 
 # ==========================================
-# [NEW] Chat Syntax Highlighter
+# Chat Syntax Highlighter
 # ==========================================
 class ChatHighlighter(QSyntaxHighlighter):
     def __init__(self, document):
@@ -75,6 +77,8 @@ class ChatHighlighter(QSyntaxHighlighter):
         self.inline_code_fmt.setForeground(QColor("#D4D4D4"))
         self.inline_code_fmt.setBackground(QColor("#2A2A2D"))
         self.inline_code_fmt.setFontFamily("JetBrains Mono")
+        
+        self.settings_manager = SettingsManager()
 
         self.keywords = [r'\bdef\b', r'\bclass\b', r'\bimport\b', r'\bfrom\b', r'\bif\b', 
                          r'\belse\b', r'\belif\b', r'\breturn\b', r'\bfor\b', r'\bwhile\b', 
@@ -284,6 +288,8 @@ class CodeEditor(QMainWindow):
         self.active_threads = []
 
         self.add_new_tab("Untitled", "")
+        
+        self.settings_manager = SettingsManager()
 
     # -----------------------------
     # Find / Replace Method
@@ -312,6 +318,22 @@ class CodeEditor(QMainWindow):
         self.search_dock.show()
         self.search_dock.raise_() # Bring to front if tabbed
         self.find_in_files_widget.focus_search()
+    
+    # ==========================================
+    # Settings Dialog Trigger
+    # ==========================================
+    def show_settings_dialog(self):
+        """Creates and displays the settings window."""
+        from ui.settings_dialog import SettingsDialog
+        
+        # Instantiate the dialog, passing our settings manager
+        dialog = SettingsDialog(self.settings_manager, self)
+        
+        # .exec() freezes the main window until the dialog is closed
+        if dialog.exec():
+            # If the user clicked 'Save', the settings are already updated 
+            # in the manager. We can add a status bar message here:
+            self.statusBar().showMessage("Settings saved successfully.", 3000)
 
     # -----------------------------
     # Tab Management Methods
@@ -468,7 +490,7 @@ class CodeEditor(QMainWindow):
                 print(f"Could not open file: {e}")
                 return
 
-        # [NEW] If a line number was provided by Find in Files, jump to it!
+        # If a line number was provided by Find in Files, jump to it!
         if editor_to_focus and line_number is not None:
             cursor = editor_to_focus.textCursor()
             # Move cursor to the start of the document
@@ -488,30 +510,50 @@ class CodeEditor(QMainWindow):
             index = self.tabs.currentIndex()
             
         editor = self.tabs.widget(index)
-        if not editor: return False
+        if not editor: 
+            return False
 
+        # If it's a new "Untitled" tab, it won't have a file_path.
+        # We must force a "Save As" dialog.
         if not editor.file_path:
-            path, _ = QFileDialog.getSaveFileName(self, "Save File", "", "Python Files (*.py);;HTML Files (*.html);;All Files (*)")
+            # Look for the project path, fall back to Home
+            start_dir = QDir.currentPath()
+            if hasattr(self, 'git_dock') and self.git_dock.repo_path:
+                start_dir = self.git_dock.repo_path
+
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Save File", start_dir, 
+                "Python Files (*.py);;All Files (*)"
+            )
+            
             if path:
                 editor.file_path = path
                 self.tabs.setTabText(index, os.path.basename(path))
+                # Update highlighter for the new extension
+                ext = os.path.splitext(path)[1].lower()
+                editor.highlighter = registry.get_highlighter(editor.document(), ext)
             else:
                 return False 
 
-        code = editor.toPlainText()
+        # ACTUAL WRITING TO DISK
         try:
+            code = editor.toPlainText()
             with open(editor.file_path, "w", encoding="utf-8") as f:
                 f.write(code)
             
+            # Sync the dirty state
             editor.set_original_state(code) 
             
+            # Remove the asterisk from the tab text
             current_text = self.tabs.tabText(index)
             if current_text.endswith("*"):
                 self.tabs.setTabText(index, current_text[:-1])
 
+            # Refresh Git to show the new file/changes
             if hasattr(self, 'git_dock'):
                 self.git_dock.refresh_status()
 
+            self.statusBar().showMessage(f"Saved: {editor.file_path}", 3000)
             return True
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Could not save file: {e}")
@@ -666,17 +708,29 @@ class CodeEditor(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.chat_dock)
 
     def send_chat_message(self):
-        # Grab the text and clear the box
+        # 1. Grab the text and clear the box
         user_text = self.chat_input.toPlainText().strip() 
         if not user_text: return
         self.chat_input.clear()
         
-        # Post the user's message to the chat history UI
+        # 2. Post the user's message to the chat history UI
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
         self.chat_history.insertPlainText(f"You:\n{user_text}\n\nQuillAI:\n")
         self.chat_history.ensureCursorVisible()
 
-        # Grab the active editor context and imports
+        # 3. Pull dynamic API routing from Settings
+        use_cloud = self.settings_manager.get("use_cloud_for_chat")
+        
+        if use_cloud:
+            target_url = self.settings_manager.get("cloud_llm_url")
+            # We'll assume the worker can handle an API key if we pass it 
+            # (You may need to update worker.py to accept an api_key arg if you use OpenAI)
+            api_key = self.settings_manager.get("cloud_api_key")
+        else:
+            target_url = self.settings_manager.get("local_llm_url")
+            api_key = ""
+
+        # 4. Grab the active editor context and imports
         editor = self.current_editor()
         active_code = editor.toPlainText() if editor else ""
         cross_file_context = self.resolve_local_imports(active_code)
@@ -684,12 +738,20 @@ class CodeEditor(QMainWindow):
         if len(active_code) > 2000:
             active_code = "...(truncated)...\n" + active_code[-2000:]
 
-        # Build the final prompt payload
+        # 5. Build the final prompt payload
         prompt_with_context = f"{user_text}\n\n[Context: The user is currently editing a file with this code:]\n```python\n{active_code}\n```\n{cross_file_context}"
 
-        # Fire up the background thread!
+        # 6. Fire up the background thread with dynamic settings!
         thread = QThread()
-        self.chat_worker = AIWorker(prompt=prompt_with_context, editor_text="", cursor_pos=0, is_chat=True)
+        self.chat_worker = AIWorker(
+            prompt=prompt_with_context, 
+            editor_text="", 
+            cursor_pos=0, 
+            is_chat=True,
+            api_url=target_url, # Dynamically routed URL
+            model=self.settings_manager.get("active_model")
+        )
+        
         self.chat_worker.moveToThread(thread)
         self.chat_worker.chat_update.connect(self.append_chat_stream)
         
@@ -709,6 +771,7 @@ class CodeEditor(QMainWindow):
         
         thread.started.connect(self.chat_worker.run)
         thread.start()
+        
     def append_chat_stream(self, text):
         self.current_ai_raw_text += text # Track the raw markdown
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)

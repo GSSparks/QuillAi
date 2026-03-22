@@ -28,7 +28,7 @@ class AIWorker(QObject):
         cursor_pos: int,
         generate_function: bool = False,
         is_edit: bool = False,
-        is_chat: bool = False, # [NEW] Chat flag
+        is_chat: bool = False, 
         model: str = "qwen2.5-coder-7b",
         api_url: str = "http://192.168.1.189:11435/v1/chat/completions",
     ):
