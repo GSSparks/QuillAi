@@ -441,8 +441,6 @@ class GhostEditor(QPlainTextEdit):
         menu.exec(event.globalPos())
         
     def handle_text_changed_for_ai(self):
-        """Determines IF we should ask for a suggestion based on cursor context."""
-        # 1. Always clear old ghost text the millisecond the user types something new
         self.clear_ghost_text()
 
         cursor = self.textCursor()
@@ -457,25 +455,50 @@ class GhostEditor(QPlainTextEdit):
             self.ai_suggest_timer.stop()
             return
 
-        # 2. Heuristic: Check the character immediately BEFORE the cursor
-        char_before = text[pos - 1]
-        
-        # If we are in the middle of typing a word (letters, numbers, underscores), DO NOT interrupt.
-        if char_before.isalnum() or char_before == '_':
+        # --- Strong signal checks only ---
+
+        # 1. Cursor is on a brand-new blank line after a colon (entering a block body)
+        current_line = cursor.block().text()
+        prev_block = cursor.block().previous()
+        prev_line = prev_block.text().rstrip() if prev_block.isValid() else ""
+
+        just_entered_block = (
+            current_line.strip() == ""
+            and prev_line.endswith(":")
+        )
+
+        # 2. Inside an existing function/class body but the line is completely empty
+        #    (user pressed Enter to start a new statement inside a block)
+        inside_indented_empty = (
+            current_line == ""
+            and prev_line.startswith((" ", "\t"))
+        )
+
+        # 3. Cursor is directly after a comment line that was just committed
+        #    (user hit Enter after writing a # comment, expecting a function below it)
+        prev_is_comment = prev_line.strip().startswith("#")
+        after_comment = current_line.strip() == "" and prev_is_comment
+
+        if not (just_entered_block or inside_indented_empty or after_comment):
             self.ai_suggest_timer.stop()
             return
 
-        # 3. Heuristic: Check the character immediately AFTER the cursor
-        if pos < len(text):
-            char_after = text[pos]
-            # If we are typing INSIDE an existing word, DO NOT interrupt.
-            if char_after.isalnum() or char_after == '_':
-                self.ai_suggest_timer.stop()
-                return
+        self.ai_suggest_timer.start(300)
 
-        # If we survived the checks (e.g., user just hit Space, Enter, or typed a bracket),
-        # start the 500ms countdown. If they keep typing, the timer resets!
-        self.ai_suggest_timer.start(500)
+    def request_completion_hotkey(self):
+        """Called directly by Ctrl+Space. Always fires a completion at the cursor."""
+        self.clear_ghost_text()
+        # Cancel any in-flight worker safely
+        try:
+            if hasattr(self, 'ai_thread') and self.ai_thread is not None:
+                if self.ai_thread.isRunning():
+                    if hasattr(self, 'worker') and self.worker:
+                        self.worker.cancel()
+        except RuntimeError:
+            self.ai_thread = None
+
+        self.ai_suggest_timer.stop()
+        self.trigger_inline_completion()
 
     def trigger_inline_completion(self):
         """Fires when the user pauses typing at a logical boundary."""

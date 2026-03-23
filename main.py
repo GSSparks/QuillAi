@@ -257,6 +257,9 @@ class CodeEditor(QMainWindow):
 
         self.project_search_shortcut = QShortcut(QKeySequence("Ctrl+Shift+F"), self)
         self.project_search_shortcut.activated.connect(self.show_project_search)
+        
+        self.completion_shortcut = QShortcut(QKeySequence("Ctrl+Space"), self)
+        self.completion_shortcut.activated.connect(self.request_manual_completion)
 
         self.timer = QTimer()
         self.timer.setSingleShot(True)
@@ -336,7 +339,11 @@ class CodeEditor(QMainWindow):
             api_key=self.settings_manager.get_api_key(),
             backend=self.settings_manager.get_backend(),
         )
-
+    def request_manual_completion(self):
+        editor = self.current_editor()
+        if editor and editor.hasFocus():
+            editor.request_completion_hotkey()
+        
     # -----------------------------
     # Find / Replace Method
     # -----------------------------
