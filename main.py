@@ -5,8 +5,8 @@ import ast
 import re
 import base64
 
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QProgressBar, QLabel, 
-                             QDockWidget, QTreeView, QPlainTextEdit, QTextEdit, 
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QProgressBar, QLabel,
+                             QDockWidget, QTreeView, QPlainTextEdit, QTextEdit,
                              QVBoxLayout, QWidget, QLineEdit, QTabWidget,
                              QPushButton, QHBoxLayout, QMessageBox, QFileDialog,
                              QTextBrowser)
@@ -46,12 +46,12 @@ registry.register(".bash", BashPlugin)
 class ChatHighlighter(QSyntaxHighlighter):
     def __init__(self, document):
         super().__init__(document)
-        
+
         # Conversational Formats
         self.user_fmt = QTextCharFormat()
         self.user_fmt.setForeground(QColor("#569CD6")) # Blue
         self.user_fmt.setFontWeight(QFont.Weight.Bold)
-        
+
         self.ai_fmt = QTextCharFormat()
         self.ai_fmt.setForeground(QColor("#8A2BE2")) # AI Purple
         self.ai_fmt.setFontWeight(QFont.Weight.Bold)
@@ -60,9 +60,9 @@ class ChatHighlighter(QSyntaxHighlighter):
         self.code_bg_fmt = QTextCharFormat()
         self.code_bg_fmt.setBackground(QColor("#1A1A1C")) # Dark inset background
         self.code_bg_fmt.setFontFamily("JetBrains Mono")
-        
+
         self.keyword_fmt = QTextCharFormat()
-        self.keyword_fmt.setForeground(QColor("#C586C0")) 
+        self.keyword_fmt.setForeground(QColor("#C586C0"))
         self.keyword_fmt.setFontFamily("JetBrains Mono")
 
         self.string_fmt = QTextCharFormat()
@@ -77,13 +77,11 @@ class ChatHighlighter(QSyntaxHighlighter):
         self.inline_code_fmt.setForeground(QColor("#D4D4D4"))
         self.inline_code_fmt.setBackground(QColor("#2A2A2D"))
         self.inline_code_fmt.setFontFamily("JetBrains Mono")
-        
-        self.settings_manager = SettingsManager()
 
-        self.keywords = [r'\bdef\b', r'\bclass\b', r'\bimport\b', r'\bfrom\b', r'\bif\b', 
-                         r'\belse\b', r'\belif\b', r'\breturn\b', r'\bfor\b', r'\bwhile\b', 
-                         r'\bin\b', r'\band\b', r'\bor\b', r'\bnot\b', r'\bTrue\b', 
-                         r'\bFalse\b', r'\bNone\b', r'\bpass\b', r'\btry\b', r'\bexcept\b', 
+        self.keywords = [r'\bdef\b', r'\bclass\b', r'\bimport\b', r'\bfrom\b', r'\bif\b',
+                         r'\belse\b', r'\belif\b', r'\breturn\b', r'\bfor\b', r'\bwhile\b',
+                         r'\bin\b', r'\band\b', r'\bor\b', r'\bnot\b', r'\bTrue\b',
+                         r'\bFalse\b', r'\bNone\b', r'\bpass\b', r'\btry\b', r'\bexcept\b',
                          r'\bas\b', r'\bwith\b']
 
     def highlightBlock(self, text):
@@ -102,7 +100,7 @@ class ChatHighlighter(QSyntaxHighlighter):
         else:
             if text_stripped.startswith("```"):
                 self.setCurrentBlockState(1)
-                self.setFormat(0, len(text), self.comment_fmt) 
+                self.setFormat(0, len(text), self.comment_fmt)
             else:
                 self.setCurrentBlockState(0)
                 self.apply_chat_highlighting(text)
@@ -113,7 +111,7 @@ class ChatHighlighter(QSyntaxHighlighter):
             self.setFormat(match.start(), match.end() - match.start(), self.user_fmt)
         for match in re.finditer(r"^QuillAI:", text):
             self.setFormat(match.start(), match.end() - match.start(), self.ai_fmt)
-            
+
         # Highlight inline code wrapped in backticks
         for match in re.finditer(r"`[^`]+`", text):
             self.setFormat(match.start(), match.end() - match.start(), self.inline_code_fmt)
@@ -199,10 +197,17 @@ DOCK_STYLE = """
 class CodeEditor(QMainWindow):
     def __init__(self):
         super().__init__()
+        # 1. Load settings FIRST
+        self.settings_manager = SettingsManager()
+
+        # 2. Basic App State
         self.setWindowTitle("QuillAI")
         self._is_loading = False
         self.current_error_text = ""
         self.current_ai_raw_text = ""
+        self.last_worker = None
+        self.chat_worker = None
+        self.active_threads = []
 
         # --------------------------
         # Tab System Setup
@@ -240,7 +245,7 @@ class CodeEditor(QMainWindow):
 
         self.central_layout.addWidget(self.find_replace_panel)
         self.central_layout.addWidget(self.tabs)
-        
+
         self.setCentralWidget(self.central_container)
 
         # Keybinds (Find, Replace)
@@ -251,7 +256,7 @@ class CodeEditor(QMainWindow):
         self.replace_shortcut.activated.connect(self.show_find_replace)
 
         self.project_search_shortcut = QShortcut(QKeySequence("Ctrl+Shift+F"), self)
-        self.project_search_shortcut.activated.connect(self.show_project_search) 
+        self.project_search_shortcut.activated.connect(self.show_project_search)
 
         self.timer = QTimer()
         self.timer.setSingleShot(True)
@@ -262,6 +267,20 @@ class CodeEditor(QMainWindow):
 
         # UI Status Bar
         self.status_bar = self.statusBar()
+        self.ai_mode_btn = QPushButton("🏠 LOCAL")
+        self.ai_mode_btn.setCheckable(True)
+        self.ai_mode_btn.setFlat(True)
+        self.ai_mode_btn.setStyleSheet("""
+            QPushButton { color: #888888; font-weight: bold; border: none; padding: 0 10px; }
+            QPushButton:checked { color: #007ACC; }
+        """)
+        # Set initial state based on saved settings
+        is_cloud = self.settings_manager.get_backend() == "openai"
+        self.ai_mode_btn.setChecked(is_cloud)
+        self.update_mode_label(is_cloud)
+
+        self.ai_mode_btn.clicked.connect(self.toggle_ai_mode)
+        self.status_bar.addPermanentWidget(self.ai_mode_btn)
         self.ai_status_label = QLabel("AI Thinking...")
         self.ai_progress = QProgressBar()
         self.ai_progress.setRange(0, 0)
@@ -283,13 +302,40 @@ class CodeEditor(QMainWindow):
         self.process.readyReadStandardError.connect(self.handle_stderr)
         self.process.finished.connect(self.process_finished)
 
-        self.last_worker = None
-        self.chat_worker = None
-        self.active_threads = []
-
         self.add_new_tab("Untitled", "")
-        
-        self.settings_manager = SettingsManager()
+
+    def toggle_ai_mode(self, checked):
+        backend = "openai" if checked else "llama"
+        self.settings_manager.set_backend(backend)
+        self.update_mode_label(checked)
+
+        mode_str = "Cloud (OpenAI)" if checked else "Local (llama.cpp)"
+        self.statusBar().showMessage(f"AI Mode: {mode_str}", 3000)
+
+    def update_mode_label(self, is_cloud):
+        self.ai_mode_btn.setText("☁️ CLOUD" if is_cloud else "🏠 LOCAL")
+
+    def create_worker(
+        self,
+        prompt,
+        editor_text="",
+        cursor_pos=0,
+        generate_function=False,
+        is_edit=False,
+        is_chat=False,
+    ):
+        return AIWorker(
+            prompt=prompt,
+            editor_text=editor_text,
+            cursor_pos=cursor_pos,
+            generate_function=generate_function,
+            is_edit=is_edit,
+            is_chat=is_chat,
+            model=self.settings_manager.get_model(),
+            api_url=self.settings_manager.get_api_url(),
+            api_key=self.settings_manager.get_api_key(),
+            backend=self.settings_manager.get_backend(),
+        )
 
     # -----------------------------
     # Find / Replace Method
@@ -297,17 +343,17 @@ class CodeEditor(QMainWindow):
     def show_find_replace(self):
         self.find_replace_panel.show()
         self.find_replace_panel.focus_find()
-    
+
     def setup_find_in_files_panel(self):
         self.search_dock = QDockWidget("Find in Files", self)
         self.search_dock.setStyleSheet(DOCK_STYLE)
-        
+
         self.find_in_files_widget = FindInFilesWidget(self)
         self.find_in_files_widget.open_file_request.connect(self.open_file_in_tab)
-        
+
         self.search_dock.setWidget(self.find_in_files_widget)
         self.search_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
-        
+
         # Dock it at the bottom, and tabify it with the Output panel to save space!
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.search_dock)
         if hasattr(self, 'output_dock'):
@@ -318,21 +364,17 @@ class CodeEditor(QMainWindow):
         self.search_dock.show()
         self.search_dock.raise_() # Bring to front if tabbed
         self.find_in_files_widget.focus_search()
-    
+
     # ==========================================
     # Settings Dialog Trigger
     # ==========================================
     def show_settings_dialog(self):
         """Creates and displays the settings window."""
         from ui.settings_dialog import SettingsDialog
-        
-        # Instantiate the dialog, passing our settings manager
+
         dialog = SettingsDialog(self.settings_manager, self)
-        
-        # .exec() freezes the main window until the dialog is closed
+
         if dialog.exec():
-            # If the user clicked 'Save', the settings are already updated 
-            # in the manager. We can add a status bar message here:
             self.statusBar().showMessage("Settings saved successfully.", 3000)
 
     # -----------------------------
@@ -342,9 +384,9 @@ class CodeEditor(QMainWindow):
         return self.tabs.currentWidget()
 
     def add_new_tab(self, name="Untitled", content="", path=None):
-        editor = GhostEditor()
+        editor = GhostEditor(settings_manager=self.settings_manager)
 
-        self._is_loading = True 
+        self._is_loading = True
         editor.setPlainText(content)
         editor.set_original_state(content)
         editor.file_path = path
@@ -356,62 +398,65 @@ class CodeEditor(QMainWindow):
         editor.textChanged.connect(self.on_text_changed)
         editor.ai_started.connect(self.show_loading_indicator)
         editor.ai_finished.connect(self.hide_loading_indicator)
-        
-        # Listen for the user requesting help with a syntax error
+
         editor.error_help_requested.connect(self.handle_editor_error_help)
-        # Connect the Snippet Bridge        
         editor.send_to_chat_requested.connect(self.load_snippet_to_chat)
-        
+
         index = self.tabs.addTab(editor, name)
         self.tabs.setCurrentIndex(index)
-        
-        self._is_loading = False 
+
+        self._is_loading = False
         return editor
 
     def handle_editor_error_help(self, error_msg, code, line_num):
         self.chat_dock.show()
 
         user_text = f"I have a SyntaxError on line {line_num}: {error_msg}. Can you help me fix it?"
-        
+
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
         self.chat_history.insertPlainText(f"\nYou: {user_text}\n\n[Code Context Sent]\n\nQuillAI: ")
         self.chat_history.ensureCursorVisible()
 
         prompt = f"""
         The user has encountered a SyntaxError in their Python file.
-        
+
         Error Message: {error_msg}
         Error Location: Line {line_num}
-        
+
         Full Code:
         ```python
         {code}
         ```
-        
-        Instructions: 
+
+        Instructions:
         1. Briefly explain what the error means and why it happened.
         2. Provide the corrected code for that line or block.
         """
 
         thread = QThread()
-        self.chat_worker = AIWorker(prompt=prompt, editor_text="", cursor_pos=0, is_chat=True)
+        self.chat_worker = self.create_worker(
+            prompt=prompt_with_context,
+            is_chat=True,
+        )
+
         self.chat_worker.moveToThread(thread)
         self.chat_worker.chat_update.connect(self.append_chat_stream)
-        
+
         self.chat_worker.finished.connect(self.chat_stream_finished)
+
         self.chat_worker.finished.connect(thread.quit)
         self.chat_worker.finished.connect(self.chat_worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-        
+
         self.show_loading_indicator()
         self.chat_worker.finished.connect(self.hide_loading_indicator)
-        
+
         self.active_threads.append(thread)
         thread.finished.connect(lambda: self.active_threads.remove(thread) if thread in self.active_threads else None)
-        
+
         thread.started.connect(self.chat_worker.run)
         thread.start()
-        
+
     def closeEvent(self, event):
         unsaved = False
         for i in range(self.tabs.count()):
@@ -419,27 +464,27 @@ class CodeEditor(QMainWindow):
             if hasattr(editor, 'is_dirty') and editor.is_dirty():
                 unsaved = True
                 break
-                
+
         if unsaved:
             reply = QMessageBox.question(
                 self, "Unsaved Changes",
                 "You have unsaved files. Do you want to save them before exiting?",
                 QMessageBox.StandardButton.SaveAll | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel
             )
-            
+
             if reply == QMessageBox.StandardButton.SaveAll:
                 for i in range(self.tabs.count()):
                     editor = self.tabs.widget(i)
                     if hasattr(editor, 'is_dirty') and editor.is_dirty():
                         self.save_file(i)
-                event.accept() 
+                event.accept()
             elif reply == QMessageBox.StandardButton.Discard:
-                event.accept() 
+                event.accept()
             else:
-                event.ignore() 
+                event.ignore()
         else:
             event.accept()
-            
+
     def close_tab(self, index):
         editor = self.tabs.widget(index)
         if not editor: return
@@ -454,9 +499,9 @@ class CodeEditor(QMainWindow):
 
             if reply == QMessageBox.StandardButton.Save:
                 if not self.save_file(index):
-                    return 
+                    return
             elif reply == QMessageBox.StandardButton.Cancel:
-                return 
+                return
 
         widget = self.tabs.widget(index)
         if widget:
@@ -471,7 +516,6 @@ class CodeEditor(QMainWindow):
 
         editor_to_focus = None
 
-        # Check if it's already open
         for i in range(self.tabs.count()):
             editor = self.tabs.widget(i)
             if hasattr(editor, 'file_path') and editor.file_path == file_path:
@@ -479,7 +523,6 @@ class CodeEditor(QMainWindow):
                 editor_to_focus = editor
                 break
 
-        # If not open, load it
         if not editor_to_focus:
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
@@ -490,66 +533,53 @@ class CodeEditor(QMainWindow):
                 print(f"Could not open file: {e}")
                 return
 
-        # If a line number was provided by Find in Files, jump to it!
         if editor_to_focus and line_number is not None:
             cursor = editor_to_focus.textCursor()
-            # Move cursor to the start of the document
             cursor.movePosition(QTextCursor.MoveOperation.Start)
-            # Move down by (line_number - 1) blocks
             cursor.movePosition(QTextCursor.MoveOperation.NextBlock, n=line_number - 1)
-            
+
             editor_to_focus.setTextCursor(cursor)
             editor_to_focus.ensureCursorVisible()
             editor_to_focus.setFocus()
-            
-            # Briefly highlight the line to draw the user's eye to it
             editor_to_focus.highlight_current_line()
-            
+
     def save_file(self, index=None):
         if index is None or isinstance(index, bool):
             index = self.tabs.currentIndex()
-            
+
         editor = self.tabs.widget(index)
-        if not editor: 
+        if not editor:
             return False
 
-        # If it's a new "Untitled" tab, it won't have a file_path.
-        # We must force a "Save As" dialog.
         if not editor.file_path:
-            # Look for the project path, fall back to Home
             start_dir = QDir.currentPath()
             if hasattr(self, 'git_dock') and self.git_dock.repo_path:
                 start_dir = self.git_dock.repo_path
 
             path, _ = QFileDialog.getSaveFileName(
-                self, "Save File", start_dir, 
+                self, "Save File", start_dir,
                 "Python Files (*.py);;All Files (*)"
             )
-            
+
             if path:
                 editor.file_path = path
                 self.tabs.setTabText(index, os.path.basename(path))
-                # Update highlighter for the new extension
                 ext = os.path.splitext(path)[1].lower()
                 editor.highlighter = registry.get_highlighter(editor.document(), ext)
             else:
-                return False 
+                return False
 
-        # ACTUAL WRITING TO DISK
         try:
             code = editor.toPlainText()
             with open(editor.file_path, "w", encoding="utf-8") as f:
                 f.write(code)
-            
-            # Sync the dirty state
-            editor.set_original_state(code) 
-            
-            # Remove the asterisk from the tab text
+
+            editor.set_original_state(code)
+
             current_text = self.tabs.tabText(index)
             if current_text.endswith("*"):
                 self.tabs.setTabText(index, current_text[:-1])
 
-            # Refresh Git to show the new file/changes
             if hasattr(self, 'git_dock'):
                 self.git_dock.refresh_status()
 
@@ -558,7 +588,7 @@ class CodeEditor(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Could not save file: {e}")
             return False
-            
+
     # -----------------------------
     # Cross-File Context Engine
     # -----------------------------
@@ -606,7 +636,7 @@ class CodeEditor(QMainWindow):
         return "".join(imported_context)
 
     # -----------------------------
-    # [NEW] Beautiful Chat Panel
+    # Beautiful Chat Panel
     # -----------------------------
     def setup_chat_panel(self):
         self.chat_dock = QDockWidget("QuillAI Assistant", self)
@@ -622,13 +652,13 @@ class CodeEditor(QMainWindow):
         header_layout = QHBoxLayout()
         title_label = QLabel("Project Context")
         title_label.setStyleSheet("color: #888888; font-weight: bold; font-size: 9pt; text-transform: uppercase;")
-        
+
         clear_btn = QPushButton("🗑 Clear")
         clear_btn.setStyleSheet("""
             QPushButton { background-color: transparent; color: #888888; border: none; font-weight: bold; }
             QPushButton:hover { color: #F44336; }
         """)
-        
+
         header_layout.addWidget(title_label)
         header_layout.addStretch()
         header_layout.addWidget(clear_btn)
@@ -649,17 +679,15 @@ class CodeEditor(QMainWindow):
             }
         """)
         self.chat_history.anchorClicked.connect(self.handle_chat_link)
-        
-        # Attach our custom syntax highlighter!
+
         self.chat_highlighter = ChatHighlighter(self.chat_history.document())
         clear_btn.clicked.connect(self.chat_history.clear)
 
         # --- Input Area ---
         input_layout = QHBoxLayout()
-        
-        # [FIXED] Must be QTextEdit for multi-line snippets!
-        self.chat_input = QTextEdit() 
-        self.chat_input.setFixedHeight(70) 
+
+        self.chat_input = QTextEdit()
+        self.chat_input.setFixedHeight(70)
         self.chat_input.setPlaceholderText("Ask QuillAI about your code... (Ctrl+Enter to send)")
         self.chat_input.setStyleSheet("""
             QTextEdit {
@@ -673,12 +701,9 @@ class CodeEditor(QMainWindow):
             }
             QTextEdit:focus { border: 1px solid #0E639C; }
         """)
-  
-        # Standard IDE shortcut: Ctrl+Enter sends the message
+
         self.send_shortcut = QShortcut(QKeySequence("Ctrl+Return"), self.chat_input)
-        self.send_shortcut.activated.connect(self.send_chat_message)        
-        
-        # (Removed the returnPressed line since QTextEdit doesn't use it)
+        self.send_shortcut.activated.connect(self.send_chat_message)
 
         send_btn = QPushButton("➤")
         send_btn.setStyleSheet("""
@@ -698,39 +723,24 @@ class CodeEditor(QMainWindow):
         input_layout.addWidget(self.chat_input)
         input_layout.addWidget(send_btn)
 
-        # Build Layout
         chat_layout.addLayout(header_layout)
         chat_layout.addWidget(self.chat_history)
         chat_layout.addLayout(input_layout)
-        
+
         self.chat_dock.setWidget(chat_container)
         self.chat_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.chat_dock)
 
     def send_chat_message(self):
-        # 1. Grab the text and clear the box
-        user_text = self.chat_input.toPlainText().strip() 
+        user_text = self.chat_input.toPlainText().strip()
         if not user_text: return
         self.chat_input.clear()
-        
-        # 2. Post the user's message to the chat history UI
+
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
         self.chat_history.insertPlainText(f"You:\n{user_text}\n\nQuillAI:\n")
         self.chat_history.ensureCursorVisible()
 
-        # 3. Pull dynamic API routing from Settings
-        use_cloud = self.settings_manager.get("use_cloud_for_chat")
-        
-        if use_cloud:
-            target_url = self.settings_manager.get("cloud_llm_url")
-            # We'll assume the worker can handle an API key if we pass it 
-            # (You may need to update worker.py to accept an api_key arg if you use OpenAI)
-            api_key = self.settings_manager.get("cloud_api_key")
-        else:
-            target_url = self.settings_manager.get("local_llm_url")
-            api_key = ""
 
-        # 4. Grab the active editor context and imports
         editor = self.current_editor()
         active_code = editor.toPlainText() if editor else ""
         cross_file_context = self.resolve_local_imports(active_code)
@@ -738,42 +748,34 @@ class CodeEditor(QMainWindow):
         if len(active_code) > 2000:
             active_code = "...(truncated)...\n" + active_code[-2000:]
 
-        # 5. Build the final prompt payload
         prompt_with_context = f"{user_text}\n\n[Context: The user is currently editing a file with this code:]\n```python\n{active_code}\n```\n{cross_file_context}"
 
-        # 6. Fire up the background thread with dynamic settings!
         thread = QThread()
-        self.chat_worker = AIWorker(
-            prompt=prompt_with_context, 
-            editor_text="", 
-            cursor_pos=0, 
+        self.chat_worker = self.create_worker(
+            prompt=prompt_with_context,
             is_chat=True,
-            api_url=target_url, # Dynamically routed URL
-            model=self.settings_manager.get("active_model")
         )
-        
+
         self.chat_worker.moveToThread(thread)
         self.chat_worker.chat_update.connect(self.append_chat_stream)
-        
-        # Connect the finish signal so we can generate the injection links!
+
         self.chat_worker.finished.connect(self.chat_stream_finished)
-        
-        # Standard thread cleanup and UI loading indicators
+
         self.chat_worker.finished.connect(thread.quit)
         self.chat_worker.finished.connect(self.chat_worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-        
+
         self.show_loading_indicator()
         self.chat_worker.finished.connect(self.hide_loading_indicator)
-        
+
         self.active_threads.append(thread)
         thread.finished.connect(lambda: self.active_threads.remove(thread) if thread in self.active_threads else None)
-        
+
         thread.started.connect(self.chat_worker.run)
         thread.start()
-        
+
     def append_chat_stream(self, text):
-        self.current_ai_raw_text += text # Track the raw markdown
+        self.current_ai_raw_text += text
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
         self.chat_history.insertPlainText(text)
         self.chat_history.ensureCursorVisible()
@@ -782,35 +784,29 @@ class CodeEditor(QMainWindow):
     # The Two-Way Bridge Methods
     # ==========================================
     def load_snippet_to_chat(self, text):
-        """Catches code from the editor and formats it for the chat input."""
         self.chat_dock.show()
-        current_input = self.chat_input.toPlainText() 
+        current_input = self.chat_input.toPlainText()
         new_text = f"```python\n{text}\n```\n"
-        
+
         if current_input.strip():
             final_text = current_input + "\n\n" + new_text
         else:
             final_text = new_text
-            
+
         self.chat_input.setPlainText(final_text)
         self.chat_input.setFocus()
-        
-        # Move cursor to the bottom
+
         cursor = self.chat_input.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self.chat_input.setTextCursor(cursor)
 
     def chat_stream_finished(self):
-        # 1. Regex to find the code blocks
         blocks = re.findall(r"```.*?\n(.*?)```", self.current_ai_raw_text, re.DOTALL)
-        
+
         if blocks:
             last_code = blocks[-1].strip()
-            # 2. Encode to Base64 so special characters don't break the URL
             encoded = base64.b64encode(last_code.encode('utf-8')).decode('utf-8')
-            
-            # 3. Create a STYLED button link
-            # We use a distinct background color and padding to make it look like a button
+
             button_style = (
                 "color: #FFFFFF; "
                 "background-color: #0E639C; "
@@ -820,23 +816,20 @@ class CodeEditor(QMainWindow):
                 "font-family: sans-serif; "
                 "font-weight: bold;"
             )
-            
+
             link_html = f"<br><br><a href='insert:{encoded}' style='{button_style}'>&nbsp;⚡ INSERT CODE AT CURSOR&nbsp;</a><br>"
-            
-            # 4. Use insertHtml so the QTextBrowser renders it!
+
             self.chat_history.insertHtml(link_html)
 
-        # Reset for next message
         self.chat_history.append("<br>")
         self.current_ai_raw_text = ""
 
     def handle_chat_link(self, url: QUrl):
-        """Catches clicks on the Insert button and drops code into the editor."""
         url_str = url.toString()
         if url_str.startswith("insert:"):
             encoded_code = url_str.replace("insert:", "")
             decoded_code = base64.b64decode(encoded_code).decode('utf-8')
-            
+
             editor = self.current_editor()
             if editor:
                 editor.textCursor().insertText(decoded_code)
@@ -860,7 +853,7 @@ class CodeEditor(QMainWindow):
         self.output_editor = QPlainTextEdit()
         self.output_editor.setReadOnly(True)
         self.output_editor.setStyleSheet("QPlainTextEdit { background-color: #1E1E1E; color: #CCCCCC; font-family: 'JetBrains Mono', monospace; font-size: 10pt; border: none; }")
-        
+
         self.explain_error_btn = QPushButton("💡 Explain Error")
         self.explain_error_btn.setStyleSheet("""
             QPushButton {
@@ -874,20 +867,20 @@ class CodeEditor(QMainWindow):
             }
             QPushButton:hover { background-color: #9B30FF; }
         """)
-        self.explain_error_btn.hide() 
+        self.explain_error_btn.hide()
         self.explain_error_btn.clicked.connect(self.explain_error)
 
         btn_layout = QHBoxLayout()
         btn_layout.setContentsMargins(5, 5, 5, 5)
-        btn_layout.addStretch() 
+        btn_layout.addStretch()
         btn_layout.addWidget(self.explain_error_btn)
 
         layout.addWidget(self.output_editor)
         layout.addLayout(btn_layout)
 
         self.output_dock = QDockWidget("Output", self)
-        self.output_dock.setStyleSheet(DOCK_STYLE) 
-        self.output_dock.setWidget(output_container) 
+        self.output_dock.setStyleSheet(DOCK_STYLE)
+        self.output_dock.setWidget(output_container)
         self.output_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.output_dock)
         self.output_dock.hide()
@@ -902,22 +895,22 @@ class CodeEditor(QMainWindow):
         self.output_editor.clear()
         self.current_error_text = ""
         self.explain_error_btn.hide()
-        self.output_dock.show() 
+        self.output_dock.show()
 
         code = editor.toPlainText()
-        
+
         if editor.file_path:
             with open(editor.file_path, "w", encoding="utf-8") as f:
                 f.write(code)
             script_path = editor.file_path
-            
+
             editor.set_original_state(code)
-            
+
             index = self.tabs.indexOf(editor)
             current_text = self.tabs.tabText(index)
             if current_text.endswith("*"):
                 self.tabs.setTabText(index, current_text[:-1])
-                
+
         else:
             self.temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".py")
             self.temp_file.write(code.encode("utf-8"))
@@ -932,7 +925,7 @@ class CodeEditor(QMainWindow):
         stderr = bytes(data).decode("utf8")
         self.output_editor.insertPlainText(stderr)
         self.output_editor.ensureCursorVisible()
-        
+
         self.current_error_text += stderr
         self.explain_error_btn.show()
 
@@ -980,13 +973,10 @@ class CodeEditor(QMainWindow):
 
         thread = QThread()
 
-        self.chat_worker = AIWorker(
+        self.chat_worker = self.create_worker(
             prompt=prompt_with_context,
-            editor_text="",
-            cursor_pos=0,
-            is_chat=True
+            is_chat=True,
         )
-
         self.chat_worker.moveToThread(thread)
         self.chat_worker.chat_update.connect(self.append_chat_stream)
         self.chat_worker.finished.connect(self.chat_stream_finished)
@@ -1051,10 +1041,10 @@ class CodeEditor(QMainWindow):
     def setup_git_panel(self):
         self.git_dock = GitDockWidget(self)
         self.git_dock.file_double_clicked.connect(self.open_file_in_tab)
-        
+
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.git_dock)
         self.tabifyDockWidget(self.sidebar_dock, self.git_dock)
-        
+
     def open_tree_item(self, index):
         file_path = self.file_model.filePath(index)
         if not self.file_model.isDir(index):
@@ -1074,7 +1064,7 @@ class CodeEditor(QMainWindow):
 
     def on_text_changed(self):
         editor = self.current_editor()
-        
+
         if not editor or getattr(self, '_is_loading', False) or editor.function_active or not editor.hasFocus():
             return
 
@@ -1088,22 +1078,27 @@ class CodeEditor(QMainWindow):
 
         self.timer.start(500)
         editor.clear_ghost_text()
-        
+
         if self.last_worker:
             self.last_worker.cancel()
 
     def ask_ai(self):
         editor = self.current_editor()
-        if not editor: return
+        if not editor or not editor.hasFocus(): return
 
         cursor = editor.textCursor()
-        line_text = cursor.block().text().strip()
+        line_text = cursor.block().text()
 
         generate_function = False
-        if line_text.startswith("#") and "function" in line_text.lower():
+        if line_text.strip().startswith("#") and "function" in line_text.lower():
             generate_function = True
-        if not line_text.strip() or line_text.strip().endswith(":") or line_text.strip().endswith(")"):
+
+        if line_text.strip().endswith(":") or line_text.strip().endswith(")"):
             return
+
+        use_cloud = self.settings_manager.get("use_cloud_for_chat")
+        target_url = self.settings_manager.get("cloud_llm_url") if use_cloud else self.settings_manager.get("local_llm_url")
+        api_key = self.settings_manager.get("cloud_api_key") if use_cloud else ""
 
         text = editor.toPlainText()
         cursor_pos = int(cursor.position())
@@ -1116,16 +1111,22 @@ class CodeEditor(QMainWindow):
             prompt = f"{cross_file_context}\nComplete the following code:\n\n{context}"
 
         thread = QThread()
-        worker = AIWorker(prompt, text, cursor_pos, generate_function=generate_function)
+
+        worker = self.create_worker(
+            prompt=prompt,
+            editor_text=text,
+            cursor_pos=cursor_pos,
+            generate_function=generate_function,
+        )
+
         worker.moveToThread(thread)
+
         worker.update_ghost.connect(editor.set_ghost_text)
         worker.function_ready.connect(editor.handle_function_output)
+
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-
-        self.show_loading_indicator()
-        worker.finished.connect(self.hide_loading_indicator)
 
         self.last_worker = worker
         self.active_threads.append(thread)
@@ -1141,33 +1142,26 @@ if __name__ == "__main__":
     # Global Modern IDE Stylesheet
     # ==========================================
     app.setStyleSheet("""
-        /* Base Application Colors */
         QWidget {
             background-color: #1E1E1E;
             color: #D4D4D4;
         }
-        
-        /* --------------------------------------
-           Panel Dividers (The Splitter)
-           -------------------------------------- */
+
         QSplitter::handle {
-            background-color: #333333; /* The crisp 1px line color */
+            background-color: #333333;
             margin: 0px;
         }
         QSplitter::handle:horizontal {
-            width: 1px; /* 1px width for side-by-side panels */
+            width: 1px;
         }
         QSplitter::handle:vertical {
-            height: 1px; /* 1px height for stacked panels (like terminal) */
-        }
-        
-        QSplitter::handle:hover {
-            background-color: #007ACC; 
+            height: 1px;
         }
 
-        /* --------------------------------------
-           Modern Floating Scrollbars (Global)
-           -------------------------------------- */
+        QSplitter::handle:hover {
+            background-color: #007ACC;
+        }
+
         QScrollBar:vertical {
             border: none;
             background: transparent;
@@ -1212,9 +1206,6 @@ if __name__ == "__main__":
             background: none;
         }
 
-        /* --------------------------------------
-           Input Boxes (Search, Chat, etc.)
-           -------------------------------------- */
         QLineEdit, QTextEdit {
             background-color: #252526;
             border: 1px solid #3E3E42;
@@ -1224,20 +1215,17 @@ if __name__ == "__main__":
             selection-background-color: #264F78;
         }
         QLineEdit:focus, QTextEdit:focus {
-            border: 1px solid #007ACC; /* VS Code Focus Blue */
+            border: 1px solid #007ACC;
         }
 
-        /* --------------------------------------
-           Trees & Lists (Explorer, Find in Files)
-           -------------------------------------- */
         QTreeView, QListView {
             background-color: #1E1E1E;
             border: none;
-            outline: none; /* Removes the ugly dotted focus rectangle */
+            outline: none;
         }
         QTreeView::item, QListView::item {
             padding: 4px;
-            border-radius: 4px; /* Rounded selection boxes */
+            border-radius: 4px;
         }
         QTreeView::item:selected, QListView::item:selected {
             background-color: #37373D;
@@ -1247,9 +1235,6 @@ if __name__ == "__main__":
             background-color: #2A2D2E;
         }
 
-        /* --------------------------------------
-           Buttons
-           -------------------------------------- */
         QPushButton {
             background-color: #0E639C;
             color: white;
@@ -1268,8 +1253,8 @@ if __name__ == "__main__":
             background-color: #333333;
             color: #888888;
         }
-    """)    
-    
+    """)
+
     window = CodeEditor()
     window.resize(1000, 700)
     window.show()

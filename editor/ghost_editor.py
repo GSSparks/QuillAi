@@ -146,8 +146,9 @@ class GhostEditor(QPlainTextEdit):
     error_help_requested = pyqtSignal(str, str, int) 
     send_to_chat_requested = pyqtSignal(str)
     
-    def __init__(self):
+    def __init__(self, settings_manager=None):
         super().__init__()
+        self.settings_manager = settings_manager
         # Comprehensive Modern UI Stylesheet
         self.setStyleSheet("""
             QPlainTextEdit {
@@ -720,34 +721,75 @@ class GhostEditor(QPlainTextEdit):
         self.replacement_cursor = cursor
         self.start_worker(prompt, replace_selection=True)
 
-    def start_worker(self, prompt, generate_function=False, replace_selection=False):
-        self.ai_thread = QThread() 
-        self.function_output = ""
-        self.ai_started.emit()
+    def _create_ai_worker(self, prompt, generate_function=False, replace_selection=False):
+        try:
+            if hasattr(self, 'ai_thread') and self.ai_thread is not None:
+                if self.ai_thread.isRunning():
+                    return None, None
+        except RuntimeError:
+            self.ai_thread = None
 
-        self.worker = AIWorker(
+        self.ai_thread = QThread()
+        self.function_output = ""
+
+        # Pull settings if available, otherwise fall back to empty strings
+        model = ""
+        api_url = ""
+        api_key = ""
+        backend = "llama"
+
+        if self.settings_manager:
+            model   = self.settings_manager.get_model()
+            api_url = self.settings_manager.get_api_url()
+            api_key = self.settings_manager.get_api_key()
+            backend = self.settings_manager.get_backend()
+
+        worker = AIWorker(
             prompt=prompt,
             editor_text=self.toPlainText(),
             cursor_pos=self.textCursor().position(),
             generate_function=generate_function,
-            is_edit=replace_selection 
+            is_edit=replace_selection,
+            model=model,        # <-- was missing
+            api_url=api_url,    # <-- was missing
+            api_key=api_key,    # <-- was missing
+            backend=backend,    # <-- was missing
         )
 
-        self.worker.moveToThread(self.ai_thread)
-        self.ai_thread.started.connect(self.worker.run)
+        worker.moveToThread(self.ai_thread)
+        self.ai_thread.started.connect(worker.run)
 
         if not generate_function and not replace_selection:
-            self.worker.update_ghost.connect(self.set_ghost_text)
+            worker.update_ghost.connect(self.set_ghost_text)
 
-        self.worker.function_ready.connect(self.handle_function_output)
-        
-        self.worker.finished.connect(self.ai_thread.quit) 
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.ai_thread.finished.connect(self.ai_thread.deleteLater) 
-        
-        self.worker.finished.connect(self.finish_function_stream)
-        self.worker.finished.connect(self.ai_finished.emit)
+        worker.function_ready.connect(self.handle_function_output)
+        worker.finished.connect(self.ai_thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        self.ai_thread.finished.connect(self.ai_thread.deleteLater)
+        worker.finished.connect(self.finish_function_stream)
+        worker.finished.connect(self.ai_finished.emit)
 
+        return worker, self.ai_thread
+
+
+    def start_worker(self, prompt, generate_function=False, replace_selection=False):
+        """
+        Public entrypoint used everywhere else.
+        """
+
+        self.ai_started.emit()
+
+        worker, thread = self._create_ai_worker(
+            prompt,
+            generate_function,
+            replace_selection
+        )
+
+        if worker is None:
+            return
+
+        self.worker = worker
+        thread.start()
         self.ai_thread.start()
 
     def handle_function_output(self, text):
