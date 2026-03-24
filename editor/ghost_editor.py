@@ -19,28 +19,14 @@ from ai.worker import AIWorker
 # Professional Snippet Manager
 # ==========================================
 class SnippetManager:
-    def __init__(self):
-        self.snippets = {
-            "for loop": "for i in range():\n    pass",
-            "if statement": "if condition:\n    pass",
-            "def function": "def function_name():\n    pass",
-            "class definition": "class ClassName:\n    def __init__(self):\n        pass",
-            "try/except": "try:\n    pass\nexcept Exception as e:\n    print(e)",
-            "main block": "if __name__ == '__main__':\n    main()",
-            "list comprehension": "[x for x in items if condition]",
-            "with open (read)": "with open('filename.txt', 'r', encoding='utf-8') as f:\n    content = f.read()",
-            "with open (write)": "with open('filename.txt', 'w', encoding='utf-8') as f:\n    f.write(content)",
-            "ansible task": "- name: Task Name\n  ansible.builtin.module:\n    key: value",
-            "ansible apt": "- name: Install package\n  apt:\n    name: package_name\n    state: present",
-            "nix flake": "{\n  description = \"\";\n\n  inputs = {\n    nixpkgs.url = \"github:NixOS/nixpkgs/nixos-unstable\";\n  };\n\n  outputs = { self, nixpkgs }:\n    let\n      system = \"x86_64-linux\";\n      pkgs = nixpkgs.legacyPackages.${system};\n    in\n    {\n      # Config here\n    };\n}",
-            "nix package": "environment.systemPackages = with pkgs; [\n  \n];",    
-        }
-
-    def get_snippets(self, prefix=""):
-        if not prefix:
-            return self.snippets
-        filtered = {k: v for k, v in self.snippets.items() if prefix.lower() in k.lower()}
-        return filtered if filtered else self.snippets
+    """Kept for backwards compatibility with insert_snippet.
+    The actual palette UI lives in ui/snippet_palette.py."""
+    def get_code(self, name):
+        from ui.snippet_palette import DEFAULT_SNIPPETS
+        for s in DEFAULT_SNIPPETS:
+            if s["name"] == name:
+                return s["code"]
+        return ""
 
 
 class LineNumberArea(QWidget):
@@ -604,53 +590,31 @@ class GhostEditor(QPlainTextEdit):
             )
 
     def show_snippet_menu(self):
+        from ui.snippet_palette import SnippetPalette
+        palette = SnippetPalette(self)
+        # Center it on the editor
+        palette.move(
+            self.mapToGlobal(self.rect().center()) - palette.rect().center()
+        )
+        palette.snippet_selected.connect(self._insert_snippet_code)
+        palette.exec()
+
+    def _insert_snippet_code(self, code):
         cursor = self.textCursor()
-        cursor.select(QTextCursor.SelectionType.WordUnderCursor)
-        prefix = cursor.selectedText().strip()
+        # Match indentation of the current line
+        current_line = cursor.block().text()
+        indent_match = re.match(r'^(\s*)', current_line)
+        base_indent = indent_match.group(1) if indent_match else ""
 
-        snippets = self.snippet_manager.get_snippets(prefix)
-        if not snippets:
-            return
+        lines = code.split('\n')
+        indented = lines[0]
+        for line in lines[1:]:
+            indented += '\n' + base_indent + line
 
-        menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu { background-color: #252526; color: #CCCCCC; border: 1px solid #3E3E42; font-family: 'Inter', sans-serif; }
-            QMenu::item { padding: 6px 20px; }
-            QMenu::item:selected { background-color: #0E639C; color: white; }
-        """)
-
-        for name, code in snippets.items():
-            action = QAction(name, self)
-            action.triggered.connect(lambda checked, c=code, p=prefix: self.insert_snippet(c, p))
-            menu.addAction(action)
-
-        rect = self.cursorRect(self.textCursor())
-        global_pos = self.viewport().mapToGlobal(rect.bottomRight())
-        menu.exec(global_pos)
-
-    def insert_snippet(self, snippet_code, prefix):
-        cursor = self.textCursor()
-        
-        if prefix:
-            cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.KeepAnchor, len(prefix))
-            cursor.removeSelectedText()
-
-        cursor.select(QTextCursor.SelectionType.LineUnderCursor)
-        line_text = cursor.selectedText()
-        cursor.clearSelection()
-        
-        indent_match = re.match(r"^\s*", line_text)
-        base_indent = indent_match.group(0) if indent_match else ""
-
-        lines = snippet_code.split('\n')
-        formatted_snippet = lines[0] 
-        if len(lines) > 1:
-            for line in lines[1:]:
-                formatted_snippet += "\n" + base_indent + line
-
-        cursor.insertText(formatted_snippet)
+        cursor.insertText(indented)
         self.clear_ghost_text()
-
+        self.setFocus()
+        
     def set_original_state(self, text):
         self.original_text = text
         self.line_changes.clear()
@@ -935,7 +899,7 @@ class GhostEditor(QPlainTextEdit):
             self.clear_ghost_text()
             return
 
-        if event.key() == Qt.Key.Key_Space and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+        if event.key() == Qt.Key.Key_Space and event.modifiers() == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
             self.show_snippet_menu()
             return
 
