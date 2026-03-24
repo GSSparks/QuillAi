@@ -599,9 +599,64 @@ class CodeEditor(QMainWindow):
     # -----------------------------
     # Cross-File Context Engine
     # -----------------------------
-    def resolve_local_imports(self, code_text):
+    
+    def get_project_tree(self):
+        root = self.file_model.filePath(self.tree_view.rootIndex())
+        if not root or not os.path.isdir(root):
+            return ""
+        lines = []
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted([
+                d for d in dirnames
+                if not d.startswith('.')
+                and d not in ('__pycache__', 'node_modules', '.git', 'venv', '.venv', 'dist', 'build')
+            ])
+            level = dirpath.replace(root, '').count(os.sep)
+            indent = '  ' * level
+            lines.append(f"{indent}{os.path.basename(dirpath)}/")
+            for f in sorted(filenames):
+                if not f.startswith('.') and not f.endswith(('.pyc', '.pyo')):
+                    lines.append(f"{indent}  {f}")
+        return "[Project Structure]\n" + "\n".join(lines)
+
+    def get_open_tabs_context(self):
+        context = []
+        current_editor = self.current_editor()
+        for i in range(self.tabs.count()):
+            editor = self.tabs.widget(i)
+            if not editor or not hasattr(editor, 'file_path'):
+                continue
+            if editor is current_editor:
+                continue  # already sent as active file
+            if not editor.file_path:
+                continue
+            content = editor.toPlainText()
+            if not content.strip():
+                continue
+            # Keep head + tail of each tab so one huge file doesn't blow the context
+            if len(content) > 1500:
+                head = content[:500]
+                tail = content[-1000:]
+                content = head + "\n...(truncated)...\n" + tail
+            rel_path = os.path.relpath(editor.file_path) if editor.file_path else "untitled"
+            context.append(f"--- Open tab: {rel_path} ---\n```python\n{content}\n```")
+        if not context:
+            return ""
+        return "[Other Open Files]\n" + "\n\n".join(context)
+
+    def resolve_local_imports(self, code_text, _visited=None, _depth=0):
+        if _visited is None:
+            _visited = set()
+
+        MAX_DEPTH = 3
+        MAX_FILE_SIZE = 1500
+
+        if _depth >= MAX_DEPTH:
+            return ""
+
         editor = self.current_editor()
-        if not editor: return ""
+        if not editor:
+            return ""
 
         try:
             tree = ast.parse(code_text)
@@ -616,6 +671,7 @@ class CodeEditor(QMainWindow):
             return ""
 
         imported_context = []
+
         for node in ast.walk(tree):
             modules = []
             if isinstance(node, ast.ImportFrom) and node.module:
@@ -626,20 +682,56 @@ class CodeEditor(QMainWindow):
 
             for mod in modules:
                 rel_path = mod.replace('.', os.sep) + '.py'
-                full_path = os.path.join(project_root, rel_path)
 
-                if not os.path.exists(full_path) and editor.file_path:
-                    full_path = os.path.join(os.path.dirname(editor.file_path), rel_path)
+                # Check project root first, then relative to current file
+                candidate_paths = [
+                    os.path.join(project_root, rel_path),
+                ]
+                if editor.file_path:
+                    candidate_paths.append(
+                        os.path.join(os.path.dirname(editor.file_path), rel_path)
+                    )
 
-                if os.path.exists(full_path):
+                for full_path in candidate_paths:
+                    full_path = os.path.normpath(full_path)
+
+                    if not os.path.exists(full_path):
+                        continue
+                    if full_path in _visited:
+                        continue
+
+                    _visited.add(full_path)
+
                     try:
                         with open(full_path, 'r', encoding='utf-8') as f:
                             content = f.read()
-                            if len(content) > 1500:
-                                content = content[:1500] + "\n...[Code truncated]..."
-                            imported_context.append(f"\n--- Context from imported file: {mod} ---\n```python\n{content}\n```\n")
+
+                        display_path = os.path.relpath(full_path, project_root)
+
+                        if len(content) > MAX_FILE_SIZE:
+                            head = content[:500]
+                            tail = content[-1000:]
+                            content = head + "\n...(truncated)...\n" + tail
+
+                        imported_context.append(
+                            f"\n--- Imported file: {display_path} (depth {_depth + 1}) ---\n"
+                            f"```python\n{content}\n```\n"
+                        )
+
+                        # Recurse into this file's imports
+                        nested = self.resolve_local_imports(
+                            content,
+                            _visited=_visited,
+                            _depth=_depth + 1
+                        )
+                        if nested:
+                            imported_context.append(nested)
+
                     except Exception:
                         pass
+
+                    break  # found it, don't check the other candidate path
+
         return "".join(imported_context)
 
     # -----------------------------
@@ -747,15 +839,30 @@ class CodeEditor(QMainWindow):
         self.chat_history.insertPlainText(f"You:\n{user_text}\n\nQuillAI:\n")
         self.chat_history.ensureCursorVisible()
 
-
         editor = self.current_editor()
         active_code = editor.toPlainText() if editor else ""
         cross_file_context = self.resolve_local_imports(active_code)
+        open_tabs_context = self.get_open_tabs_context()
+        project_tree = self.get_project_tree()
 
         if len(active_code) > 2000:
-            active_code = "...(truncated)...\n" + active_code[-2000:]
+            head = active_code[:500]
+            tail = active_code[-1500:]
+            active_code = head + "\n...(truncated)...\n" + tail
 
-        prompt_with_context = f"{user_text}\n\n[Context: The user is currently editing a file with this code:]\n```python\n{active_code}\n```\n{cross_file_context}"
+        prompt_with_context = f"""{user_text}
+
+    {project_tree}
+
+    [Active File]
+    ```python
+    {active_code}
+    ```
+
+    {cross_file_context}
+
+    {open_tabs_context}
+    """
 
         thread = QThread()
         self.chat_worker = self.create_worker(
@@ -765,19 +872,14 @@ class CodeEditor(QMainWindow):
 
         self.chat_worker.moveToThread(thread)
         self.chat_worker.chat_update.connect(self.append_chat_stream)
-
         self.chat_worker.finished.connect(self.chat_stream_finished)
-
         self.chat_worker.finished.connect(thread.quit)
         self.chat_worker.finished.connect(self.chat_worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-
         self.show_loading_indicator()
         self.chat_worker.finished.connect(self.hide_loading_indicator)
-
         self.active_threads.append(thread)
         thread.finished.connect(lambda: self.active_threads.remove(thread) if thread in self.active_threads else None)
-
         thread.started.connect(self.chat_worker.run)
         thread.start()
 
@@ -959,24 +1061,31 @@ class CodeEditor(QMainWindow):
         if len(cross_file_context) > 2000:
             cross_file_context = "...(truncated)...\n" + cross_file_context[-2000:]
 
+        open_tabs_context = self.get_open_tabs_context()
+        project_tree = self.get_project_tree()
+
         prompt_with_context = f"""
-    {user_text}
+        {user_text}
 
-    [Error Trace:]
-    {self.current_error_text}
+        {project_tree}
 
-    [Active File:]
-    {active_code}
+        [Error Trace]
+        {self.current_error_text}
 
-    [Related Files / Imports:]
-    {cross_file_context}
+        [Active File]
+        {active_code}
 
-    Instructions:
-    - Explain the error clearly
-    - Identify the root cause
-    - Show how to fix it
-    - Include corrected code if possible
-    """
+        [Related Files / Imports]
+        {cross_file_context}
+
+        {open_tabs_context}
+
+        Instructions:
+        - Explain the error clearly
+        - Identify the root cause
+        - Show how to fix it
+        - Include corrected code if possible
+        """
 
         thread = QThread()
 
