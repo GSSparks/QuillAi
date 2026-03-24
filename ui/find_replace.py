@@ -144,43 +144,38 @@ class FindReplaceWidget(QWidget):
 
     def on_search_text_changed(self):
         query = self.find_input.text()
+        editor = self.main_window.current_editor()
+
+        if not editor:
+            return
 
         if not query:
             self.set_find_state("")
             self.match_label.setText("")
-            # Clear any active selection in the editor without jumping
-            editor = self.main_window.current_editor()
-            if editor:
-                cursor = editor.textCursor()
-                cursor.clearSelection()
-                editor.setTextCursor(cursor)
+            cursor = editor.textCursor()
+            cursor.clearSelection()
+            editor.setTextCursor(cursor)
             return
 
-        # Jump to the first match from the current position
-        editor = self.main_window.current_editor()
-        if not editor:
-            return
-
-        # Save position, try to find forward, wrap if needed
-        saved_cursor = editor.textCursor()
         options = self.get_search_options()
-        found = editor.find(query, options) if options else editor.find(query)
+        document = editor.document()
+ 
+        # Always find from the top so the cursor doesn't jump around
+        start_cursor = QTextCursor(document)
+        first_match = document.find(query, start_cursor, options) if options else document.find(query, start_cursor)
 
-        if not found:
-            # Try from the top before declaring no match
-            top_cursor = QTextCursor(editor.document())
-            editor.setTextCursor(top_cursor)
-            found = editor.find(query, options) if options else editor.find(query)
-
-        if found:
+        if not first_match.isNull():
             total = self.count_matches(query)
             self.match_label.setText(f"{total} found")
             self.set_find_state("match")
+            editor.setTextCursor(first_match)
+            editor.ensureCursorVisible()
         else:
-            # Restore cursor position so the user's place isn't lost
-            editor.setTextCursor(saved_cursor)
             self.match_label.setText("no match")
             self.set_find_state("no_match")
+            cursor = editor.textCursor()
+            cursor.clearSelection()
+            editor.setTextCursor(cursor)
 
     # --- Search Engine Logic ---
     def get_search_options(self, backward=False):
