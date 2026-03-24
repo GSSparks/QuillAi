@@ -22,6 +22,7 @@ from ui.find_replace import FindReplaceWidget
 from ui.find_in_files import FindInFilesWidget
 from ui.settings_manager import SettingsManager
 from ui.settings_dialog import SettingsDialog
+from ui.memory_manager import MemoryManager
 
 from editor.highlighter import registry
 from plugins.git_plugin import GitDockWidget
@@ -202,8 +203,11 @@ class CodeEditor(QMainWindow):
         super().__init__()
         # 1. Load settings FIRST
         self.settings_manager = SettingsManager()
+        
+        # 2. Load memory
+        self.memory_manager = MemoryManager()
 
-        # 2. Basic App State
+        # 3. Basic App State
         self.setWindowTitle("QuillAI")
         self._is_loading = False
         self.current_error_text = ""
@@ -302,6 +306,7 @@ class CodeEditor(QMainWindow):
         self.setup_git_panel()
         self.setup_output_panel()
         self.setup_chat_panel()
+        self.setup_memory_panel()
         self.setup_markdown_preview()
         self.setup_find_in_files_panel()
 
@@ -319,6 +324,10 @@ class CodeEditor(QMainWindow):
     def build_chat_context(self, user_text: str, active_code: str) -> str:
         TOKEN_BUDGET = 28000  # leave 2k headroom under the 30k limit
         used = self.estimate_tokens(user_text)
+        
+        # ── Memory (highest priority after the message itself) ──
+        memory_ctx = self.memory_manager.build_memory_context()
+        used += self.estimate_tokens(memory_ctx)
 
         # ── 1. Active file (high priority, always include, but cap it) ──
         active_budget = 6000  # tokens
@@ -363,7 +372,10 @@ class CodeEditor(QMainWindow):
                 tree_ctx = ""  # drop entirely if we're already close
  
         # ── Assemble ──
-        parts = [f"[Active File]\n```python\n{active_code_ctx}\n```"]
+        parts = []
+        if memory_ctx:
+            parts.append(memory_ctx)
+        parts.append(f"[Active File]\n```python\n{active_code_ctx}\n```")
         if import_ctx:
             parts.append(import_ctx)
         if tabs_ctx:
@@ -951,6 +963,13 @@ class CodeEditor(QMainWindow):
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
         self.chat_history.insertPlainText(text)
         self.chat_history.ensureCursorVisible()
+        
+    def setup_memory_panel(self):
+        from ui.memory_panel import MemoryPanel
+        self.memory_panel = MemoryPanel(self.memory_manager, self)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.memory_panel)
+        self.tabifyDockWidget(self.chat_dock, self.memory_panel)
+        self.memory_panel.hide()
 
     # ==========================================
     # The Two-Way Bridge Methods
@@ -992,9 +1011,54 @@ class CodeEditor(QMainWindow):
             link_html = f"<br><br><a href='insert:{encoded}' style='{button_style}'>&nbsp;⚡ INSERT CODE AT CURSOR&nbsp;</a><br>"
 
             self.chat_history.insertHtml(link_html)
+            
+        # Auto-summarize the conversation into memory
+        if self.current_ai_raw_text.strip():
+            self._summarize_conversation_to_memory(self.current_ai_raw_text)
 
         self.chat_history.append("<br>")
         self.current_ai_raw_text = ""
+        
+    def _summarize_conversation_to_memory(self, ai_response: str):
+        """Fires a cheap background request to summarize the conversation."""
+        last_user = ""
+        # Walk back through chat history to find the last user message
+        text = self.chat_history.toPlainText()
+        lines = text.strip().split('\n')
+        for i in range(len(lines) - 1, -1, -1):
+            if lines[i].startswith("You:"):
+                last_user = lines[i].replace("You:", "").strip()
+                break
+
+        if not last_user:
+            return
+
+        prompt = f"""In one sentence (max 20 words), summarize what this exchange was about.
+    User asked: {last_user[:300]}
+    Assistant answered: {ai_response[:500]}
+    Reply with ONLY the one-sentence summary, nothing else."""
+
+        thread = QThread()
+        worker = self.create_worker(prompt=prompt, is_chat=True)
+        worker.moveToThread(thread)
+
+        summary_buf = []
+        worker.chat_update.connect(lambda t: summary_buf.append(t))
+        worker.finished.connect(lambda: self.memory_manager.add_conversation(
+            "".join(summary_buf).strip()
+        ))
+        worker.finished.connect(lambda: self.memory_panel.refresh()
+                                if hasattr(self, 'memory_panel') else None)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self.active_threads.append(thread)
+        thread.finished.connect(
+            lambda: self.active_threads.remove(thread)
+            if thread in self.active_threads else None
+        )
+        thread.started.connect(worker.run)
+        thread.start()
 
     def handle_chat_link(self, url: QUrl):
         url_str = url.toString()
