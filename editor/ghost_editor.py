@@ -135,6 +135,7 @@ class GhostEditor(QPlainTextEdit):
     def __init__(self, settings_manager=None):
         super().__init__()
         self.settings_manager = settings_manager
+        self._setup_jump_bar()
         # Comprehensive Modern UI Stylesheet
         self.setStyleSheet("""
             QPlainTextEdit {
@@ -247,6 +248,180 @@ class GhostEditor(QPlainTextEdit):
         self.cursorPositionChanged.connect(self.highlight_current_line)
         self.highlight_current_line() 
 
+    def _setup_jump_bar(self):
+        from PyQt6.QtWidgets import QLineEdit
+        self._jump_bar = QLineEdit(self)
+        self._jump_bar.setPlaceholderText("Go to line...")
+        self._jump_bar.setStyleSheet("""
+            QLineEdit {
+                background-color: #252526;
+                color: #FFFFFF;
+                border: none;
+                border-top: 1px solid #0E639C;
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 11pt;
+                padding: 4px 10px;
+            }
+        """)
+        self._jump_bar.setFixedHeight(28)
+        self._jump_bar.hide()
+        # No returnPressed connection — eventFilter handles Enter
+        self._jump_bar.installEventFilter(self)
+    
+    def _show_jump_bar(self):
+        self._jump_bar.clear()
+        self._jump_bar.show()
+        self._jump_bar.setFocus()
+        self._position_jump_bar()
+    
+    def _position_jump_bar(self):
+        cr = self.contentsRect()
+        scrollbar_height = 20  # enough to clear the horizontal scrollbar
+        self._jump_bar.setGeometry(
+            cr.left() + self.line_number_area_width(),
+            cr.bottom() - 28 - scrollbar_height,
+            cr.width() - self.line_number_area_width() - self.minimap_width,
+            28
+        )
+    
+    def _do_jump(self):
+        text = self._jump_bar.text().strip()
+        self._jump_bar.hide()
+        try:
+            line = int(text) - 1
+            block = self.document().findBlockByNumber(max(0, line))
+            if block.isValid():
+                cursor = QTextCursor(block)
+                self.setTextCursor(cursor)
+                self.centerCursor()
+                self.highlight_current_line()
+        except ValueError:
+            pass
+        self.setFocus()
+        
+    def eventFilter(self, obj, event):
+        from PyQt6.QtCore import QEvent
+        if hasattr(self, '_jump_bar') and obj == self._jump_bar:
+            if event.type() == QEvent.Type.KeyPress:
+                if event.key() == Qt.Key.Key_Escape:
+                    self._jump_bar.hide()
+                    self.setFocus()
+                    return True
+                if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                    self._do_jump()
+                    return True  # consume the event — never reaches the editor
+        return super().eventFilter(obj, event)   
+    
+    def duplicate_line(self):
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            # Duplicate the whole selection
+            start = cursor.selectionStart()
+            end = cursor.selectionEnd()
+            selected = cursor.selectedText().replace('\u2029', '\n')
+            cursor.setPosition(end)
+            cursor.insertText('\n' + selected)
+            # Re-select the new copy
+            cursor.setPosition(end + 1)
+            cursor.setPosition(end + 1 + len(selected),
+                               QTextCursor.MoveMode.KeepAnchor)
+        else:
+            # Duplicate current line
+            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock,
+                                QTextCursor.MoveMode.KeepAnchor)
+            line_text = cursor.selectedText()
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+            cursor.insertText('\n' + line_text)
+            # Move cursor to the duplicate
+            cursor.movePosition(QTextCursor.MoveOperation.Down)
+        self.setTextCursor(cursor)
+    
+    def toggle_comment(self):
+        """Toggle # comments on the current line or every line in the selection."""
+        cursor = self.textCursor()
+        # Detect comment character from file extension
+        comment_char = self._get_comment_char()
+    
+        if cursor.hasSelection():
+            start = cursor.selectionStart()
+            end = cursor.selectionEnd()
+    
+            # Expand to full lines
+            cursor.setPosition(start)
+            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            block_start = cursor.position()
+    
+            cursor.setPosition(end)
+            if cursor.atBlockStart() and end > start:
+                cursor.movePosition(QTextCursor.MoveOperation.PreviousBlock)
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+            block_end = cursor.position()
+    
+            cursor.setPosition(block_start)
+            cursor.setPosition(block_end, QTextCursor.MoveMode.KeepAnchor)
+            selected = cursor.selectedText().replace('\u2029', '\n')
+            lines = selected.split('\n')
+        else:
+            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            block_start = cursor.position()
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock,
+                                QTextCursor.MoveMode.KeepAnchor)
+            block_end = cursor.position()
+            lines = [cursor.selectedText()]
+    
+        # Decide: if ALL non-empty lines are commented, uncomment. Otherwise comment.
+        all_commented = all(
+            l.lstrip().startswith(comment_char)
+            for l in lines if l.strip()
+        )
+    
+        result = []
+        for line in lines:
+            if not line.strip():
+                result.append(line)
+                continue
+            if all_commented:
+                # Remove the comment char (and one space if present)
+                stripped = line.lstrip()
+                indent = line[:len(line) - len(stripped)]
+                if stripped.startswith(comment_char + ' '):
+                    result.append(indent + stripped[len(comment_char) + 1:])
+                else:
+                    result.append(indent + stripped[len(comment_char):])
+            else:
+                # Add comment char preserving indent
+                stripped = line.lstrip()
+                indent = line[:len(line) - len(stripped)]
+                result.append(indent + comment_char + ' ' + stripped)
+    
+        new_text = '\n'.join(result)
+        cursor.setPosition(block_start)
+        cursor.setPosition(block_end, QTextCursor.MoveMode.KeepAnchor)
+    
+        cursor.beginEditBlock()
+        cursor.insertText(new_text)
+        cursor.endEditBlock()
+    
+        # Restore selection
+        cursor.setPosition(block_start)
+        cursor.setPosition(block_start + len(new_text),
+                           QTextCursor.MoveMode.KeepAnchor)
+        self.setTextCursor(cursor)
+    
+    def _get_comment_char(self):
+        """Returns the line comment character for the current file type."""
+        if not self.file_path:
+            return '#'
+        ext = self.file_path.lower()
+        if ext.endswith(('.py', '.sh', '.bash', '.yml', '.yaml', '.nix')):
+            return '#'
+        if ext.endswith(('.js', '.ts', '.cpp', '.c', '.java', '.go')):
+            return '//'
+        if ext.endswith('.lua'):
+            return '--'
+        return '#'    
+        
     def setPlainText(self, text):
         super().setPlainText(text)
         
@@ -490,6 +665,19 @@ class GhostEditor(QPlainTextEdit):
         unindent_action = QAction("⇤ Unindent  (Ctrl+<)", self)
         unindent_action.triggered.connect(self.unindent_selection)
         menu.addAction(unindent_action)
+        
+        menu.addSeparator()
+        dup_action = QAction("⧉ Duplicate Line  (Ctrl+D)", self)
+        dup_action.triggered.connect(self.duplicate_line)
+        menu.addAction(dup_action)
+        
+        comment_action = QAction("# Toggle Comment  (Ctrl+/)", self)
+        comment_action.triggered.connect(self.toggle_comment)
+        menu.addAction(comment_action)
+        
+        jump_action = QAction("⤵ Go to Line  (Ctrl+G)", self)
+        jump_action.triggered.connect(self._show_jump_bar)
+        menu.addAction(jump_action)
 
         # --- SELECTION CHECK ---
         if active_cursor.hasSelection():
@@ -687,10 +875,16 @@ class GhostEditor(QPlainTextEdit):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         cr = self.contentsRect()
-        
-        self.line_number_area.setGeometry(QRect(cr.left(), cr.top(), self.line_number_area_width(), cr.height()))
-        self.minimap.setGeometry(QRect(cr.right() - self.minimap_width, cr.top(), self.minimap_width, cr.height()))
-
+        self.line_number_area.setGeometry(
+            QRect(cr.left(), cr.top(),
+                  self.line_number_area_width(), cr.height()))
+        self.minimap.setGeometry(
+            QRect(cr.right() - self.minimap_width, cr.top(),
+                  self.minimap_width, cr.height()))
+        # Keep jump bar pinned to the bottom
+        if hasattr(self, '_jump_bar'):
+            self._position_jump_bar()
+            
     def line_number_area_paint_event(self, event):
         painter = QPainter(self.line_number_area)
         painter.fillRect(event.rect(), QColor(35, 35, 35))
@@ -969,6 +1163,21 @@ class GhostEditor(QPlainTextEdit):
 
         if event.key() == Qt.Key.Key_BracketLeft and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             self.unindent_selection()
+            return
+            
+        # Ctrl+G — jump to line (vim-style inline bar)
+        if event.key() == Qt.Key.Key_G and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            self._show_jump_bar()
+            return
+        
+        # Ctrl+D — duplicate line or selection
+        if event.key() == Qt.Key.Key_D and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            self.duplicate_line()
+            return
+        
+        # Ctrl+/ — toggle comment
+        if event.key() == Qt.Key.Key_Slash and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            self.toggle_comment()
             return
         
         super().keyPressEvent(event)
