@@ -1,7 +1,7 @@
 import subprocess
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton, QHBoxLayout
 from PyQt6.QtGui import QFont, QColor, QTextCharFormat, QTextCursor
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QDir
 
 class DiffViewerDialog(QDialog):
     def __init__(self, file_path, repo_path=None, parent=None):
