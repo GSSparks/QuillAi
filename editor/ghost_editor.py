@@ -286,7 +286,6 @@ class GhostEditor(QPlainTextEdit):
         self.update_extra_selections()
 
     def insertFromMimeData(self, source):
-        """Intercept all paste operations and re-indent to match cursor position."""
         if not source.hasText():
             super().insertFromMimeData(source)
             return
@@ -295,43 +294,111 @@ class GhostEditor(QPlainTextEdit):
         lines = text.split('\n')
 
         if len(lines) <= 1:
-            # Single line paste — just insert normally
             super().insertFromMimeData(source)
             return
 
-        # Determine the indentation of the line the cursor is currently on
         cursor = self.textCursor()
-        current_block_text = cursor.block().text()
-        indent_match = re.match(r'^(\s*)', current_block_text)
-        target_indent = indent_match.group(1) if indent_match else ""
+        current_line = cursor.block().text()
 
-        # Determine the indentation of the first pasted line
-        first_line_match = re.match(r'^(\s*)', lines[0])
-        source_indent = first_line_match.group(1) if first_line_match else ""
-        source_indent_len = len(source_indent)
+        # How indented is the line we're pasting onto?
+        target_match = re.match(r'^(\s*)', current_line)
+        target_indent = target_match.group(1) if target_match else ""
 
-        # Re-indent every line relative to the first pasted line
-        adjusted_lines = []
+        # How indented is the first pasted line?
+        first_match = re.match(r'^(\s*)', lines[0])
+        source_indent = first_match.group(1) if first_match else ""
+        source_len = len(source_indent)
+
+        # Calculate the delta — how much to shift every line
+        target_len = len(target_indent)
+        delta = target_len - source_len
+
+        adjusted = []
         for i, line in enumerate(lines):
-            if i == 0:
-                # First line inherits whatever is already on the cursor line
-                adjusted_lines.append(line.lstrip())
-            else:
-                if line.strip() == "":
-                    # Preserve blank lines as-is
-                    adjusted_lines.append("")
-                else:
-                    # Strip the source indentation, then apply target indentation
-                    stripped = line[source_indent_len:] if line.startswith(source_indent) else line.lstrip()
-                    adjusted_lines.append(target_indent + stripped)
+            if not line.strip():
+                # Blank lines stay blank
+                adjusted.append("")
+                continue
 
-        cursor.insertText('\n'.join(adjusted_lines))
+            # Find this line's actual indentation
+            line_match = re.match(r'^(\s*)', line)
+            line_indent = line_match.group(1) if line_match else ""
+            line_indent_len = len(line_indent)
+
+            # Shift by delta, never go below zero
+            new_indent_len = max(0, line_indent_len + delta)
+            new_indent = " " * new_indent_len
+            adjusted.append(new_indent + line.lstrip())
+
+        cursor.insertText('\n'.join(adjusted))
+
+    def reindent_at_cursor(self):
+        """
+        Reindents the logical block around the cursor — no selection needed.
+        Walks up to find the start of the current function/class/block,
+        selects to its end, and normalises indentation.
+        """
+        cursor = self.textCursor()
+
+        # If there's already a selection, just fix that
+        if cursor.hasSelection():
+            self.reindent_selection()
+            return
+
+        doc = self.document()
+        current_block = cursor.block()
+
+        # Walk upward to find the top of this logical block
+        # (first line that has less indentation than the current line,
+        #  or a def/class line)
+        start_block = current_block
+        current_indent = len(current_block.text()) - len(current_block.text().lstrip())
+
+        block = current_block.previous()
+        while block.isValid():
+            text = block.text()
+            stripped = text.strip()
+            if not stripped:
+                block = block.previous()
+                continue
+            indent = len(text) - len(text.lstrip())
+            if indent < current_indent or re.match(r'^(def |class |async def )', stripped):
+                start_block = block
+                break
+            block = block.previous()
+
+        # Walk downward to find the end of this block
+        start_indent = len(start_block.text()) - len(start_block.text().lstrip())
+        end_block = current_block
+        block = current_block.next()
+        while block.isValid():
+            text = block.text()
+            stripped = text.strip()
+            if stripped:
+                indent = len(text) - len(text.lstrip())
+                if indent <= start_indent and not text.strip().startswith("#"):
+                    break
+            end_block = block
+            block = block.next()
+
+        # Select from start_block to end_block
+        sel_cursor = QTextCursor(doc)
+        sel_cursor.setPosition(start_block.position())
+        sel_cursor.setPosition(
+            end_block.position() + len(end_block.text()),
+            QTextCursor.MoveMode.KeepAnchor
+        )
+        self.setTextCursor(sel_cursor)
+        self.reindent_selection()
+
+        # Show a brief status message if parent window is available
+        parent = self.window()
+        if hasattr(parent, 'statusBar'):
+            parent.statusBar().showMessage("Indentation fixed.", 2000)
 
     def reindent_selection(self):
-        """Re-indents the selected block of code to be consistent within itself."""
         cursor = self.textCursor()
         if not cursor.hasSelection():
-            # If no selection, select the whole document
             cursor.select(QTextCursor.SelectionType.Document)
 
         selected_text = cursor.selectedText().replace('\u2029', '\n')
@@ -340,31 +407,28 @@ class GhostEditor(QPlainTextEdit):
         if not lines:
             return
 
-        # Find the minimum indentation level across all non-empty lines
-        min_indent = float('inf')
-        for line in lines:
-            if line.strip():
-                indent = len(line) - len(line.lstrip(' '))
-                min_indent = min(min_indent, indent)
+        # Find minimum indentation of non-empty lines (ignoring the first line
+        # since it may already be at the cursor position)
+        non_empty = [l for l in lines[1:] if l.strip()]
+        if not non_empty:
+            cursor.insertText('\n'.join(l.lstrip() for l in lines))
+            return
 
-        if min_indent == float('inf'):
-            min_indent = 0
+        min_indent = min(len(l) - len(l.lstrip(' ')) for l in non_empty)
 
-        # Determine target indent from the first line's block in the document
+        # Target indent comes from the block where selection starts
         block = self.document().findBlock(cursor.selectionStart())
-        block_text = block.text()
-        target_match = re.match(r'^(\s*)', block_text)
+        target_match = re.match(r'^(\s*)', block.text())
         target_indent = target_match.group(1) if target_match else ""
 
-        # Strip the common indent and re-apply the target indent
         reindented = []
         for i, line in enumerate(lines):
-            if line.strip() == "":
+            if not line.strip():
                 reindented.append("")
             elif i == 0:
                 reindented.append(line.lstrip())
             else:
-                stripped = line[min_indent:]
+                stripped = line[min_indent:] if len(line) >= min_indent else line.lstrip()
                 reindented.append(target_indent + stripped)
 
         cursor.insertText('\n'.join(reindented))
@@ -955,6 +1019,12 @@ class GhostEditor(QPlainTextEdit):
                 self.handle_comment_generate(previous_line_stripped)
 
             self.clear_ghost_text()
+            return
+
+        if (event.key() == Qt.Key.Key_I and
+                event.modifiers() == (Qt.KeyboardModifier.ControlModifier |
+                                      Qt.KeyboardModifier.ShiftModifier)):
+            self.reindent_at_cursor()
             return
 
         super().keyPressEvent(event)
