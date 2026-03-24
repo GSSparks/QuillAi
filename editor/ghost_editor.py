@@ -299,6 +299,90 @@ class GhostEditor(QPlainTextEdit):
 
         self.update_extra_selections()
 
+    def insertFromMimeData(self, source):
+        """Intercept all paste operations and re-indent to match cursor position."""
+        if not source.hasText():
+            super().insertFromMimeData(source)
+            return
+
+        text = source.text().replace('\r\n', '\n').replace('\r', '\n')
+        lines = text.split('\n')
+
+        if len(lines) <= 1:
+            # Single line paste — just insert normally
+            super().insertFromMimeData(source)
+            return
+
+        # Determine the indentation of the line the cursor is currently on
+        cursor = self.textCursor()
+        current_block_text = cursor.block().text()
+        indent_match = re.match(r'^(\s*)', current_block_text)
+        target_indent = indent_match.group(1) if indent_match else ""
+
+        # Determine the indentation of the first pasted line
+        first_line_match = re.match(r'^(\s*)', lines[0])
+        source_indent = first_line_match.group(1) if first_line_match else ""
+        source_indent_len = len(source_indent)
+
+        # Re-indent every line relative to the first pasted line
+        adjusted_lines = []
+        for i, line in enumerate(lines):
+            if i == 0:
+                # First line inherits whatever is already on the cursor line
+                adjusted_lines.append(line.lstrip())
+            else:
+                if line.strip() == "":
+                    # Preserve blank lines as-is
+                    adjusted_lines.append("")
+                else:
+                    # Strip the source indentation, then apply target indentation
+                    stripped = line[source_indent_len:] if line.startswith(source_indent) else line.lstrip()
+                    adjusted_lines.append(target_indent + stripped)
+
+        cursor.insertText('\n'.join(adjusted_lines))
+
+    def reindent_selection(self):
+        """Re-indents the selected block of code to be consistent within itself."""
+        cursor = self.textCursor()
+        if not cursor.hasSelection():
+            # If no selection, select the whole document
+            cursor.select(QTextCursor.SelectionType.Document)
+
+        selected_text = cursor.selectedText().replace('\u2029', '\n')
+        lines = selected_text.split('\n')
+
+        if not lines:
+            return
+
+        # Find the minimum indentation level across all non-empty lines
+        min_indent = float('inf')
+        for line in lines:
+            if line.strip():
+                indent = len(line) - len(line.lstrip(' '))
+                min_indent = min(min_indent, indent)
+
+        if min_indent == float('inf'):
+            min_indent = 0
+
+        # Determine target indent from the first line's block in the document
+        block = self.document().findBlock(cursor.selectionStart())
+        block_text = block.text()
+        target_match = re.match(r'^(\s*)', block_text)
+        target_indent = target_match.group(1) if target_match else ""
+
+        # Strip the common indent and re-apply the target indent
+        reindented = []
+        for i, line in enumerate(lines):
+            if line.strip() == "":
+                reindented.append("")
+            elif i == 0:
+                reindented.append(line.lstrip())
+            else:
+                stripped = line[min_indent:]
+                reindented.append(target_indent + stripped)
+
+        cursor.insertText('\n'.join(reindented))
+
     def update_extra_selections(self):
         self.setExtraSelections(self.current_line_selection + self.lint_selections)
 
@@ -401,43 +485,40 @@ class GhostEditor(QPlainTextEdit):
                 print(f"LINTER ERROR: {e}")
 
     def contextMenuEvent(self, event):
-        # 1. Get the standard menu (Copy, Paste, etc.)
         menu = self.createStandardContextMenu(event.pos())
-        
-        # 2. Use the ACTUAL editor cursor to check for highlights
         active_cursor = self.textCursor()
-        
-        # 3. Use a position-based cursor ONLY to check which line was clicked for errors
         click_cursor = self.cursorForPosition(event.pos())
-        clicked_line = click_cursor.blockNumber() + 1 
+        clicked_line = click_cursor.blockNumber() + 1
+
+        # --- REINDENT ACTION (always available) ---
+        menu.addSeparator()
+        reindent_action = QAction(
+            "⇥ Fix Indentation" if active_cursor.hasSelection() else "⇥ Fix Indentation (whole file)",
+            self
+        )
+        reindent_action.triggered.connect(self.reindent_selection)
+        menu.addAction(reindent_action)
 
         # --- SELECTION CHECK ---
         if active_cursor.hasSelection():
             menu.addSeparator()
             chat_action = QAction("💬 Send to Chat", self)
-            
-            # Use .selectedText() from the active selection
-            # Note: We replace the unicode paragraph separator with a standard newline
             selected_text = active_cursor.selectedText().replace('\u2029', '\n')
-            
             chat_action.triggered.connect(
                 lambda: self.send_to_chat_requested.emit(selected_text)
             )
-            menu.addAction(chat_action)        
-        
+            menu.addAction(chat_action)
+
         # --- SYNTAX ERROR CHECK ---
         if self.current_syntax_error and self.current_syntax_error['lineno'] == clicked_line:
             menu.addSeparator()
-            
             fix_action = QAction(QIcon(), "💡 Explain & Fix Error with AI", self)
             fix_action.triggered.connect(self.trigger_ai_error_fix)
-            
             font = fix_action.font()
             font.setBold(True)
             fix_action.setFont(font)
-            
             menu.addAction(fix_action)
-            
+
         menu.exec(event.globalPos())
         
     def handle_text_changed_for_ai(self):
