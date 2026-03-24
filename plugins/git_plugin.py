@@ -137,6 +137,10 @@ class GitDockWidget(QDockWidget):
         layout.addWidget(self.commit_btn)
         
         self.setWidget(container)
+    
+    def set_repo_path(self, path):
+        self.repo_path = path
+        self.refresh_status()
 
     def run_git_command(self, args):
         try:
@@ -322,5 +326,6 @@ class GitDockWidget(QDockWidget):
     def on_item_double_clicked(self, item, column):
         rel_path = item.data(0, Qt.ItemDataRole.UserRole)
         if rel_path:
-            abs_path = os.path.join(QDir.currentPath(), rel_path)
+            base = self.repo_path if self.repo_path else QDir.currentPath()
+            abs_path = os.path.join(base, rel_path)
             self.file_double_clicked.emit(abs_path)
