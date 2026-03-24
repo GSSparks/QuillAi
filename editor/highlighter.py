@@ -98,9 +98,17 @@ class HighlighterRegistry:
 
     def get_highlighter(self, document, extension=".py"):
         plugin_class = self.plugins.get(extension)
-        if plugin_class:
-            return UniversalHighlighter(document, plugin_class())
-        return None # No highlighting for unknown files
+        if plugin_class is None:
+            return None
+
+        # Check if it's a standalone QSyntaxHighlighter subclass
+        # (like MarkdownPlugin) rather than a LanguagePlugin
+        from PyQt6.QtGui import QSyntaxHighlighter
+        if issubclass(plugin_class, QSyntaxHighlighter):
+            return plugin_class(document)
+
+        # Standard LanguagePlugin path
+        return UniversalHighlighter(document, plugin_class())
 
 # Create a global registry instance
 registry = HighlighterRegistry()

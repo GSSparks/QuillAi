@@ -30,6 +30,7 @@ from plugins.html_plugin import HTMLPlugin
 from plugins.ansible_plugin import AnsiblePlugin
 from plugins.nix_plugin import NixPlugin
 from plugins.bash_plugin import BashPlugin
+from plugins.markdown_plugin import MarkdownPlugin
 
 registry.register(".html", HTMLPlugin)
 registry.register(".htm", HTMLPlugin)
@@ -39,6 +40,8 @@ registry.register(".yaml", AnsiblePlugin)
 registry.register(".nix", NixPlugin)
 registry.register(".sh", BashPlugin)
 registry.register(".bash", BashPlugin)
+registry.register(".md", MarkdownPlugin)
+registry.register(".markdown", MarkdownPlugin)
 
 # ==========================================
 # Chat Syntax Highlighter
@@ -215,6 +218,7 @@ class CodeEditor(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(True)
         self.tabs.tabCloseRequested.connect(self.close_tab)
+        self.tabs.currentChanged.connect(lambda _: self._refresh_markdown_preview())  # ADD THIS
         self.tabs.setStyleSheet("""
             QTabWidget::pane { border: none; background-color: #1E1E1E; }
             QTabBar::tab {
@@ -298,6 +302,7 @@ class CodeEditor(QMainWindow):
         self.setup_git_panel()
         self.setup_output_panel()
         self.setup_chat_panel()
+        self.setup_markdown_preview()
         self.setup_find_in_files_panel()
 
         self.process = QProcess(self)
@@ -341,7 +346,27 @@ class CodeEditor(QMainWindow):
         editor = self.current_editor()
         if editor and editor.hasFocus():
             editor.request_completion_hotkey()
+    
+    def setup_markdown_preview(self):
+        from ui.markdown_preview import MarkdownPreviewDock
+        self.md_preview_dock = MarkdownPreviewDock(self)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.md_preview_dock)
+        self.tabifyDockWidget(self.chat_dock, self.md_preview_dock)
+        self.md_preview_dock.hide()
         
+    def _refresh_markdown_preview(self, editor=None):
+        if editor is None:
+            editor = self.current_editor()
+        if not editor:
+            return
+        path = getattr(editor, 'file_path', '') or ''
+        is_md = path.lower().endswith(('.md', '.markdown')) or \
+                self.tabs.tabText(self.tabs.indexOf(editor)).lower().endswith(('.md', '.markdown'))
+        if is_md:
+            self.md_preview_dock.show()
+            self.md_preview_dock.raise_()
+            self.md_preview_dock.update_preview(editor.toPlainText())
+                    
     # -----------------------------
     # Find / Replace Method
     # -----------------------------
@@ -406,7 +431,8 @@ class CodeEditor(QMainWindow):
 
         editor.error_help_requested.connect(self.handle_editor_error_help)
         editor.send_to_chat_requested.connect(self.load_snippet_to_chat)
-
+        editor.textChanged.connect(lambda: self._refresh_markdown_preview(editor))
+        
         index = self.tabs.addTab(editor, name)
         self.tabs.setCurrentIndex(index)
 
