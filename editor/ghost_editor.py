@@ -880,13 +880,34 @@ class GhostEditor(QPlainTextEdit):
         cursor.insertText(self.function_output)
 
     def keyPressEvent(self, event):
-        # Navigation keys should kill the AI countdown immediately
-        if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
+        # Bare modifier keys — never clear ghost text or act on these alone
+        if event.key() in (Qt.Key.Key_Control, Qt.Key.Key_Shift,
+                           Qt.Key.Key_Alt, Qt.Key.Key_Meta):
+            super().keyPressEvent(event)
+            return
+
+        # Navigation keys (except Right which needs special handling below)
+        if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Up, Qt.Key.Key_Down):
             self.ai_suggest_timer.stop()
             self.clear_ghost_text()
             super().keyPressEvent(event)
             return
-            
+
+        # Right arrow — Ctrl+Right accepts next word, bare Right clears ghost text
+        if event.key() == Qt.Key.Key_Right:
+            if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+                if self.ghost_text:
+                    self.accept_next_word()
+                    return
+                # No ghost text — let Qt handle the normal word-jump
+                super().keyPressEvent(event)
+                return
+            else:
+                self.ai_suggest_timer.stop()
+                self.clear_ghost_text()
+                super().keyPressEvent(event)
+                return
+
         pairs = {'(': ')', '[': ']', '{': '}', '"': '"', "'": "'"}
         char = event.text()
 
@@ -899,7 +920,8 @@ class GhostEditor(QPlainTextEdit):
             self.clear_ghost_text()
             return
 
-        if event.key() == Qt.Key.Key_Space and event.modifiers() == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
+        if event.key() == Qt.Key.Key_Space and event.modifiers() == (
+                Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
             self.show_snippet_menu()
             return
 
@@ -907,10 +929,6 @@ class GhostEditor(QPlainTextEdit):
             if self.ghost_text:
                 self.accept_full_completion()
                 return
-
-        if event.key() == Qt.Key.Key_Right and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
-            self.accept_next_word()
-            return
 
         if event.key() == Qt.Key.Key_E and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             self.replace_selection_with_ai()
@@ -928,7 +946,7 @@ class GhostEditor(QPlainTextEdit):
             indent = whitespace_match.group(0) if whitespace_match else ""
 
             if previous_line_stripped.endswith(":"):
-                indent += "    " 
+                indent += "    "
 
             if indent:
                 self.textCursor().insertText(indent)
