@@ -312,6 +312,67 @@ class CodeEditor(QMainWindow):
 
         self.add_new_tab("Untitled", "")
 
+    def estimate_tokens(self, text: str) -> int:
+        """Rough token estimate — 1 token ≈ 4 characters for code."""
+        return len(text) // 4
+
+    def build_chat_context(self, user_text: str, active_code: str) -> str:
+        TOKEN_BUDGET = 28000  # leave 2k headroom under the 30k limit
+        used = self.estimate_tokens(user_text)
+
+        # ── 1. Active file (high priority, always include, but cap it) ──
+        active_budget = 6000  # tokens
+        active_chars = active_budget * 4
+        if len(active_code) > active_chars:
+            head = active_code[:active_chars // 3]
+            tail = active_code[-(active_chars * 2 // 3):]
+            active_code_ctx = head + "\n...(truncated)...\n" + tail
+        else:
+            active_code_ctx = active_code
+        used += self.estimate_tokens(active_code_ctx)
+
+        # ── 2. Direct imports (medium priority) ──
+        import_ctx = ""
+        if used < TOKEN_BUDGET:
+            import_budget = TOKEN_BUDGET - used - 8000  # reserve for tabs + tree
+            raw_imports = self.resolve_local_imports(active_code, _max_depth=1)
+            import_chars = import_budget * 4
+            if len(raw_imports) > import_chars:
+                import_ctx = raw_imports[:import_chars] + "\n...(imports truncated)..."
+            else:
+                import_ctx = raw_imports
+            used += self.estimate_tokens(import_ctx)
+
+        # ── 3. Open tabs (lower priority, cap each tab tightly) ──
+        tabs_ctx = ""
+        if used < TOKEN_BUDGET:
+            tabs_budget = TOKEN_BUDGET - used - 2000  # reserve for tree
+            tabs_chars = tabs_budget * 4
+            raw_tabs = self.get_open_tabs_context()
+            if len(raw_tabs) > tabs_chars:
+                tabs_ctx = raw_tabs[:tabs_chars] + "\n...(tabs truncated)..."
+            else:
+                tabs_ctx = raw_tabs
+            used += self.estimate_tokens(tabs_ctx)
+            
+        # ── 4. Project tree (cheapest, include last) ──
+        tree_ctx = ""
+        if used < TOKEN_BUDGET:
+            tree_ctx = self.get_project_tree()
+            if self.estimate_tokens(tree_ctx) + used > TOKEN_BUDGET:
+                tree_ctx = ""  # drop entirely if we're already close
+ 
+        # ── Assemble ──
+        parts = [f"[Active File]\n```python\n{active_code_ctx}\n```"]
+        if import_ctx:
+            parts.append(import_ctx)
+        if tabs_ctx:
+            parts.append(tabs_ctx)
+        if tree_ctx:
+            parts.append(tree_ctx)
+
+        return "\n\n".join(parts)    
+    
     def toggle_ai_mode(self, checked):
         backend = "openai" if checked else "llama"
         self.settings_manager.set_backend(backend)
@@ -668,14 +729,11 @@ class CodeEditor(QMainWindow):
             return ""
         return "[Other Open Files]\n" + "\n\n".join(context)
 
-    def resolve_local_imports(self, code_text, _visited=None, _depth=0):
+    def resolve_local_imports(self, code_text, _visited=None, _depth=0, _max_depth=3):
         if _visited is None:
             _visited = set()
 
-        MAX_DEPTH = 3
-        MAX_FILE_SIZE = 1500
-
-        if _depth >= MAX_DEPTH:
+        if _depth >= _max_depth:  # use _max_depth instead of hardcoded 3
             return ""
 
         editor = self.current_editor()
@@ -865,28 +923,9 @@ class CodeEditor(QMainWindow):
 
         editor = self.current_editor()
         active_code = editor.toPlainText() if editor else ""
-        cross_file_context = self.resolve_local_imports(active_code)
-        open_tabs_context = self.get_open_tabs_context()
-        project_tree = self.get_project_tree()
 
-        if len(active_code) > 2000:
-            head = active_code[:500]
-            tail = active_code[-1500:]
-            active_code = head + "\n...(truncated)...\n" + tail
-
-        prompt_with_context = f"""{user_text}
-
-    {project_tree}
-
-    [Active File]
-    ```python
-    {active_code}
-    ```
-
-    {cross_file_context}
-
-    {open_tabs_context}
-    """
+        context = self.build_chat_context(user_text, active_code)
+        prompt_with_context = f"{user_text}\n\n{context}"
 
         thread = QThread()
         self.chat_worker = self.create_worker(
@@ -1088,25 +1127,18 @@ class CodeEditor(QMainWindow):
         open_tabs_context = self.get_open_tabs_context()
         project_tree = self.get_project_tree()
 
+        context = self.build_chat_context(user_text, active_code)
         prompt_with_context = f"""
         {user_text}
 
-        {project_tree}
-
         [Error Trace]
-        {self.current_error_text}
+        {self.current_error_text[:8000]}
 
-        [Active File]
-        {active_code}
-
-        [Related Files / Imports]
-        {cross_file_context}
-
-        {open_tabs_context}
+        {context}
 
         Instructions:
         - Explain the error clearly
-        - Identify the root cause
+        - Identify the root cause  
         - Show how to fix it
         - Include corrected code if possible
         """
