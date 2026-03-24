@@ -1,12 +1,13 @@
 import subprocess
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton, QHBoxLayout
 from PyQt6.QtGui import QFont, QColor, QTextCharFormat, QTextCursor
-from PyQt6.QtCore import Qt, QDir
+from PyQt6.QtCore import Qt
 
 class DiffViewerDialog(QDialog):
     def __init__(self, file_path, parent=None):
         super().__init__(parent)
         self.file_path = file_path
+        self.repo_path = repo_path
         self.setWindowTitle(f"Git Diff: {file_path}")
         self.resize(800, 600)
         self.setup_ui()
@@ -59,7 +60,7 @@ class DiffViewerDialog(QDialog):
             # Run git diff against the last commit (HEAD)
             result = subprocess.run(
                 ['git', 'diff', 'HEAD', '--', self.file_path],
-                cwd=QDir.currentPath(),
+                cwd=self.repo_path if self.repo_path else QDir.currentPath(),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,

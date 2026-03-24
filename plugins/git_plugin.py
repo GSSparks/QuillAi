@@ -187,7 +187,7 @@ class GitDockWidget(QDockWidget):
         action = menu.exec(self.tree.viewport().mapToGlobal(position))
 
         if action == diff_action:
-            dialog = DiffViewerDialog(rel_path, self)
+            dialog = DiffViewerDialog(rel_path, self.repo_path, self)
             dialog.exec()
             
         elif action == discard_action:
