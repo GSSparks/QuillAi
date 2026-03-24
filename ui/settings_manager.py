@@ -45,7 +45,6 @@ class SettingsManager:
                     else:
                         full_settings["backend"] = "llama"
 
-                print(f"DEBUG: Loaded Settings: {full_settings}")
                 return full_settings
 
             except Exception as e:
