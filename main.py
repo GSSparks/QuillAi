@@ -23,6 +23,7 @@ from ui.find_in_files import FindInFilesWidget
 from ui.settings_manager import SettingsManager
 from ui.settings_dialog import SettingsDialog
 from ui.memory_manager import MemoryManager
+from ui.memory_panel import MemoryPanel
 
 from editor.highlighter import registry
 from plugins.git_plugin import GitDockWidget
@@ -398,9 +399,11 @@ class CodeEditor(QMainWindow):
 
     def create_worker(self, prompt, editor_text="", cursor_pos=0,
                       generate_function=False, is_edit=False, is_chat=False):
+        backend = self.settings_manager.get_backend()
         model = (self.settings_manager.get_chat_model()
                  if is_chat
-                 else self.settings_manager.get_model())
+                 else self.settings_manager.get_inline_model())
+        api_key = (self.settings_manager.get_api_key())
 
         return AIWorker(
             prompt=prompt,
@@ -411,8 +414,8 @@ class CodeEditor(QMainWindow):
             is_chat=is_chat,
             model=model,
             api_url=self.settings_manager.get_api_url(),
-            api_key=self.settings_manager.get_api_key(),
-            backend=self.settings_manager.get_backend(),
+            api_key=api_key,
+            backend=backend,
         )
         
     def request_manual_completion(self):
@@ -965,7 +968,6 @@ class CodeEditor(QMainWindow):
         self.chat_history.ensureCursorVisible()
         
     def setup_memory_panel(self):
-        from ui.memory_panel import MemoryPanel
         self.memory_panel = MemoryPanel(self.memory_manager, self)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.memory_panel)
         self.tabifyDockWidget(self.chat_dock, self.memory_panel)

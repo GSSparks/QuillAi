@@ -8,15 +8,16 @@ class SettingsManager:
         self.config_path = os.path.join(self.config_dir, "settings.json")
 
         self.defaults = {
-            "local_llm_url":    "http://192.168.1.189:11435/v1/chat/completions",
-            "cloud_llm_url":    "https://api.openai.com/v1/chat/completions",
-            "cloud_api_key":    "",
+            "local_llm_url":     "http://192.168.1.189:11435/v1/chat/completions",
+            "cloud_llm_url":     "https://api.openai.com/v1/chat/completions",
+            "cloud_api_key":     "",
             "anthropic_api_key": "",
-            "active_model":     "qwen2.5-coder-7b",
-            "chat_model":       "",   # if blank, falls back to active_model
-            "backend":          "llama",
+            "active_model":      "qwen2.5-coder-7b",
+            "chat_model":        "",
+            "inline_model":      "",
+            "backend":           "llama",
             "use_cloud_for_chat": False,
-            "theme":            "dark",
+            "theme":             "dark",
         }
 
         self.settings = self.load_settings()
@@ -28,7 +29,6 @@ class SettingsManager:
                 with open(self.config_path, "r") as f:
                     loaded = json.load(f)
                 full_settings = {**self.defaults, **loaded}
-                # Migration: infer backend from legacy flag
                 if "backend" not in loaded:
                     full_settings["backend"] = (
                         "openai" if full_settings.get("use_cloud_for_chat") else "llama"
@@ -51,6 +51,7 @@ class SettingsManager:
         self.settings[key] = value
         self.save_settings()
 
+    # ── Backend ───────────────────────────────────────────────────────────
     def get_backend(self):
         return self.get("backend")
 
@@ -59,6 +60,7 @@ class SettingsManager:
             raise ValueError("backend must be 'llama', 'openai', or 'claude'")
         self.set("backend", backend)
 
+    # ── URLs & Keys ───────────────────────────────────────────────────────
     def get_api_url(self):
         backend = self.get_backend()
         if backend == "claude":
@@ -75,9 +77,31 @@ class SettingsManager:
             return self.get("cloud_api_key")
         return ""
 
+    # ── Models ────────────────────────────────────────────────────────────
     def get_model(self):
+        """Active/local model name — used as the base fallback."""
         return self.get("active_model")
 
     def get_chat_model(self):
-        """Returns a separate model for chat, falling back to active_model if unset."""
-        return self.get("chat_model") or self.get("active_model")
+        """Model for chat requests. Falls back to a sensible default per backend."""
+        explicit = self.get("chat_model")
+        if explicit:
+            return explicit
+        backend = self.get_backend()
+        if backend == "openai":
+            return "gpt-4o-mini"
+        if backend == "claude":
+            return "claude-sonnet-4-6"
+        return self.get("active_model")
+
+    def get_inline_model(self):
+        """Model for inline completions. Prefers a fast/cheap model per backend."""
+        explicit = self.get("inline_model")
+        if explicit:
+            return explicit
+        backend = self.get_backend()
+        if backend == "openai":
+            return "gpt-4o-mini"
+        if backend == "claude":
+            return "claude-haiku-4-5-20251001"
+        return self.get("active_model")
