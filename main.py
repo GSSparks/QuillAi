@@ -318,15 +318,12 @@ class CodeEditor(QMainWindow):
     def update_mode_label(self, is_cloud):
         self.ai_mode_btn.setText("☁️ CLOUD" if is_cloud else "🏠 LOCAL")
 
-    def create_worker(
-        self,
-        prompt,
-        editor_text="",
-        cursor_pos=0,
-        generate_function=False,
-        is_edit=False,
-        is_chat=False,
-    ):
+    def create_worker(self, prompt, editor_text="", cursor_pos=0,
+                      generate_function=False, is_edit=False, is_chat=False):
+        model = (self.settings_manager.get_chat_model()
+                 if is_chat
+                 else self.settings_manager.get_model())
+
         return AIWorker(
             prompt=prompt,
             editor_text=editor_text,
@@ -334,11 +331,12 @@ class CodeEditor(QMainWindow):
             generate_function=generate_function,
             is_edit=is_edit,
             is_chat=is_chat,
-            model=self.settings_manager.get_model(),
+            model=model,
             api_url=self.settings_manager.get_api_url(),
             api_key=self.settings_manager.get_api_key(),
             backend=self.settings_manager.get_backend(),
         )
+        
     def request_manual_completion(self):
         editor = self.current_editor()
         if editor and editor.hasFocus():

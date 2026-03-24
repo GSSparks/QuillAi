@@ -1,16 +1,11 @@
-# write a script to test out this IDE's ability to run a Python script
-
+import random
 
 def test_ide():
     print("This IDE is working correctly.")
-    
-# Add a function to test the IDE's ability to handle loops
 
 def test_loop():
     for i in range(5):
         print(f"Loop iteration {i}")
-
-# Add a function to test the IDE's ability to handle conditional statements
 
 def test_condition():
     x = 10
@@ -19,9 +14,25 @@ def test_condition():
     else:
         print("x is not greater than 5")
 
-print("I'm so happy")
+def scramble_name(name):
+    name_list = list(name)
+    random.shuffle(name_list)
+    return ''.join(name_list)
 
+print("I'm so happy")
 test_loop()
 test_ide()
 test_condition()
-print("This script is done!")
+
+# Ask for the user's name
+user_name = input("Please enter your name: ")
+scrambled_name = scramble_name(user_name)
+print(f"Scrambled name: {scrambled_name}")
+
+print("This script is done!") 
+
+# function to add two numbers together
+
+
+def add_numbers(a, b):
+    return a + b
