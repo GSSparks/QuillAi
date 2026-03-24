@@ -4,7 +4,7 @@ from PyQt6.QtGui import QFont, QColor, QTextCharFormat, QTextCursor
 from PyQt6.QtCore import Qt
 
 class DiffViewerDialog(QDialog):
-    def __init__(self, file_path, parent=None):
+    def __init__(self, file_path, repo_path=None, parent=None):
         super().__init__(parent)
         self.file_path = file_path
         self.repo_path = repo_path
