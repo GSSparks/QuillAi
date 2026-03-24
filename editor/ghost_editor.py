@@ -285,154 +285,6 @@ class GhostEditor(QPlainTextEdit):
 
         self.update_extra_selections()
 
-    def insertFromMimeData(self, source):
-        if not source.hasText():
-            super().insertFromMimeData(source)
-            return
-
-        text = source.text().replace('\r\n', '\n').replace('\r', '\n')
-        lines = text.split('\n')
-
-        if len(lines) <= 1:
-            super().insertFromMimeData(source)
-            return
-
-        cursor = self.textCursor()
-        current_line = cursor.block().text()
-
-        # How indented is the line we're pasting onto?
-        target_match = re.match(r'^(\s*)', current_line)
-        target_indent = target_match.group(1) if target_match else ""
-
-        # How indented is the first pasted line?
-        first_match = re.match(r'^(\s*)', lines[0])
-        source_indent = first_match.group(1) if first_match else ""
-        source_len = len(source_indent)
-
-        # Calculate the delta — how much to shift every line
-        target_len = len(target_indent)
-        delta = target_len - source_len
-
-        adjusted = []
-        for i, line in enumerate(lines):
-            if not line.strip():
-                # Blank lines stay blank
-                adjusted.append("")
-                continue
-
-            # Find this line's actual indentation
-            line_match = re.match(r'^(\s*)', line)
-            line_indent = line_match.group(1) if line_match else ""
-            line_indent_len = len(line_indent)
-
-            # Shift by delta, never go below zero
-            new_indent_len = max(0, line_indent_len + delta)
-            new_indent = " " * new_indent_len
-            adjusted.append(new_indent + line.lstrip())
-
-        cursor.insertText('\n'.join(adjusted))
-
-    def reindent_at_cursor(self):
-        """
-        Reindents the logical block around the cursor — no selection needed.
-        Walks up to find the start of the current function/class/block,
-        selects to its end, and normalises indentation.
-        """
-        cursor = self.textCursor()
-
-        # If there's already a selection, just fix that
-        if cursor.hasSelection():
-            self.reindent_selection()
-            return
-
-        doc = self.document()
-        current_block = cursor.block()
-
-        # Walk upward to find the top of this logical block
-        # (first line that has less indentation than the current line,
-        #  or a def/class line)
-        start_block = current_block
-        current_indent = len(current_block.text()) - len(current_block.text().lstrip())
-
-        block = current_block.previous()
-        while block.isValid():
-            text = block.text()
-            stripped = text.strip()
-            if not stripped:
-                block = block.previous()
-                continue
-            indent = len(text) - len(text.lstrip())
-            if indent < current_indent or re.match(r'^(def |class |async def )', stripped):
-                start_block = block
-                break
-            block = block.previous()
-
-        # Walk downward to find the end of this block
-        start_indent = len(start_block.text()) - len(start_block.text().lstrip())
-        end_block = current_block
-        block = current_block.next()
-        while block.isValid():
-            text = block.text()
-            stripped = text.strip()
-            if stripped:
-                indent = len(text) - len(text.lstrip())
-                if indent <= start_indent and not text.strip().startswith("#"):
-                    break
-            end_block = block
-            block = block.next()
-
-        # Select from start_block to end_block
-        sel_cursor = QTextCursor(doc)
-        sel_cursor.setPosition(start_block.position())
-        sel_cursor.setPosition(
-            end_block.position() + len(end_block.text()),
-            QTextCursor.MoveMode.KeepAnchor
-        )
-        self.setTextCursor(sel_cursor)
-        self.reindent_selection()
-
-        # Show a brief status message if parent window is available
-        parent = self.window()
-        if hasattr(parent, 'statusBar'):
-            parent.statusBar().showMessage("Indentation fixed.", 2000)
-
-    def reindent_selection(self):
-        cursor = self.textCursor()
-        if not cursor.hasSelection():
-            cursor.select(QTextCursor.SelectionType.Document)
-
-        selected_text = cursor.selectedText().replace('\u2029', '\n')
-        lines = selected_text.split('\n')
-
-        if not lines:
-            return
-
-        # Find minimum indentation of non-empty lines (ignoring the first line
-        # since it may already be at the cursor position)
-        non_empty = [l for l in lines[1:] if l.strip()]
-        if not non_empty:
-            cursor.insertText('\n'.join(l.lstrip() for l in lines))
-            return
-
-        min_indent = min(len(l) - len(l.lstrip(' ')) for l in non_empty)
-
-        # Target indent comes from the block where selection starts
-        block = self.document().findBlock(cursor.selectionStart())
-        target_match = re.match(r'^(\s*)', block.text())
-        target_indent = target_match.group(1) if target_match else ""
-
-        reindented = []
-        for i, line in enumerate(lines):
-            if not line.strip():
-                reindented.append("")
-            elif i == 0:
-                reindented.append(line.lstrip())
-            else:
-                stripped = line[min_indent:] if len(line) >= min_indent else line.lstrip()
-                reindented.append(target_indent + stripped)
-
-        cursor.insertText('\n'.join(reindented))
-
     def update_extra_selections(self):
         self.setExtraSelections(self.current_line_selection + self.lint_selections)
 
@@ -533,6 +385,95 @@ class GhostEditor(QPlainTextEdit):
             except Exception as e:
                 # [NEW] Print any JSON parsing or Subprocess errors
                 print(f"LINTER ERROR: {e}")
+  
+    def indent_selection(self):
+        cursor = self.textCursor()
+        if not cursor.hasSelection():
+            # No selection — just indent the current line
+            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            cursor.insertText("    ")
+            return
+
+        start = cursor.selectionStart()
+        end = cursor.selectionEnd()
+
+        # Expand selection to cover full lines
+        cursor.setPosition(start)
+        cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        block_start = cursor.position()
+
+        cursor.setPosition(end)
+        if cursor.atBlockStart() and end > start:
+            # Don't indent the line after the selection if cursor is at its start
+            cursor.movePosition(QTextCursor.MoveOperation.PreviousBlock)
+        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+        block_end = cursor.position()
+
+        cursor.setPosition(block_start)
+        cursor.setPosition(block_end, QTextCursor.MoveMode.KeepAnchor)
+        selected = cursor.selectedText().replace('\u2029', '\n')
+
+        indented = '\n'.join("    " + line for line in selected.split('\n'))
+
+        cursor.beginEditBlock()
+        cursor.insertText(indented)
+        cursor.endEditBlock()
+
+        # Restore selection over the modified lines
+        cursor.setPosition(block_start)
+        cursor.setPosition(block_start + len(indented), QTextCursor.MoveMode.KeepAnchor)
+        self.setTextCursor(cursor)
+
+    def unindent_selection(self):
+        cursor = self.textCursor()
+        if not cursor.hasSelection():
+            # No selection — unindent the current line
+            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            line = cursor.block().text()
+            if line.startswith("    "):
+                cursor.movePosition(QTextCursor.MoveOperation.Right,
+                                    QTextCursor.MoveMode.KeepAnchor, 4)
+                cursor.removeSelectedText()
+            elif line.startswith("\t"):
+                cursor.movePosition(QTextCursor.MoveOperation.Right,
+                                    QTextCursor.MoveMode.KeepAnchor, 1)
+                cursor.removeSelectedText()
+            return
+
+        start = cursor.selectionStart()
+        end = cursor.selectionEnd()
+
+        cursor.setPosition(start)
+        cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        block_start = cursor.position()
+
+        cursor.setPosition(end)
+        if cursor.atBlockStart() and end > start:
+            cursor.movePosition(QTextCursor.MoveOperation.PreviousBlock)
+        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+        block_end = cursor.position()
+
+        cursor.setPosition(block_start)
+        cursor.setPosition(block_end, QTextCursor.MoveMode.KeepAnchor)
+        selected = cursor.selectedText().replace('\u2029', '\n')
+
+        unindented = []
+        for line in selected.split('\n'):
+            if line.startswith("    "):
+                unindented.append(line[4:])
+            elif line.startswith("\t"):
+                unindented.append(line[1:])
+            else:
+                unindented.append(line)
+        result = '\n'.join(unindented)
+
+        cursor.beginEditBlock()
+        cursor.insertText(result)
+        cursor.endEditBlock()
+
+        cursor.setPosition(block_start)
+        cursor.setPosition(block_start + len(result), QTextCursor.MoveMode.KeepAnchor)
+        self.setTextCursor(cursor)
 
     def contextMenuEvent(self, event):
         menu = self.createStandardContextMenu(event.pos())
@@ -542,12 +483,13 @@ class GhostEditor(QPlainTextEdit):
 
         # --- REINDENT ACTION (always available) ---
         menu.addSeparator()
-        reindent_action = QAction(
-            "⇥ Fix Indentation" if active_cursor.hasSelection() else "⇥ Fix Indentation (whole file)",
-            self
-        )
-        reindent_action.triggered.connect(self.reindent_selection)
-        menu.addAction(reindent_action)
+        indent_action = QAction("⇥ Indent  (Ctrl+>)", self)
+        indent_action.triggered.connect(self.indent_selection)
+        menu.addAction(indent_action)
+
+        unindent_action = QAction("⇤ Unindent  (Ctrl+<)", self)
+        unindent_action.triggered.connect(self.unindent_selection)
+        menu.addAction(unindent_action)
 
         # --- SELECTION CHECK ---
         if active_cursor.hasSelection():
@@ -882,10 +824,10 @@ class GhostEditor(QPlainTextEdit):
             cursor_pos=self.textCursor().position(),
             generate_function=generate_function,
             is_edit=replace_selection,
-            model=model,        # <-- was missing
-            api_url=api_url,    # <-- was missing
-            api_key=api_key,    # <-- was missing
-            backend=backend,    # <-- was missing
+            model=model,
+            api_url=api_url,
+            api_key=api_key,
+            backend=backend,
         )
 
         worker.moveToThread(self.ai_thread)
@@ -1021,12 +963,14 @@ class GhostEditor(QPlainTextEdit):
             self.clear_ghost_text()
             return
 
-        if (event.key() == Qt.Key.Key_I and
-                event.modifiers() == (Qt.KeyboardModifier.ControlModifier |
-                                      Qt.KeyboardModifier.ShiftModifier)):
-            self.reindent_at_cursor()
+        if event.key() == Qt.Key.Key_BracketRight and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            self.indent_selection()
             return
 
+        if event.key() == Qt.Key.Key_BracketLeft and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            self.unindent_selection()
+            return
+        
         super().keyPressEvent(event)
         self.clear_ghost_text()
 
