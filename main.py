@@ -25,6 +25,7 @@ from ui.settings_dialog import SettingsDialog
 from ui.memory_manager import MemoryManager
 from ui.memory_panel import MemoryPanel
 from ui.chat_history_store import load_chat_history, save_chat_history
+from ui.session_manager import save_session, load_session
 
 from editor.highlighter import registry
 from plugins.git_plugin import GitDockWidget
@@ -385,7 +386,7 @@ class CodeEditor(QMainWindow):
         self.process.readyReadStandardError.connect(self.handle_stderr)
         self.process.finished.connect(self.process_finished)
 
-        self.add_new_tab("Untitled", "")
+        self._restore_session()
     
     def update_status_bar(self):
         editor = self.current_editor()
@@ -756,14 +757,13 @@ class CodeEditor(QMainWindow):
             if hasattr(editor, 'is_dirty') and editor.is_dirty():
                 unsaved = True
                 break
-
+    
         if unsaved:
             reply = QMessageBox.question(
                 self, "Unsaved Changes",
                 "You have unsaved files. Do you want to save them before exiting?",
                 QMessageBox.StandardButton.SaveAll | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel
             )
-
             if reply == QMessageBox.StandardButton.SaveAll:
                 for i in range(self.tabs.count()):
                     editor = self.tabs.widget(i)
@@ -774,8 +774,24 @@ class CodeEditor(QMainWindow):
                 event.accept()
             else:
                 event.ignore()
+                return
         else:
             event.accept()
+    
+        # Save session on the way out
+        if event.isAccepted():
+            tabs = []
+            for i in range(self.tabs.count()):
+                editor = self.tabs.widget(i)
+                path = getattr(editor, 'file_path', None)
+                cursor_pos = editor.textCursor().position() if editor else 0
+                tabs.append((path, cursor_pos))
+    
+            project_path = None
+            if hasattr(self, 'git_dock') and self.git_dock.repo_path:
+                project_path = self.git_dock.repo_path
+    
+            save_session(tabs, self.tabs.currentIndex(), project_path)
 
     def close_tab(self, index):
         editor = self.tabs.widget(index)
@@ -880,6 +896,64 @@ class CodeEditor(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Could not save file: {e}")
             return False
+            
+    def _restore_session(self):
+        session = load_session()
+    
+        if not session or not session.get("tabs"):
+            self.add_new_tab("Untitled", "")
+            return
+    
+        # Restore project folder first so git dock and file tree are correct
+        project_path = session.get("project_path")
+        if project_path and os.path.isdir(project_path):
+            if hasattr(self, 'tree_view') and hasattr(self, 'file_model'):
+                self.file_model.setRootPath(project_path)
+                self.tree_view.setRootIndex(self.file_model.index(project_path))
+            if hasattr(self, 'git_dock'):
+                self.git_dock.repo_path = project_path
+                self.git_dock.refresh_status()
+            if hasattr(self, 'memory_manager'):
+                self.memory_manager.set_project(project_path)
+            if hasattr(self, 'update_git_branch'):
+                self.update_git_branch()
+    
+        # Restore tabs
+        restored = 0
+        for tab_data in session.get("tabs", []):
+            path = tab_data.get("path")
+            cursor_pos = tab_data.get("cursor", 0)
+    
+            if not path or not os.path.exists(path):
+                continue
+    
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+    
+                filename = os.path.basename(path)
+                editor = self.add_new_tab(filename, content, path)
+    
+                # Restore cursor position
+                cursor = editor.textCursor()
+                cursor.setPosition(min(cursor_pos, len(content)))
+                editor.setTextCursor(cursor)
+                editor.ensureCursorVisible()
+                restored += 1
+    
+            except Exception as e:
+                print(f"Could not restore tab {path}: {e}")
+    
+        # Restore active tab
+        active = session.get("active_tab", 0)
+        if restored > 0 and active < self.tabs.count():
+            self.tabs.setCurrentIndex(active)
+        elif restored == 0:
+            # All files were missing — start fresh
+            self.add_new_tab("Untitled", "")
+    
+        self.update_status_bar()
+        self.update_git_branch()
 
     # -----------------------------
     # Cross-File Context Engine

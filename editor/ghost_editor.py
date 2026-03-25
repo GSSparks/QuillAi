@@ -982,13 +982,45 @@ class GhostEditor(QPlainTextEdit):
         cursor = self.textCursor()
         if not cursor.hasSelection():
             return
-
-        selected_text = cursor.selectedText().replace('\u2029', '\n')
-        prompt = f"Rewrite or improve this Python code:\n\n{selected_text}\n\nReturn ONLY code."
-        
+    
+        self._replacement_original = cursor.selectedText().replace('\u2029', '\n')
         self.replacement_cursor = cursor
+    
+        # Detect language from file extension
+        lang = "code"
+        if self.file_path:
+            ext = self.file_path.lower()
+            lang_map = {
+                '.py':   'Python',
+                '.sh':   'Bash',
+                '.bash': 'Bash',
+                '.yml':  'YAML/Ansible',
+                '.yaml': 'YAML/Ansible',
+                '.nix':  'Nix',
+                '.html': 'HTML',
+                '.htm':  'HTML',
+                '.js':   'JavaScript',
+                '.ts':   'TypeScript',
+                '.json': 'JSON',
+                '.md':   'Markdown',
+                '.lua':  'Lua',
+                '.go':   'Go',
+                '.rs':   'Rust',
+                '.c':    'C',
+                '.cpp':  'C++',
+            }
+            for suffix, name in lang_map.items():
+                if ext.endswith(suffix):
+                    lang = name
+                    break
+    
+        prompt = (
+            f"Rewrite or improve this {lang} code. "
+            f"Return ONLY {lang} code with no explanation, no markdown, no backticks:\n\n"
+            f"{self._replacement_original}"
+        )
         self.start_worker(prompt, replace_selection=True)
-
+        
     def _create_ai_worker(self, prompt, generate_function=False, replace_selection=False):
         try:
             if hasattr(self, 'ai_thread') and self.ai_thread is not None:
@@ -1068,11 +1100,21 @@ class GhostEditor(QPlainTextEdit):
 
     def finish_function_stream(self):
         if hasattr(self, "replacement_cursor") and self.function_output:
-            self.apply_replacement()
-
+            self._show_diff_dialog()
         self.function_active = False
         self.function_cursor = None
         self.function_output = ""
+    
+    def _show_diff_dialog(self):
+        from ui.diff_apply_dialog import DiffApplyDialog
+        original = getattr(self, '_replacement_original', '')
+        proposed = self.function_output.strip()
+    
+        dialog = DiffApplyDialog(original, proposed, parent=self.window())
+        if dialog.exec() and dialog.accepted_code is not None:
+            self.replacement_cursor.removeSelectedText()
+            self.replacement_cursor.insertText(dialog.accepted_code)
+        # If rejected, do nothing — original stays untouched
 
     def apply_replacement(self):
         cursor = self.replacement_cursor
