@@ -280,6 +280,7 @@ class CodeEditor(QMainWindow):
 
         setup_file_menu(self)
         self.setup_run_menu()
+        self.setup_view_menu()
 
         # UI Status Bar
         self.status_bar = self.statusBar()
@@ -1288,6 +1289,24 @@ class CodeEditor(QMainWindow):
         run_action.setShortcut(QKeySequence("F5"))
         run_action.triggered.connect(self.run_script)
         run_menu.addAction(run_action)
+
+    def setup_view_menu(self):
+        view_menu = self.menuBar().addMenu("View")
+
+        panels = [
+            ("Chat Panel",      lambda: (self.chat_dock.show(),        self.chat_dock.raise_())),
+            ("Memory Panel",    lambda: (self.memory_panel.show(),     self.memory_panel.raise_())),
+            ("Explorer",        lambda: (self.sidebar_dock.show(),     self.sidebar_dock.raise_())),
+            ("Source Control",  lambda: (self.git_dock.show(),         self.git_dock.raise_())),
+            ("Output",          lambda: (self.output_dock.show(),      self.output_dock.raise_())),
+            ("Find in Files",   lambda: (self.search_dock.show(),      self.search_dock.raise_())),
+            ("Markdown Preview",lambda: (self.md_preview_dock.show(),  self.md_preview_dock.raise_())),
+        ]
+
+        for name, fn in panels:
+            action = QAction(name, self)
+            action.triggered.connect(fn)
+            view_menu.addAction(action)
 
     def setup_output_panel(self):
         output_container = QWidget()

@@ -163,3 +163,48 @@ def setup_file_menu(window):
     file_menu.addSeparator()
     # Add the settings action at the bottom
     file_menu.addAction(settings_action)
+    
+def setup_view_menu(self):
+    view_menu = self.menuBar().addMenu("View")
+
+    memory_action = QAction("Memory Panel", self)
+    memory_action.triggered.connect(lambda: (
+        self.memory_panel.show(),
+        self.memory_panel.raise_()
+    ))
+    view_menu.addAction(memory_action)
+
+    chat_action = QAction("Chat Panel", self)
+    chat_action.triggered.connect(lambda: (
+        self.chat_dock.show(),
+        self.chat_dock.raise_()
+    ))
+    view_menu.addAction(chat_action)
+
+    git_action = QAction("Source Control", self)
+    git_action.triggered.connect(lambda: (
+        self.git_dock.show(),
+        self.git_dock.raise_()
+    ))
+    view_menu.addAction(git_action)
+
+    explorer_action = QAction("Explorer", self)
+    explorer_action.triggered.connect(lambda: (
+        self.sidebar_dock.show(),
+        self.sidebar_dock.raise_()
+    ))
+    view_menu.addAction(explorer_action)
+
+    output_action = QAction("Output", self)
+    output_action.triggered.connect(lambda: (
+        self.output_dock.show(),
+        self.output_dock.raise_()
+    ))
+    view_menu.addAction(output_action)
+
+    terminal_action = QAction("Find in Files", self)
+    terminal_action.triggered.connect(lambda: (
+        self.search_dock.show(),
+        self.search_dock.raise_()
+    ))
+    view_menu.addAction(terminal_action)
