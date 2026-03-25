@@ -136,6 +136,8 @@ class GhostEditor(QPlainTextEdit):
         super().__init__()
         self.settings_manager = settings_manager
         self._setup_jump_bar()
+        self._setup_inline_chat()
+
         # Comprehensive Modern UI Stylesheet
         self.setStyleSheet("""
             QPlainTextEdit {
@@ -701,6 +703,156 @@ class GhostEditor(QPlainTextEdit):
 
         menu.exec(event.globalPos())
         
+    def _setup_inline_chat(self):
+        from editor.inline_chat import InlineChatWidget
+        self._inline_chat = InlineChatWidget(self)
+        self._inline_chat_thread = None
+        self._inline_chat_worker = None
+        self._inline_chat.hide()
+        self._inline_chat.question_ready.connect(self._fire_inline_chat_worker)
+        self._inline_chat.insert_requested.connect(self._insert_inline_chat_code)
+        self._inline_chat.send_to_chat_requested.connect(self._relay_to_chat)
+        self._inline_chat.closed.connect(self.setFocus)
+    
+    def show_inline_chat(self):
+        if not hasattr(self, '_inline_chat'):
+            self._setup_inline_chat()
+    
+        cursor = self.textCursor()
+        line_num = cursor.blockNumber() + 1
+        line_text = cursor.block().text()
+    
+        self._inline_chat.set_context(line_num, line_text)
+        self._position_inline_chat()
+        self._inline_chat.show()
+        self._inline_chat.raise_()
+        self._inline_chat.input.setFocus()
+    
+    def _position_inline_chat(self):
+        cursor = self.textCursor()
+        rect = self.cursorRect(cursor)
+        # Position below the current line, offset from left gutter
+        x = self.line_number_area_width() + 20
+        y = rect.bottom() + 4
+        # Keep it inside the viewport vertically
+        max_y = self.viewport().height() - self._inline_chat.sizeHint().height() - 10
+        y = min(y, max_y)
+        self._inline_chat.move(x, y)
+        self._inline_chat.adjustSize()
+    
+    def _fire_inline_chat_worker(self, question):
+        if (hasattr(self, '_inline_chat_thread') and
+                self._inline_chat_thread is not None):
+            try:
+                if self._inline_chat_thread.isRunning():
+                    return  # silently ignore, input is disabled anyway
+            except RuntimeError:
+                self._inline_chat_thread = None
+        from ai.worker import AIWorker
+    
+        cursor = self.textCursor()
+        line_num = cursor.blockNumber() + 1
+    
+        # Build context — current line + surrounding 20 lines
+        doc = self.document()
+        start_block = max(0, cursor.blockNumber() - 10)
+        end_block = min(doc.blockCount() - 1, cursor.blockNumber() + 10)
+    
+        lines = []
+        for i in range(start_block, end_block + 1):
+            block = doc.findBlockByNumber(i)
+            prefix = ">>>" if i == cursor.blockNumber() else "   "
+            lines.append(f"{prefix} {block.text()}")
+        context_snippet = "\n".join(lines)
+    
+        lang = "code"
+        if self.file_path:
+            ext_map = {
+                '.py': 'Python', '.sh': 'Bash', '.bash': 'Bash',
+                '.yml': 'YAML', '.yaml': 'YAML', '.nix': 'Nix',
+                '.html': 'HTML', '.js': 'JavaScript', '.ts': 'TypeScript',
+            }
+            for ext, name in ext_map.items():
+                if self.file_path.lower().endswith(ext):
+                    lang = name
+                    break
+    
+        prompt = f"""The user is asking about {lang} code at line {line_num}.
+    
+    Code context (>>> marks the current line):
+    {context_snippet}
+    
+    User question: {question}
+    
+    Answer concisely. If you include code, use a single fenced code block."""
+    
+        if not self.settings_manager:
+            return
+    
+        model = self.settings_manager.get_chat_model()
+        api_url = self.settings_manager.get_api_url()
+        api_key = self.settings_manager.get_api_key()
+        backend = self.settings_manager.get_backend()
+    
+        # Cancel any existing inline chat request
+        if hasattr(self, '_inline_chat_thread') and self._inline_chat_thread is not None:
+            try:
+                if self._inline_chat_thread.isRunning():
+                    if hasattr(self, '_inline_chat_worker') and self._inline_chat_worker:
+                        self._inline_chat_worker.cancel()
+                    self._inline_chat_thread.quit()
+                    self._inline_chat_thread.wait(500)
+            except RuntimeError:
+                pass
+            self._inline_chat_thread = None
+            self._inline_chat_worker = None
+    
+        thread = QThread()
+        worker = AIWorker(
+            prompt=prompt,
+            editor_text="",
+            cursor_pos=0,
+            is_chat=True,
+            model=model,
+            api_url=api_url,
+            api_key=api_key,
+            backend=backend,
+        )
+        
+        # Store references so they aren't garbage collected
+        self._inline_chat_thread = thread
+        self._inline_chat_worker = worker
+        
+        worker.moveToThread(thread)
+        worker.chat_update.connect(self._inline_chat.append_response)
+        worker.finished.connect(self._inline_chat.response_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        
+        # Use thread.finished instead of worker.finished for cleanup
+        # This ensures the thread is fully stopped before we clear the reference
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_inline_chat_finished)
+        
+        thread.started.connect(worker.run)
+        thread.start()
+    
+    def _on_inline_chat_finished(self):
+        """Called when the inline chat thread fully stops."""
+        self._inline_chat_thread = None
+        self._inline_chat_worker = None    
+    
+    def _insert_inline_chat_code(self, code):
+        cursor = self.textCursor()
+        cursor.insertText(code)
+        self.setFocus()
+    
+    def _relay_to_chat(self, question, response):
+        # Bubble up to main window chat panel
+        self.send_to_chat_requested.emit(
+            f"**Inline question:** {question}\n\n**AI response:**\n{response}"
+        )
+        
     def handle_text_changed_for_ai(self):
         self.clear_ghost_text()
 
@@ -884,6 +1036,10 @@ class GhostEditor(QPlainTextEdit):
         # Keep jump bar pinned to the bottom
         if hasattr(self, '_jump_bar'):
             self._position_jump_bar()
+            
+        # Add to existing resizeEvent
+        if hasattr(self, '_inline_chat') and self._inline_chat.isVisible():
+            self._position_inline_chat()
             
     def line_number_area_paint_event(self, event):
         painter = QPainter(self.line_number_area)
@@ -1221,6 +1377,11 @@ class GhostEditor(QPlainTextEdit):
         if event.key() == Qt.Key.Key_Slash and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             self.toggle_comment()
             return
+        
+        # Ctrl+I — inline chat
+        if event.key() == Qt.Key.Key_I and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            self.show_inline_chat()
+            return        
         
         super().keyPressEvent(event)
         self.clear_ghost_text()
