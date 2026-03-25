@@ -305,6 +305,9 @@ class GitDockWidget(QDockWidget):
         import threading
         threading.Timer(2.0, lambda: self.commit_btn.setText("✓ Commit Selected")).start()
 
+        if hasattr(self.parent_window, 'update_git_branch'):
+            self.parent_window.update_git_branch()
+
     def push_changes(self):
         self.push_btn.setText("Pushing...")
         self.push_btn.setEnabled(False)
@@ -322,6 +325,9 @@ class GitDockWidget(QDockWidget):
         else:
             QMessageBox.information(self, "Push Successful", "Changes pushed to remote successfully!")
             self.refresh_status()
+            
+        if hasattr(self.parent_window, 'update_git_branch'):
+            self.parent_window.update_git_branch()
 
     def on_item_double_clicked(self, item, column):
         rel_path = item.data(0, Qt.ItemDataRole.UserRole)

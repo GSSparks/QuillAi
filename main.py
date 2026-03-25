@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QProgressBar, QLabel,
                              QDockWidget, QTreeView, QPlainTextEdit, QTextEdit,
                              QVBoxLayout, QWidget, QLineEdit, QTabWidget,
                              QPushButton, QHBoxLayout, QMessageBox, QFileDialog,
-                             QTextBrowser)
+                             QTextBrowser, QSizePolicy)
 from PyQt6.QtCore import QTimer, QThread, Qt, QDir, QProcess, QUrl
 from PyQt6.QtGui import (QFileSystemModel, QAction, QKeySequence, QTextCursor,
                          QIcon, QPixmap, QPainter, QColor, QShortcut,
@@ -240,6 +240,9 @@ class CodeEditor(QMainWindow):
                 border-top: 2px solid #0E639C;
             }
         """)
+        
+        self.tabs.currentChanged.connect(lambda _: self.update_status_bar())
+        self.tabs.currentChanged.connect(lambda _: self.update_git_branch())
 
         # --------------------------
         # Layout Assembly (Tabs + Find/Replace)
@@ -279,28 +282,92 @@ class CodeEditor(QMainWindow):
 
         # UI Status Bar
         self.status_bar = self.statusBar()
-        self.ai_mode_btn = QPushButton("🏠 LOCAL")
-        self.ai_mode_btn.setCheckable(True)
-        self.ai_mode_btn.setFlat(True)
-        self.ai_mode_btn.setStyleSheet("""
-            QPushButton { color: #888888; font-weight: bold; border: none; padding: 0 10px; }
-            QPushButton:checked { color: #007ACC; }
+        self.status_bar.setSizeGripEnabled(False)
+        self.status_bar.setStyleSheet("""
+            QStatusBar {
+                background-color: #007ACC;
+                color: #FFFFFF;
+                font-family: 'Inter', 'Segoe UI', sans-serif;
+                font-size: 9pt;
+            }
+            QStatusBar::item {
+                border: none;
+                background: transparent;
+            }
+            QStatusBar QLabel {
+                color: #FFFFFF;
+                background: transparent;
+                padding: 0 8px;
+                font-size: 9pt;
+            }
+            QStatusBar QPushButton {
+                color: #FFFFFF;
+                background: transparent;
+                border: none;
+                padding: 0 8px;
+                font-size: 9pt;
+                font-weight: bold;
+            }
+            QStatusBar QPushButton:hover {
+                background-color: rgba(255,255,255,0.15);
+            }
+            QStatusBar QProgressBar {
+                background-color: rgba(255,255,255,0.2);
+                border: none;
+                border-radius: 6px;
+                max-width: 100px;
+                min-height: 8px;
+                max-height: 8px;
+            }
+            QStatusBar QProgressBar::chunk {
+                background-color: #FFFFFF;
+                border-radius: 6px;
+            }
+            QPushButton {
+                color: #FFFFFF;
+                background: transparent;
+                border: none;
+                padding: 0 8px;
+                font-size: 9pt;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: rgba(255,255,255,0.15); }
         """)
-        # Set initial state based on saved settings
-        is_cloud = self.settings_manager.get_backend() == "openai"
-        self.ai_mode_btn.setChecked(is_cloud)
-        self.update_mode_label(is_cloud)
-
+        
+        # Left side — git branch
+        self.branch_label = QLabel("")
+        self.status_bar.addWidget(self.branch_label)
+        
+        # Separator between branch and the rest
+        sep = QLabel("|")
+        sep.setStyleSheet("color: rgba(255,255,255,0.3); padding: 0 2px;")
+        self.status_bar.addWidget(sep)
+        
+        # Right side items
+        self.filetype_label  = QLabel("")
+        self.indent_label    = QLabel("")
+        self.encoding_label  = QLabel("UTF-8")
+        self.lineending_label = QLabel("LF")
+        self.cursor_label    = QLabel("Ln 1, Col 1")
+        
+        for lbl in (self.filetype_label, self.indent_label,
+                    self.encoding_label, self.lineending_label,
+                    self.cursor_label):
+            self.status_bar.addPermanentWidget(lbl)
+        
+        # AI mode button and loading indicator
+        self.ai_mode_btn = QPushButton("🏠 LOCAL")
+        self.ai_mode_btn.setCheckable(False)
+        self.ai_mode_btn.setFlat(True)
+        self.ai_mode_btn.setFixedWidth(90) 
         self.ai_mode_btn.clicked.connect(self.toggle_ai_mode)
-        self.status_bar.addPermanentWidget(self.ai_mode_btn)
-        self.ai_status_label = QLabel("AI Thinking...")
-        self.ai_progress = QProgressBar()
-        self.ai_progress.setRange(0, 0)
-        self.ai_progress.setMaximumWidth(150)
-        self.ai_progress.setFixedHeight(14)
-        self.status_bar.addPermanentWidget(self.ai_status_label)
-        self.status_bar.addPermanentWidget(self.ai_progress)
+        backend = self.settings_manager.get_backend()
+        self.update_mode_label(backend)
+        self.status_bar.addPermanentWidget(self.ai_mode_btn) 
         self.hide_loading_indicator()
+        
+        # Set initial state based on saved settings  
+        self.update_mode_label(self.settings_manager.get_backend())
 
         # Panels & Sidebars
         self.setup_sidebar()
@@ -317,7 +384,111 @@ class CodeEditor(QMainWindow):
         self.process.finished.connect(self.process_finished)
 
         self.add_new_tab("Untitled", "")
-
+    
+    def update_status_bar(self):
+        editor = self.current_editor()
+        if not editor:
+            self.cursor_label.setText("")
+            self.filetype_label.setText("")
+            self.indent_label.setText("")
+            return
+    
+        # Ln / Col
+        cursor = editor.textCursor()
+        line = cursor.blockNumber() + 1
+        col  = cursor.columnNumber() + 1
+        self.cursor_label.setText(f"Ln {line}, Col {col}")
+    
+        # File type
+        path = getattr(editor, 'file_path', None)
+        if path:
+            ext = os.path.splitext(path)[1].lower()
+            type_map = {
+                '.py':   'Python',
+                '.md':   'Markdown',
+                '.html': 'HTML',
+                '.htm':  'HTML',
+                '.yml':  'YAML',
+                '.yaml': 'YAML',
+                '.nix':  'Nix',
+                '.sh':   'Bash',
+                '.bash': 'Bash',
+                '.js':   'JavaScript',
+                '.ts':   'TypeScript',
+                '.json': 'JSON',
+                '.toml': 'TOML',
+                '.txt':  'Text',
+            }
+            self.filetype_label.setText(type_map.get(ext, ext.lstrip('.').upper() or 'Plain Text'))
+        else:
+            self.filetype_label.setText('Plain Text')
+    
+        # Indentation — detect from file content
+        text = editor.toPlainText()
+        tab_count   = sum(1 for l in text.split('\n') if l.startswith('\t'))
+        space_count = sum(1 for l in text.split('\n') if l.startswith('    '))
+        if tab_count > space_count:
+            self.indent_label.setText("Tabs")
+        else:
+            self.indent_label.setText("Spaces: 4")
+    
+        # Line endings
+        raw = text
+        if '\r\n' in raw:
+            self.lineending_label.setText("CRLF")
+        elif '\r' in raw:
+            self.lineending_label.setText("CR")
+        else:
+            self.lineending_label.setText("LF")
+    
+        # Encoding — detect from file on disk if saved
+        if path and os.path.exists(path):
+            try:
+                import chardet
+                with open(path, 'rb') as f:
+                    raw_bytes = f.read(4096)
+                detected = chardet.detect(raw_bytes)
+                enc = (detected.get('encoding') or 'UTF-8').upper()
+                # Normalise common variants
+                enc = enc.replace('UTF-8-SIG', 'UTF-8 BOM').replace('ASCII', 'UTF-8')
+                self.encoding_label.setText(enc)
+            except ImportError:
+                self.encoding_label.setText("UTF-8")
+        else:
+            self.encoding_label.setText("UTF-8")
+    
+    def update_git_branch(self):
+        """Read the current git branch and update the status bar label."""
+        repo_path = None
+        if hasattr(self, 'git_dock') and self.git_dock.repo_path:
+            repo_path = self.git_dock.repo_path
+        else:
+            editor = self.current_editor()
+            if editor and getattr(editor, 'file_path', None):
+                repo_path = os.path.dirname(editor.file_path)
+    
+        if not repo_path:
+            self.branch_label.setText("")
+            return
+    
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+                cwd=repo_path,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=2,
+            )
+            if result.returncode == 0:
+                branch = result.stdout.strip()
+                self.branch_label.setText(f"⎇  {branch}")
+            else:
+                self.branch_label.setText("")
+        except Exception:
+            self.branch_label.setText("")    
+    
     def estimate_tokens(self, text: str) -> int:
         """Rough token estimate — 1 token ≈ 4 characters for code."""
         return len(text) // 4
@@ -386,16 +557,25 @@ class CodeEditor(QMainWindow):
 
         return "\n\n".join(parts)    
     
-    def toggle_ai_mode(self, checked):
-        backend = "openai" if checked else "llama"
+    def toggle_ai_mode(self):
+        current = self.settings_manager.get_backend()
+        if current == "llama":
+            backend = "openai"
+        elif current == "openai":
+            backend = "claude"
+        else:
+            backend = "llama"
         self.settings_manager.set_backend(backend)
-        self.update_mode_label(checked)
-
-        mode_str = "Cloud (OpenAI)" if checked else "Local (llama.cpp)"
-        self.statusBar().showMessage(f"AI Mode: {mode_str}", 3000)
-
-    def update_mode_label(self, is_cloud):
-        self.ai_mode_btn.setText("☁️ CLOUD" if is_cloud else "🏠 LOCAL")
+        self.update_mode_label(backend)
+        self.statusBar().showMessage(f"AI Mode: {backend}", 3000)
+    
+    def update_mode_label(self, backend):
+        labels = {
+            "llama":  "🏠 LOCAL",
+            "openai": "☁️  OPENAI",
+            "claude": "🟠 CLAUDE",
+        }
+        self.ai_mode_btn.setText(labels.get(backend, "🏠 LOCAL"))
 
     def create_worker(self, prompt, editor_text="", cursor_pos=0,
                       generate_function=False, is_edit=False, is_chat=False):
@@ -501,6 +681,9 @@ class CodeEditor(QMainWindow):
 
         editor.highlighter = registry.get_highlighter(editor.document(), ext)
 
+        editor.cursorPositionChanged.connect(self.update_status_bar)
+        editor.textChanged.connect(self.update_status_bar)        
+        
         editor.textChanged.connect(self.on_text_changed)
         editor.ai_started.connect(self.show_loading_indicator)
         editor.ai_finished.connect(self.hide_loading_indicator)
@@ -1292,13 +1475,17 @@ class CodeEditor(QMainWindow):
     # AI Control Methods
     # -----------------------------
     def show_loading_indicator(self):
-        self.ai_status_label.show()
-        self.ai_progress.show()
-        self.timer.stop()
-
+        index = self.tabs.currentIndex()
+        if index >= 0:
+            title = self.tabs.tabText(index)
+            if not title.startswith("⟳ "):
+                self.tabs.setTabText(index, "⟳ " + title)
+    
     def hide_loading_indicator(self):
-        self.ai_status_label.hide()
-        self.ai_progress.hide()
+        for i in range(self.tabs.count()):
+            title = self.tabs.tabText(i)
+            if title.startswith("⟳ "):
+                self.tabs.setTabText(i, title[2:])
 
     def on_text_changed(self):
         editor = self.current_editor()

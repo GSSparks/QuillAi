@@ -92,6 +92,11 @@ def setup_file_menu(window):
                         window.git_dock.repo_path = folder_path
                         window.git_dock.refresh_status()
 
+                    if hasattr(window, 'update_git_branch'):
+                        window.update_git_branch()
+                    if hasattr(window, 'update_status_bar'):
+                        window.update_status_bar()
+
     def open_file():
         # Get the project path for the dialog starting point
         start_dir = window.git_dock.repo_path if hasattr(window, 'git_dock') and window.git_dock.repo_path else QDir.currentPath()
