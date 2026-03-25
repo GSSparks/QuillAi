@@ -82,25 +82,39 @@ def setup_file_menu(window):
             selected_files = dialog.selectedFiles()
             if selected_files:
                 folder_path = selected_files[0]
-                
-                # Double-check the path is a valid directory string
+    
                 if os.path.isdir(folder_path):
+                    # Save current session before switching
+                    if hasattr(window, '_save_current_session'):
+                        window._save_current_session()
+    
+                    # Close all current tabs
+                    window._close_all_tabs_for_switch()
+    
+                    # Update file tree
                     if hasattr(window, 'tree_view') and hasattr(window, 'file_model'):
+                        window.file_model.setRootPath(folder_path)
                         window.tree_view.setRootIndex(window.file_model.index(folder_path))
-                    
+    
+                    # Update git dock
                     if hasattr(window, 'git_dock'):
                         window.git_dock.repo_path = folder_path
                         window.git_dock.refresh_status()
-
-                    if hasattr(window, 'update_git_branch'):
-                        window.update_git_branch()
-                    if hasattr(window, 'update_status_bar'):
-                        window.update_status_bar()
-                        
+    
+                    # Update memory
                     if hasattr(window, 'memory_manager'):
                         window.memory_manager.set_project(folder_path)
                     if hasattr(window, 'memory_panel'):
                         window.memory_panel.refresh()
+    
+                    if hasattr(window, 'update_git_branch'):
+                        window.update_git_branch()
+                    if hasattr(window, 'update_status_bar'):
+                        window.update_status_bar()
+    
+                    # Restore session for the new project
+                    if hasattr(window, '_restore_session'):
+                        window._restore_session(project_path=folder_path)
 
     def open_file():
         # Get the project path for the dialog starting point

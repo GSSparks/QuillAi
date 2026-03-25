@@ -780,18 +780,7 @@ class CodeEditor(QMainWindow):
     
         # Save session on the way out
         if event.isAccepted():
-            tabs = []
-            for i in range(self.tabs.count()):
-                editor = self.tabs.widget(i)
-                path = getattr(editor, 'file_path', None)
-                cursor_pos = editor.textCursor().position() if editor else 0
-                tabs.append((path, cursor_pos))
-    
-            project_path = None
-            if hasattr(self, 'git_dock') and self.git_dock.repo_path:
-                project_path = self.git_dock.repo_path
-    
-            save_session(tabs, self.tabs.currentIndex(), project_path)
+            self._save_current_session()
 
     def close_tab(self, index):
         editor = self.tabs.widget(index)
@@ -896,25 +885,44 @@ class CodeEditor(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Could not save file: {e}")
             return False
-            
-    def _restore_session(self):
-        session = load_session()
+
+    def _save_current_session(self):
+        """Save the current tab state for the current project."""
+        tabs = []
+        for i in range(self.tabs.count()):
+            editor = self.tabs.widget(i)
+            path = getattr(editor, 'file_path', None)
+            cursor_pos = editor.textCursor().position() if editor else 0
+            tabs.append((path, cursor_pos))
+    
+        project_path = None
+        if hasattr(self, 'git_dock') and self.git_dock.repo_path:
+            project_path = self.git_dock.repo_path
+    
+        save_session(tabs, self.tabs.currentIndex(), project_path)
+                    
+    def _restore_session(self, project_path=None):
+        # If no project_path passed, try to infer from git dock
+        if project_path is None and hasattr(self, 'git_dock') and self.git_dock.repo_path:
+            project_path = self.git_dock.repo_path
+    
+        session = load_session(project_path)
     
         if not session or not session.get("tabs"):
             self.add_new_tab("Untitled", "")
             return
     
-        # Restore project folder first so git dock and file tree are correct
-        project_path = session.get("project_path")
-        if project_path and os.path.isdir(project_path):
+        # Restore project folder
+        saved_project = session.get("project_path") or project_path
+        if saved_project and os.path.isdir(saved_project):
             if hasattr(self, 'tree_view') and hasattr(self, 'file_model'):
-                self.file_model.setRootPath(project_path)
-                self.tree_view.setRootIndex(self.file_model.index(project_path))
+                self.file_model.setRootPath(saved_project)
+                self.tree_view.setRootIndex(self.file_model.index(saved_project))
             if hasattr(self, 'git_dock'):
-                self.git_dock.repo_path = project_path
+                self.git_dock.repo_path = saved_project
                 self.git_dock.refresh_status()
             if hasattr(self, 'memory_manager'):
-                self.memory_manager.set_project(project_path)
+                self.memory_manager.set_project(saved_project)
             if hasattr(self, 'update_git_branch'):
                 self.update_git_branch()
     
@@ -934,7 +942,6 @@ class CodeEditor(QMainWindow):
                 filename = os.path.basename(path)
                 editor = self.add_new_tab(filename, content, path)
     
-                # Restore cursor position
                 cursor = editor.textCursor()
                 cursor.setPosition(min(cursor_pos, len(content)))
                 editor.setTextCursor(cursor)
@@ -944,16 +951,22 @@ class CodeEditor(QMainWindow):
             except Exception as e:
                 print(f"Could not restore tab {path}: {e}")
     
-        # Restore active tab
         active = session.get("active_tab", 0)
         if restored > 0 and active < self.tabs.count():
             self.tabs.setCurrentIndex(active)
         elif restored == 0:
-            # All files were missing — start fresh
             self.add_new_tab("Untitled", "")
     
         self.update_status_bar()
         self.update_git_branch()
+
+    def _close_all_tabs_for_switch(self):
+        """Close all tabs without prompting — session was already saved."""
+        while self.tabs.count() > 0:
+            widget = self.tabs.widget(0)
+            if widget:
+                widget.deleteLater()
+            self.tabs.removeTab(0)
 
     # -----------------------------
     # Cross-File Context Engine
