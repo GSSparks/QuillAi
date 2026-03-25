@@ -96,6 +96,11 @@ def setup_file_menu(window):
                         window.update_git_branch()
                     if hasattr(window, 'update_status_bar'):
                         window.update_status_bar()
+                        
+                    if hasattr(window, 'memory_manager'):
+                        window.memory_manager.set_project(folder_path)
+                    if hasattr(window, 'memory_panel'):
+                        window.memory_panel.refresh()
 
     def open_file():
         # Get the project path for the dialog starting point

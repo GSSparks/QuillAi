@@ -24,6 +24,7 @@ from ui.settings_manager import SettingsManager
 from ui.settings_dialog import SettingsDialog
 from ui.memory_manager import MemoryManager
 from ui.memory_panel import MemoryPanel
+from ui.chat_history_store import load_chat_history, save_chat_history
 
 from editor.highlighter import registry
 from plugins.git_plugin import GitDockWidget
@@ -498,7 +499,7 @@ class CodeEditor(QMainWindow):
         used = self.estimate_tokens(user_text)
         
         # ── Memory (highest priority after the message itself) ──
-        memory_ctx = self.memory_manager.build_memory_context()
+        memory_ctx = self.memory_manager.build_memory_context(query=user_text)
         used += self.estimate_tokens(memory_ctx)
 
         # ── 1. Active file (high priority, always include, but cap it) ──
@@ -1059,6 +1060,11 @@ class CodeEditor(QMainWindow):
         """)
         self.chat_history.anchorClicked.connect(self.handle_chat_link)
 
+        saved = load_chat_history()
+        if saved:
+            self.chat_history.setPlainText(saved)
+            self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
+
         self.chat_highlighter = ChatHighlighter(self.chat_history.document())
         clear_btn.clicked.connect(self.chat_history.clear)
 
@@ -1178,55 +1184,72 @@ class CodeEditor(QMainWindow):
 
     def chat_stream_finished(self):
         blocks = re.findall(r"```.*?\n(.*?)```", self.current_ai_raw_text, re.DOTALL)
-
         if blocks:
             last_code = blocks[-1].strip()
             encoded = base64.b64encode(last_code.encode('utf-8')).decode('utf-8')
-
             button_style = (
-                "color: #FFFFFF; "
-                "background-color: #0E639C; "
-                "padding: 5px 15px; "
-                "text-decoration: none; "
-                "border-radius: 3px; "
-                "font-family: sans-serif; "
-                "font-weight: bold;"
+                "color: #FFFFFF; background-color: #0E639C; padding: 5px 15px; "
+                "text-decoration: none; border-radius: 3px; font-family: sans-serif; font-weight: bold;"
             )
-
             link_html = f"<br><br><a href='insert:{encoded}' style='{button_style}'>&nbsp;⚡ INSERT CODE AT CURSOR&nbsp;</a><br>"
-
             self.chat_history.insertHtml(link_html)
-            
-        # Auto-summarize the conversation into memory
+    
         if self.current_ai_raw_text.strip():
             self._summarize_conversation_to_memory(self.current_ai_raw_text)
-
+    
+        # Save chat to disk
+        save_chat_history(self.chat_history.toPlainText())
+    
         self.chat_history.append("<br>")
         self.current_ai_raw_text = ""
         
     def _summarize_conversation_to_memory(self, ai_response: str):
-        """Fires a cheap background request to summarize the conversation."""
         last_user = ""
-        # Walk back through chat history to find the last user message
         text = self.chat_history.toPlainText()
         lines = text.strip().split('\n')
         for i in range(len(lines) - 1, -1, -1):
             if lines[i].startswith("You:"):
                 last_user = lines[i].replace("You:", "").strip()
                 break
-
+    
         if not last_user:
             return
-
+    
+        # Auto-extract facts heuristically before firing the LLM
+        extracted = self.memory_manager.extract_facts_from_exchange(
+            last_user, ai_response
+        )
+        for fact in extracted:
+            self.memory_manager.add_fact(fact, project_scoped=False)
+        if extracted and hasattr(self, 'memory_panel'):
+            self.memory_panel.refresh()
+    
         prompt = f"""In one sentence (max 20 words), summarize what this exchange was about.
     User asked: {last_user[:300]}
     Assistant answered: {ai_response[:500]}
     Reply with ONLY the one-sentence summary, nothing else."""
-
+    
         thread = QThread()
-        worker = self.create_worker(prompt=prompt, is_chat=True)
+        backend = self.settings_manager.get_backend()
+        if backend == "openai":
+            model = self.settings_manager.get("chat_model") or "gpt-4o-mini"
+        elif backend == "claude":
+            model = self.settings_manager.get("chat_model") or "claude-haiku-4-5-20251001"
+        else:
+            model = self.settings_manager.get_model()
+    
+        worker = AIWorker(
+            prompt=prompt,
+            editor_text="",
+            cursor_pos=0,
+            is_chat=True,
+            model=model,
+            api_url=self.settings_manager.get_api_url(),
+            api_key=self.settings_manager.get_api_key(),
+            backend=backend,
+        )
         worker.moveToThread(thread)
-
+    
         summary_buf = []
         worker.chat_update.connect(lambda t: summary_buf.append(t))
         worker.finished.connect(lambda: self.memory_manager.add_conversation(

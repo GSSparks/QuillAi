@@ -55,12 +55,24 @@ class AIWorker(QObject):
         self._cancelled = True
 
     def build_messages(self):
+        lang = self._detect_language()
+
         if self.is_chat:
+            system = (
+                f"You are QuillAI, a helpful programming assistant built directly "
+                f"into the user's IDE. "
+            )
+            if lang:
+                system += f"The user is currently working in {lang}. "
+            system += (
+                "Be concise and use markdown for code blocks. "
+                "When suggesting code, match the style and conventions visible "
+                "in the provided context. "
+                "If memory or past conversations are provided, use them to give "
+                "more personalised and relevant responses."
+            )
             return [
-                {
-                    "role": "system",
-                    "content": "You are QuillAi, a helpful programming assistant built directly into the user's IDE. Be concise and use markdown for code blocks.",
-                },
+                {"role": "system", "content": system},
                 {"role": "user", "content": self.prompt},
             ]
 
@@ -125,6 +137,25 @@ Do NOT repeat any code from context_after.
 """,
                 },
             ]
+
+    def _detect_language(self) -> str:
+        """Infer the language from the editor context."""
+        # Check for language hints in the prompt/context
+        context = (self.prompt + self.editor_text).lower()
+        patterns = [
+            ("Python",     ["def ", "import ", "class ", "elif ", "print("]),
+            ("Nix",        ["nixpkgs", "mkshell", "buildInputs", "environment.systemPackages"]),
+            ("Ansible",    ["ansible.builtin", "- name:", "hosts:", "tasks:"]),
+            ("Bash",       ["#!/bin/bash", "#!/usr/bin/env bash", "echo ", "fi\n", "done\n"]),
+            ("HTML",       ["<!doctype", "<html", "<div", "<body"]),
+            ("JavaScript", ["const ", "let ", "function ", "=>"]),
+            ("TypeScript", ["interface ", ": string", ": number", "tsx"]),
+            ("YAML",       ["---\n", "  - ", ": \n"]),
+        ]
+        for lang, signals in patterns:
+            if any(s in context for s in signals):
+                return lang
+        return ""
 
     def run(self):
         print(f"🚀 Worker created with api_url='{self.api_url}' backend='{self.backend}'")
