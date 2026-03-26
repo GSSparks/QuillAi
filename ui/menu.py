@@ -282,3 +282,9 @@ def setup_view_menu(self):
         action = QAction(name, self)
         action.triggered.connect(fn)
         view_menu.addAction(action)
+
+    toggle_completion_action = QAction("Toggle In-line Completion", self)
+    toggle_completion_action.setCheckable(True)
+    toggle_completion_action.setChecked(True) 
+    toggle_completion_action.toggled.connect(self.toggle_inline_completion)
+    view_menu.addAction(toggle_completion_action)
