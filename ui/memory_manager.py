@@ -124,20 +124,20 @@ class MemoryManager:
             import hashlib
             path_hash = hashlib.md5(self.project_path.encode()).hexdigest()[:12]
             name = os.path.basename(self.project_path.rstrip('/'))
-            return os.path.join(MEMORY_DIR, f"chat_{name}_{path_hash}.txt")
-        return os.path.join(MEMORY_DIR, "chat_global.txt")
+            return os.path.join(MEMORY_DIR, f"chat_{name}_{path_hash}.html")
+        return os.path.join(MEMORY_DIR, "chat_global.html")
     
-    def save_chat_history(self, text: str):
-        """Save chat history scoped to the current project."""
+    def save_chat_history(self, html: str):
+        """Save chat history HTML scoped to the current project."""
         os.makedirs(MEMORY_DIR, exist_ok=True)
         try:
             with open(self.get_chat_history_file(), "w", encoding="utf-8") as f:
-                f.write(text)
+                f.write(html)
         except Exception as e:
             print(f"Could not save chat history: {e}")
     
     def load_chat_history(self) -> str:
-        """Load chat history for the current project."""
+        """Load chat history HTML for the current project."""
         path = self.get_chat_history_file()
         if os.path.exists(path):
             try:
