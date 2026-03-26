@@ -1384,14 +1384,29 @@ class CodeEditor(QMainWindow):
                 lang = lang_match.group(1).lower() if lang_match else ""
                 code = re.sub(r'^```[\w]*\n?', '', part)
                 code = re.sub(r'\n?```$', '', code)
-    
+            
                 highlighted = self._highlight_code_block(code, lang)
-    
+            
+                # Encode code for the copy link
+                import base64
+                encoded = base64.b64encode(code.encode('utf-8')).decode('utf-8')
+                lang_label = lang.upper() if lang else "CODE"
+            
                 html_parts.append(
                     f'<table width="100%" cellpadding="0" cellspacing="0" '
                     f'style="margin:8px 0;">'
+                    f'<tr><td style="background-color:#2A2A2D; '
+                    f'border-radius:12px 12px 0 0; '
+                    f'padding:4px 12px;">'
+                    f'<span style="color:#888888; font-family:Hack,monospace; '
+                    f'font-size:8pt;">{lang_label}</span>'
+                    f'&nbsp;&nbsp;'
+                    f'<a href="copy:{encoded}" style="color:#569CD6; '
+                    f'font-family:Hack,monospace; font-size:8pt; '
+                    f'text-decoration:none;">⎘ Copy</a>'
+                    f'</td></tr>'
                     f'<tr><td style="background-color:#1A1A1C; '
-                    f'border:1px solid #3E3E42; border-radius:12px; '
+                    f'border:1px solid #3E3E42; border-radius:0 0 12px 12px; '
                     f'padding:12px 16px;">'
                     f'<pre style="margin:0; '
                     f'font-family:Hack,JetBrains Mono,Courier New,monospace; '
@@ -1707,15 +1722,20 @@ class CodeEditor(QMainWindow):
 
     def handle_chat_link(self, url: QUrl):
         url_str = url.toString()
+        
         if url_str.startswith("insert:"):
             encoded_code = url_str.replace("insert:", "")
             decoded_code = base64.b64decode(encoded_code).decode('utf-8')
-
             editor = self.current_editor()
             if editor:
                 editor.textCursor().insertText(decoded_code)
                 editor.setFocus()
-
+    
+        elif url_str.startswith("copy:"):
+            encoded_code = url_str.replace("copy:", "")
+            decoded_code = base64.b64decode(encoded_code).decode('utf-8')
+            QApplication.clipboard().setText(decoded_code)
+            self.statusBar().showMessage("Code copied to clipboard.", 2000)
     # -----------------------------
     # Runner Methods
     # -----------------------------
