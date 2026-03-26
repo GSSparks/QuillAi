@@ -26,6 +26,7 @@ from ui.memory_manager import MemoryManager
 from ui.memory_panel import MemoryPanel
 from ui.session_manager import save_session, load_session
 from ui.session_intent import init_tracker
+from ui.sliding_chat_panel import SlidingPanel
 
 from editor.highlighter import registry
 from plugins.git_plugin import GitDockWidget
@@ -537,11 +538,9 @@ class CodeEditor(QMainWindow):
             editor.request_completion_hotkey()
     
     def setup_markdown_preview(self):
-        from ui.markdown_preview import MarkdownPreviewDock
-        self.md_preview_dock = MarkdownPreviewDock(self)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.md_preview_dock)
-        self.tabifyDockWidget(self.chat_dock, self.md_preview_dock)
-        self.md_preview_dock.hide()
+        # Preview is now built into the sliding panel
+        # _refresh_markdown_preview calls chat_panel.update_preview directly
+        pass
         
     def _refresh_markdown_preview(self, editor=None):
         if editor is None:
@@ -549,12 +548,10 @@ class CodeEditor(QMainWindow):
         if not editor:
             return
         path = getattr(editor, 'file_path', '') or ''
-        is_md = path.lower().endswith(('.md', '.markdown')) or \
-                self.tabs.tabText(self.tabs.indexOf(editor)).lower().endswith(('.md', '.markdown'))
-        if is_md:
-            self.md_preview_dock.show()
-            self.md_preview_dock.raise_()
-            self.md_preview_dock.update_preview(editor.toPlainText())
+        is_md = path.lower().endswith(('.md', '.markdown'))
+        if is_md and hasattr(self, 'chat_panel'):
+            self.chat_panel.update_preview(editor.toPlainText())
+            self.chat_panel.switch_to_preview()
                     
     # -----------------------------
     # Find / Replace Method
@@ -635,7 +632,8 @@ class CodeEditor(QMainWindow):
         return editor
 
     def handle_editor_error_help(self, error_msg, code, line_num):
-        self.chat_dock.show()
+        self.chat_panel.expand()
+        self.chat_panel.chat_input.setFocus()
 
         user_text = f"I have a SyntaxError on line {line_num}: {error_msg}. Can you help me fix it?"
 
@@ -714,6 +712,14 @@ class CodeEditor(QMainWindow):
         # Save session on the way out
         if event.isAccepted():
             self._save_current_session()
+            
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'chat_panel'):
+            self.chat_panel.reposition()
+            self.chat_panel.setFixedHeight(
+                self.central_container.height()
+            )
 
     def close_tab(self, index):
         editor = self.tabs.widget(index)
@@ -910,8 +916,8 @@ class CodeEditor(QMainWindow):
             self.intent_tracker.record_file_edit(editor.file_path)
 
     def _restore_conversation(self, user_message: str, ai_response: str):
-        self.chat_dock.show()
-        self.chat_dock.raise_()
+        self.chat_panel.expand()
+        self.chat_panel.chat_input.setFocus()
         self.chat_history.clear()
         self.current_ai_raw_text = ""
         self._ai_response_buffer = ""
@@ -1058,102 +1064,55 @@ class CodeEditor(QMainWindow):
 
         return "".join(imported_context)
 
-    # -----------------------------
-    # Beautiful Chat Panel
-    # -----------------------------
     def setup_chat_panel(self):
-        self.chat_dock = QDockWidget("QuillAI Assistant", self)
-        self.chat_dock.setStyleSheet(DOCK_STYLE)
-
-        chat_container = QWidget()
-        chat_container.setStyleSheet("QWidget { background-color: #252526; }")
-        chat_layout = QVBoxLayout(chat_container)
-        chat_layout.setContentsMargins(10, 10, 10, 10)
-        chat_layout.setSpacing(10)
-
-        # --- Header ---
-        header_layout = QHBoxLayout()
-        title_label = QLabel("Project Context")
-        title_label.setStyleSheet("color: #888888; font-weight: bold; font-size: 9pt; text-transform: uppercase;")
-
-        clear_btn = QPushButton("🗑 Clear")
-        clear_btn.setStyleSheet("""
-            QPushButton { background-color: transparent; color: #888888; border: none; font-weight: bold; }
-            QPushButton:hover { color: #F44336; }
-        """)
-        
-        header_layout.addWidget(title_label)
-        header_layout.addStretch()
-        header_layout.addWidget(clear_btn)
-
-        # --- Chat History Box ---
-        self.chat_history = QTextBrowser()
-        self.chat_history.setOpenLinks(False)
-        self.chat_history.setStyleSheet("""
-            QTextBrowser {
-                background-color: #1E1E1E;
-                color: #D4D4D4;
-                border: 1px solid #3E3E42;
-                border-radius: 6px;
-                padding: 8px;
-            }
-        """)
+        self.chat_panel = SlidingPanel(
+            self.central_container,
+            settings_manager=self.settings_manager
+        )
+        self.chat_panel.message_sent.connect(self._on_chat_message)
+        self.chat_panel.show()
+        self.chat_panel.raise_()
+    
+        self.chat_history = self.chat_panel.chat_history
+        self.chat_input = self.chat_panel.chat_input
         self.chat_history.anchorClicked.connect(self.handle_chat_link)
-
+    
         saved = self.memory_manager.load_chat_history()
         if saved:
             self.chat_history.setHtml(saved)
             self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
 
-        clear_btn.clicked.connect(self.chat_history.clear)
-
-        # --- Input Area ---
-        input_layout = QHBoxLayout()
-
-        self.chat_input = QTextEdit()
-        self.chat_input.setFixedHeight(70)
-        self.chat_input.setPlaceholderText("Ask QuillAI about your code... (Ctrl+Enter to send)")
-        self.chat_input.setStyleSheet("""
-            QTextEdit {
-                background-color: #2D2D30;
-                color: #FFFFFF;
-                border: 1px solid #3E3E42;
-                border-radius: 6px;
-                padding: 10px;
-                font-family: 'Inter', 'SF Pro Text', 'Segoe UI', sans-serif;
-                font-size: 10pt;
-            }
-            QTextEdit:focus { border: 1px solid #0E639C; }
-        """)
-
-        self.send_shortcut = QShortcut(QKeySequence("Ctrl+Return"), self.chat_input)
-        self.send_shortcut.activated.connect(self.send_chat_message)
-
-        send_btn = QPushButton("➤")
-        send_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #0E639C;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                font-size: 14pt;
-                padding: 6px 12px;
-            }
-            QPushButton:hover { background-color: #1177BB; }
-            QPushButton:pressed { background-color: #094771; }
-        """)
-        send_btn.clicked.connect(self.send_chat_message)
-
-        input_layout.addWidget(self.chat_input)
-        input_layout.addWidget(send_btn)
-
-        chat_layout.addLayout(header_layout)
-        chat_layout.addWidget(self.chat_history)
-        chat_layout.addLayout(input_layout)
-
-        self.chat_dock.setWidget(chat_container)
-        self.chat_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.chat_dock)
+    def _on_chat_message(self, user_text: str):
+        self._append_user_message(user_text)
+    
+        editor = self.current_editor()
+        active_code = editor.toPlainText() if editor else ""
+        context = self.build_chat_context(user_text, active_code)
+        prompt_with_context = f"{user_text}\n\n{context}"
+    
+        self._ai_response_buffer = ""
+        self.current_ai_raw_text = ""
+    
+        thread = QThread()
+        self.chat_worker = self.create_worker(
+            prompt=prompt_with_context,
+            is_chat=True,
+        )
+        self.chat_worker.moveToThread(thread)
+        self.chat_worker.chat_update.connect(self.append_chat_stream)
+        self.chat_worker.finished.connect(self.chat_stream_finished)
+        self.chat_worker.finished.connect(thread.quit)
+        self.chat_worker.finished.connect(self.chat_worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self.show_loading_indicator()
+        self.chat_worker.finished.connect(self.hide_loading_indicator)
+        self.active_threads.append(thread)
+        thread.finished.connect(
+            lambda: self.active_threads.remove(thread)
+            if thread in self.active_threads else None
+        )
+        thread.started.connect(self.chat_worker.run)
+        thread.start()
 
     def send_chat_message(self):
         user_text = self.chat_input.toPlainText().strip()
@@ -1621,15 +1580,15 @@ class CodeEditor(QMainWindow):
         self.memory_panel.restore_conversation_requested.connect(
             self._restore_conversation
         )
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.memory_panel)
-        self.tabifyDockWidget(self.chat_dock, self.memory_panel)
-        self.memory_panel.hide()
+        # Inject into the sliding panel's memory tab
+        self.chat_panel.set_memory_widget(self.memory_panel)
 
     # ==========================================
     # The Two-Way Bridge Methods
     # ==========================================
     def load_snippet_to_chat(self, text):
-        self.chat_dock.show()
+        self.chat_panel.expand()
+        self.chat_panel.chat_input.setFocus()
         current_input = self.chat_input.toPlainText()
         new_text = f"```python\n{text}\n```\n"
 
@@ -1750,20 +1709,20 @@ class CodeEditor(QMainWindow):
         view_menu = self.menuBar().addMenu("View")
     
         panels = [
-            ("Chat Panel",       lambda: (self.chat_dock.show(),        self.chat_dock.raise_())),
-            ("Memory Panel",     lambda: (self.memory_panel.show(),     self.memory_panel.raise_())),
-            ("Explorer",         lambda: (self.sidebar_dock.show(),     self.sidebar_dock.raise_())),
-            ("Source Control",   lambda: (self.git_dock.show(),         self.git_dock.raise_())),
-            ("Output",           lambda: (self.output_dock.show(),      self.output_dock.raise_())),
-            ("Find in Files",    lambda: (self.search_dock.show(),      self.search_dock.raise_())),
-            ("Markdown Preview", lambda: (self.md_preview_dock.show(),  self.md_preview_dock.raise_())),
+            ("Chat",            lambda: self.chat_panel.switch_to_chat()),
+            ("Memory",          lambda: self.chat_panel.switch_to_memory()),
+            ("Markdown Preview",lambda: self.chat_panel.switch_to_preview()),
+            ("Explorer",        lambda: (self.sidebar_dock.show(), self.sidebar_dock.raise_())),
+            ("Source Control",  lambda: (self.git_dock.show(),     self.git_dock.raise_())),
+            ("Output",          lambda: (self.output_dock.show(),  self.output_dock.raise_())),
+            ("Find in Files",   lambda: (self.search_dock.show(),  self.search_dock.raise_())),
         ]
     
         for name, fn in panels:
             action = QAction(name, self)
             action.triggered.connect(fn)
             view_menu.addAction(action)
-    
+        
         toggle_completion_action = QAction("Toggle In-line Completion", self)
         toggle_completion_action.setCheckable(True)
         toggle_completion_action.setChecked(True) 
@@ -1858,7 +1817,8 @@ class CodeEditor(QMainWindow):
         if not self.current_error_text.strip():
             return
 
-        self.chat_dock.show()
+        self.chat_panel.expand()
+        self.chat_panel.chat_input.setFocus()
         self.explain_error_btn.hide()
 
         user_text = "My script crashed with an error. Can you explain what went wrong and how to fix it?"

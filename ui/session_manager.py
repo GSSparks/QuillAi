@@ -90,3 +90,7 @@ def list_project_sessions() -> list:
             except Exception:
                 continue
     return sessions
+    
+def set(self, key: str, value):
+    self._settings[key] = value
+    self._save()
