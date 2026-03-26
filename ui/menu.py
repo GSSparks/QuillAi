@@ -263,28 +263,3 @@ def setup_file_menu(window):
     file_menu.addAction(save_as_action)
     file_menu.addSeparator()
     file_menu.addAction(settings_action)
-
-
-def setup_view_menu(self):
-    view_menu = self.menuBar().addMenu("View")
-
-    panels = [
-        ("Chat Panel",       lambda: (self.chat_dock.show(),        self.chat_dock.raise_())),
-        ("Memory Panel",     lambda: (self.memory_panel.show(),     self.memory_panel.raise_())),
-        ("Explorer",         lambda: (self.sidebar_dock.show(),     self.sidebar_dock.raise_())),
-        ("Source Control",   lambda: (self.git_dock.show(),         self.git_dock.raise_())),
-        ("Output",           lambda: (self.output_dock.show(),      self.output_dock.raise_())),
-        ("Find in Files",    lambda: (self.search_dock.show(),      self.search_dock.raise_())),
-        ("Markdown Preview", lambda: (self.md_preview_dock.show(),  self.md_preview_dock.raise_())),
-    ]
-
-    for name, fn in panels:
-        action = QAction(name, self)
-        action.triggered.connect(fn)
-        view_menu.addAction(action)
-
-    toggle_completion_action = QAction("Toggle In-line Completion", self)
-    toggle_completion_action.setCheckable(True)
-    toggle_completion_action.setChecked(True) 
-    toggle_completion_action.toggled.connect(self.toggle_inline_completion)
-    view_menu.addAction(toggle_completion_action)
