@@ -299,45 +299,6 @@ class CodeEditor(QMainWindow):
         self.process.finished.connect(self.process_finished)
 
         self._restore_session()
-    def _test_memory(self):
-        """Directly tests the full memory pipeline."""
-        print("DEBUG: Testing memory pipeline directly...")
-        
-        # 1. Test fact extraction
-        extracted = self.memory_manager.extract_facts_from_exchange(
-            "I always use type hints in Python",
-            "Great idea, type hints improve readability"
-        )
-        print(f"DEBUG: Extracted facts: {extracted}")
-        
-        # 2. Test add_fact directly
-        self.memory_manager.add_fact("Test fact from button", project_scoped=False)
-        print(f"DEBUG: Facts after add: {self.memory_manager.get_global_facts()}")
-        
-        # 3. Test add_conversation directly
-        self.memory_manager.add_conversation("Test conversation summary")
-        print(f"DEBUG: Conversations after add: {self.memory_manager.get_conversations()}")
-        
-        # 4. Check file contents
-        import json
-        from ui.memory_manager import GLOBAL_MEMORY_FILE
-        if os.path.exists(GLOBAL_MEMORY_FILE):
-            with open(GLOBAL_MEMORY_FILE) as f:
-                data = json.load(f)
-            print(f"DEBUG: File contents: {json.dumps(data, indent=2)}")
-        else:
-            print(f"DEBUG: File does not exist at {GLOBAL_MEMORY_FILE}")
-        
-        # 5. Refresh panel
-        if hasattr(self, 'memory_panel'):
-            self.memory_panel.refresh()
-            print("DEBUG: Memory panel refreshed")
-        
-        # 6. Now test the summarization worker directly
-        print("DEBUG: Firing summarization worker...")
-        self._summarize_conversation_to_memory(
-            "This is a test AI response to check if summarization works correctly."
-        )
         
     def toggle_inline_completion(self, enabled):
         self.inline_completion_enabled = enabled
@@ -1121,11 +1082,6 @@ class CodeEditor(QMainWindow):
             QPushButton:hover { color: #F44336; }
         """)
         
-        test_btn = QPushButton("🧪 Test Memory")
-        test_btn.setStyleSheet("QPushButton { background-color: transparent; color: #888888; border: none; font-weight: bold; } QPushButton:hover { color: #4CAF50; }")
-        test_btn.clicked.connect(self._test_memory)
-        header_layout.addWidget(test_btn)
-
         header_layout.addWidget(title_label)
         header_layout.addStretch()
         header_layout.addWidget(clear_btn)
