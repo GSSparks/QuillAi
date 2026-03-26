@@ -47,29 +47,27 @@ class MinimapArea(QPlainTextEdit):
     def __init__(self, editor):
         super().__init__(editor)
         self.editor = editor
-                 
+
         self.setReadOnly(True)
         self.setWordWrapMode(QTextOption.WrapMode.NoWrap)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        
+
         self.setStyleSheet("""
             QPlainTextEdit {
-                background-color: #1E1E1E; 
-                color: #888888; 
-                border-left: 1px solid #333333; 
+                background-color: #1E1E1E;
+                color: #888888;
+                border-left: 1px solid #333333;
                 border-right: none;
                 border-top: none;
                 border-bottom: none;
             }
         """)
 
-        # font size to 4 so it's readable but out of the way
-        font = QFont("Hack", 4) 
+        font = QFont("Hack", 4)
         font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         self.setFont(font)
 
-        # Sync the scrolling
         self.editor.verticalScrollBar().valueChanged.connect(self.sync_scroll)
 
     def sync_scroll(self, value):
@@ -91,35 +89,31 @@ class MinimapArea(QPlainTextEdit):
     def jump_to_click(self, pos):
         cursor = self.cursorForPosition(pos)
         block_number = cursor.blockNumber()
-        
         editor_cursor = QTextCursor(self.editor.document().findBlockByNumber(block_number))
         self.editor.setTextCursor(editor_cursor)
         self.editor.centerCursor()
 
     def wheelEvent(self, event):
-        # Forwards all minimap scrolls to the main editor, preventing accidental minimap zooming
         self.editor.wheelEvent(event)
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        
+
         painter = QPainter(self.viewport())
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(255, 255, 255, 12))
 
         fm_editor = QFontMetrics(self.editor.font())
-        visible_lines_editor = self.editor.viewport().height() / (fm_editor.height() * 1.5) 
+        visible_lines_editor = self.editor.viewport().height() / (fm_editor.height() * 1.5)
 
         fm_minimap = QFontMetrics(self.font())
         top_block = self.editor.firstVisibleBlock()
-        
+
         minimap_block = self.document().findBlockByNumber(top_block.blockNumber())
         if minimap_block.isValid():
             geom = self.blockBoundingGeometry(minimap_block).translated(self.contentOffset())
-            
             rect_y = geom.top()
-            rect_height = visible_lines_editor * (fm_minimap.height() * 1.5) 
-            
+            rect_height = visible_lines_editor * (fm_minimap.height() * 1.5)
             painter.drawRect(0, int(rect_y), self.width(), int(rect_height))
 
 
@@ -129,26 +123,24 @@ class MinimapArea(QPlainTextEdit):
 class GhostEditor(QPlainTextEdit):
     ai_started = pyqtSignal()
     ai_finished = pyqtSignal()
-    error_help_requested = pyqtSignal(str, str, int) 
+    error_help_requested = pyqtSignal(str, str, int)
     send_to_chat_requested = pyqtSignal(str)
-    
-    def __init__(self, settings_manager=None):
+
+    def __init__(self, settings_manager=None, intent_tracker=None):
         super().__init__()
         self.settings_manager = settings_manager
+        self.intent_tracker = intent_tracker
         self._setup_jump_bar()
         self._setup_inline_chat()
 
-        # Comprehensive Modern UI Stylesheet
         self.setStyleSheet("""
             QPlainTextEdit {
                 background-color: #1E1E1E;
-                color: #D4D4D4; /* Softer, highly readable white/grey */
+                color: #D4D4D4;
                 border: none;
-                selection-background-color: #264F78; /* VS Code Blue */
+                selection-background-color: #264F78;
                 selection-color: #FFFFFF;
             }
-            
-            /* Modern Thin Vertical Scrollbar */
             QScrollBar:vertical {
                 border: none;
                 background: #1E1E1E;
@@ -159,19 +151,11 @@ class GhostEditor(QPlainTextEdit):
                 background: #424242;
                 min-height: 30px;
                 border-radius: 7px;
-                margin: 2px 3px 2px 3px; /* Pushes the handle in so it floats */
+                margin: 2px 3px 2px 3px;
             }
-            QScrollBar::handle:vertical:hover {
-                background: #4F4F4F;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px; /* Hides the ugly up/down arrows */
-            }
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-                background: none;
-            }
-            
-            /* Modern Thin Horizontal Scrollbar */
+            QScrollBar::handle:vertical:hover { background: #4F4F4F; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
             QScrollBar:horizontal {
                 border: none;
                 background: #1E1E1E;
@@ -184,71 +168,101 @@ class GhostEditor(QPlainTextEdit):
                 border-radius: 7px;
                 margin: 3px 2px 3px 2px;
             }
-            QScrollBar::handle:horizontal:hover {
-                background: #4F4F4F;
-            }
-            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
-                width: 0px;
-            }
-            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
-                background: none;
-            }
+            QScrollBar::handle:horizontal:hover { background: #4F4F4F; }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: none; }
         """)
 
         self.file_path = None
         self.ghost_text = ""
-        self.snippet_manager = SnippetManager() 
+        self.snippet_manager = SnippetManager()
         self.setWordWrapMode(QTextOption.WrapMode.NoWrap)
 
         self.function_cursor = None
         self.function_active = False
         self.function_output = ""
 
-        # Main editor starting font
         font = QFont("Hack")
         font.setPointSize(10)
         font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         self.setFont(font)
-        
+
         self.document().setDocumentMargin(12)
 
         self.original_text = ""
-        self.line_changes = {} 
-        
+        self.line_changes = {}
+
         self.diff_timer = QTimer(self)
         self.diff_timer.setSingleShot(True)
         self.diff_timer.timeout.connect(self.calculate_diff)
-        self.textChanged.connect(lambda: self.diff_timer.start(400)) 
+        self.textChanged.connect(lambda: self.diff_timer.start(400))
 
         self.lint_timer = QTimer(self)
         self.lint_timer.setSingleShot(True)
         self.lint_timer.timeout.connect(self.run_linter)
-        self.textChanged.connect(lambda: self.lint_timer.start(750)) 
-        
-        # ==========================================
-        # AI Inline Completion Timer
-        # ==========================================
+        self.textChanged.connect(lambda: self.lint_timer.start(750))
+
         self.ai_suggest_timer = QTimer(self)
         self.ai_suggest_timer.setSingleShot(True)
         self.ai_suggest_timer.timeout.connect(self.trigger_inline_completion)
-        self.textChanged.connect(self.handle_text_changed_for_ai)        
-        
+        self.textChanged.connect(self.handle_text_changed_for_ai)
+
         self.current_line_selection = []
         self.lint_selections = []
         self.current_syntax_error = None
 
         self.line_number_area = LineNumberArea(self)
-        
+
         self.minimap_width = 100
         self.minimap = MinimapArea(self)
-        
+
         self.blockCountChanged.connect(self.update_line_number_area_width)
         self.updateRequest.connect(self.update_line_number_area)
         self.update_line_number_area_width(0)
         self.setTabStopDistance(4 * self.fontMetrics().horizontalAdvance(' '))
-        
+
         self.cursorPositionChanged.connect(self.highlight_current_line)
-        self.highlight_current_line() 
+        self.cursorPositionChanged.connect(self._track_cursor_symbol)
+        self.highlight_current_line()
+
+    # ── Intent tracking ───────────────────────────────────────────────────
+
+    def _get_language(self) -> str:
+        if not self.file_path:
+            return "code"
+        ext_map = {
+            '.py': 'Python', '.sh': 'Bash', '.bash': 'Bash',
+            '.yml': 'YAML', '.yaml': 'YAML', '.nix': 'Nix',
+            '.html': 'HTML', '.htm': 'HTML', '.js': 'JavaScript',
+            '.ts': 'TypeScript', '.json': 'JSON', '.md': 'Markdown',
+            '.lua': 'Lua', '.go': 'Go', '.rs': 'Rust',
+            '.c': 'C', '.cpp': 'C++',
+        }
+        for ext, name in ext_map.items():
+            if self.file_path.lower().endswith(ext):
+                return name
+        return "code"
+
+    def _track_cursor_symbol(self):
+        """Record which function/class the cursor is inside for intent tracking."""
+        if not self.intent_tracker:
+            return
+        text = self.toPlainText()
+        pos = self.textCursor().position()
+        symbol = self.intent_tracker.get_current_symbol(text, pos)
+        if symbol:
+            self.intent_tracker.record_cursor_symbol(symbol)
+
+    def _get_intent_context(self) -> str:
+        """Returns the cached intent context string, or empty if no tracker."""
+        if not self.intent_tracker:
+            return ""
+        return self.intent_tracker.build_intent_context(
+            current_file_path=self.file_path or "",
+            language=self._get_language(),
+        )
+
+    # ── Jump bar ──────────────────────────────────────────────────────────
 
     def _setup_jump_bar(self):
         from PyQt6.QtWidgets import QLineEdit
@@ -267,25 +281,25 @@ class GhostEditor(QPlainTextEdit):
         """)
         self._jump_bar.setFixedHeight(28)
         self._jump_bar.hide()
-        # No returnPressed connection — eventFilter handles Enter
         self._jump_bar.installEventFilter(self)
-    
+
     def _show_jump_bar(self):
         self._jump_bar.clear()
         self._jump_bar.show()
         self._jump_bar.setFocus()
         self._position_jump_bar()
-    
+
     def _position_jump_bar(self):
         cr = self.contentsRect()
-        scrollbar_height = 20  # enough to clear the horizontal scrollbar
+        hbar = self.horizontalScrollBar()
+        scrollbar_height = hbar.height() if hbar.isVisible() else 20
         self._jump_bar.setGeometry(
             cr.left() + self.line_number_area_width(),
             cr.bottom() - 28 - scrollbar_height,
             cr.width() - self.line_number_area_width() - self.minimap_width,
             28
         )
-    
+
     def _do_jump(self):
         text = self._jump_bar.text().strip()
         self._jump_bar.hide()
@@ -300,7 +314,7 @@ class GhostEditor(QPlainTextEdit):
         except ValueError:
             pass
         self.setFocus()
-        
+
     def eventFilter(self, obj, event):
         from PyQt6.QtCore import QEvent
         if hasattr(self, '_jump_bar') and obj == self._jump_bar:
@@ -311,398 +325,11 @@ class GhostEditor(QPlainTextEdit):
                     return True
                 if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
                     self._do_jump()
-                    return True  # consume the event — never reaches the editor
-        return super().eventFilter(obj, event)   
-    
-    def duplicate_line(self):
-        cursor = self.textCursor()
-        if cursor.hasSelection():
-            # Duplicate the whole selection
-            start = cursor.selectionStart()
-            end = cursor.selectionEnd()
-            selected = cursor.selectedText().replace('\u2029', '\n')
-            cursor.setPosition(end)
-            cursor.insertText('\n' + selected)
-            # Re-select the new copy
-            cursor.setPosition(end + 1)
-            cursor.setPosition(end + 1 + len(selected),
-                               QTextCursor.MoveMode.KeepAnchor)
-        else:
-            # Duplicate current line
-            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock,
-                                QTextCursor.MoveMode.KeepAnchor)
-            line_text = cursor.selectedText()
-            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
-            cursor.insertText('\n' + line_text)
-            # Move cursor to the duplicate
-            cursor.movePosition(QTextCursor.MoveOperation.Down)
-        self.setTextCursor(cursor)
-    
-    def toggle_comment(self):
-        """Toggle # comments on the current line or every line in the selection."""
-        cursor = self.textCursor()
-        # Detect comment character from file extension
-        comment_char = self._get_comment_char()
-    
-        if cursor.hasSelection():
-            start = cursor.selectionStart()
-            end = cursor.selectionEnd()
-    
-            # Expand to full lines
-            cursor.setPosition(start)
-            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-            block_start = cursor.position()
-    
-            cursor.setPosition(end)
-            if cursor.atBlockStart() and end > start:
-                cursor.movePosition(QTextCursor.MoveOperation.PreviousBlock)
-            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
-            block_end = cursor.position()
-    
-            cursor.setPosition(block_start)
-            cursor.setPosition(block_end, QTextCursor.MoveMode.KeepAnchor)
-            selected = cursor.selectedText().replace('\u2029', '\n')
-            lines = selected.split('\n')
-        else:
-            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-            block_start = cursor.position()
-            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock,
-                                QTextCursor.MoveMode.KeepAnchor)
-            block_end = cursor.position()
-            lines = [cursor.selectedText()]
-    
-        # Decide: if ALL non-empty lines are commented, uncomment. Otherwise comment.
-        all_commented = all(
-            l.lstrip().startswith(comment_char)
-            for l in lines if l.strip()
-        )
-    
-        result = []
-        for line in lines:
-            if not line.strip():
-                result.append(line)
-                continue
-            if all_commented:
-                # Remove the comment char (and one space if present)
-                stripped = line.lstrip()
-                indent = line[:len(line) - len(stripped)]
-                if stripped.startswith(comment_char + ' '):
-                    result.append(indent + stripped[len(comment_char) + 1:])
-                else:
-                    result.append(indent + stripped[len(comment_char):])
-            else:
-                # Add comment char preserving indent
-                stripped = line.lstrip()
-                indent = line[:len(line) - len(stripped)]
-                result.append(indent + comment_char + ' ' + stripped)
-    
-        new_text = '\n'.join(result)
-        cursor.setPosition(block_start)
-        cursor.setPosition(block_end, QTextCursor.MoveMode.KeepAnchor)
-    
-        cursor.beginEditBlock()
-        cursor.insertText(new_text)
-        cursor.endEditBlock()
-    
-        # Restore selection
-        cursor.setPosition(block_start)
-        cursor.setPosition(block_start + len(new_text),
-                           QTextCursor.MoveMode.KeepAnchor)
-        self.setTextCursor(cursor)
-    
-    def _get_comment_char(self):
-        """Returns the line comment character for the current file type."""
-        if not self.file_path:
-            return '#'
-        ext = self.file_path.lower()
-        if ext.endswith(('.py', '.sh', '.bash', '.yml', '.yaml', '.nix')):
-            return '#'
-        if ext.endswith(('.js', '.ts', '.cpp', '.c', '.java', '.go')):
-            return '//'
-        if ext.endswith('.lua'):
-            return '--'
-        return '#'    
-        
-    def setPlainText(self, text):
-        super().setPlainText(text)
-        
-        # [NEW] Explicitly set the minimap text since they are now decoupled
-        self.minimap.setPlainText(text)
-        
-        # Apply 150% line height to main editor
-        cursor = self.textCursor()
-        cursor.select(QTextCursor.SelectionType.Document)
-        fmt = QTextBlockFormat()
-        fmt.setLineHeight(150, 1) 
-        cursor.mergeBlockFormat(fmt)
-        cursor.clearSelection()
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
-        self.setTextCursor(cursor)
+                    return True
+        return super().eventFilter(obj, event)
 
-        # Apply 150% line height to the minimap so the lines match up perfectly
-        m_cursor = self.minimap.textCursor()
-        m_cursor.select(QTextCursor.SelectionType.Document)
-        m_cursor.mergeBlockFormat(fmt)
-        m_cursor.clearSelection()
-        m_cursor.movePosition(QTextCursor.MoveOperation.Start)
-        self.minimap.setTextCursor(m_cursor)
+    # ── Inline chat ───────────────────────────────────────────────────────
 
-    def highlight_current_line(self):
-        self.current_line_selection = []
-        if not self.isReadOnly():
-            selection = QTextEdit.ExtraSelection()
-            line_color = QColor("#2A2D2E")
-            selection.format.setBackground(line_color)
-            selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
-
-            selection.cursor = self.textCursor()
-            selection.cursor.clearSelection()
-            self.current_line_selection.append(selection)
-
-        self.update_extra_selections()
-
-    def update_extra_selections(self):
-        self.setExtraSelections(self.current_line_selection + self.lint_selections)
-
-    def _draw_error_squiggle(self, line_idx, col_offset, error_msg, end_offset=None):
-        self.current_syntax_error = {
-            'msg': error_msg,
-            'lineno': line_idx + 1,
-            'offset': col_offset
-        }
-        
-        selection = QTextEdit.ExtraSelection()
-        selection.format.setUnderlineStyle(QTextCharFormat.UnderlineStyle.WaveUnderline)
-        selection.format.setUnderlineColor(QColor("#F44336")) 
-        
-        cursor = QTextCursor(self.document())
-        cursor.setPosition(self.document().findBlockByNumber(line_idx).position())
-        cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.MoveAnchor, col_offset)
-        
-        if end_offset is not None and end_offset > col_offset:
-            length = end_offset - col_offset
-            cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, length)
-        else:
-            cursor.select(QTextCursor.SelectionType.WordUnderCursor)
-        
-        if not cursor.hasSelection():
-            cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.KeepAnchor, 1)
-
-        selection.cursor = cursor
-        self.lint_selections.append(selection)
-
-    def run_linter(self):
-        self.lint_selections = []
-        self.current_syntax_error = None 
-        text = self.toPlainText()
-        
-        if not text.strip() or not self.file_path:
-            self.update_extra_selections()
-            return
-
-        ext = self.file_path.lower()
-        
-        # ==========================================
-        # PYTHON LINTING
-        # ==========================================
-        if ext.endswith('.py'):
-            try:
-                ast.parse(text)
-            except SyntaxError as e:
-                line_idx = (e.lineno - 1) if e.lineno is not None else 0
-                col_offset = (e.offset - 1) if e.offset is not None else 0
-                end_offset = (e.end_offset - 1) if hasattr(e, 'end_offset') and e.end_offset is not None else None
-                self._draw_error_squiggle(line_idx, col_offset, e.msg, end_offset)
-            except Exception:
-                pass
-
-        # ==========================================
-        # YAML / ANSIBLE LINTING
-        # ==========================================
-        elif ext.endswith(('.yml', '.yaml')) and HAS_YAML:
-            try:
-                yaml.safe_load(text)
-            except yaml.YAMLError as e:
-                if hasattr(e, 'problem_mark') and e.problem_mark is not None:
-                    line_idx = e.problem_mark.line
-                    col_offset = e.problem_mark.column
-                    self._draw_error_squiggle(line_idx, col_offset, str(e))
-            except Exception:
-                pass
-
-        # ==========================================
-        # BASH LINTING via SHELLCHECK
-        # ==========================================
-        elif ext.endswith(('.sh', '.bash')):
-            try:
-                # Pass text to shellcheck via stdin, ask for JSON output
-                process = subprocess.Popen(
-                    ['shellcheck', '-f', 'json', '-'],
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True
-                )
-                stdout, _ = process.communicate(input=text)
-                
-                if stdout:
-                    errors = json.loads(stdout)
-                    for err in errors:
-                        # Shellcheck uses 1-based indexing
-                        line_idx = err.get('line', 1) - 1
-                        col_offset = err.get('column', 1) - 1
-                        end_offset = err.get('endColumn', col_offset + 1) - 1
-                        
-                        msg = f"SC{err.get('code')}: {err.get('message')}"
-                        self._draw_error_squiggle(line_idx, col_offset, msg, end_offset)
-            except FileNotFoundError:
-                # [NEW] Print to the terminal so we can see it!
-                print("LINTER ERROR: shellcheck binary not found in PATH!")
-            except Exception as e:
-                # [NEW] Print any JSON parsing or Subprocess errors
-                print(f"LINTER ERROR: {e}")
-  
-    def indent_selection(self):
-        cursor = self.textCursor()
-        if not cursor.hasSelection():
-            # No selection — just indent the current line
-            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-            cursor.insertText("    ")
-            return
-
-        start = cursor.selectionStart()
-        end = cursor.selectionEnd()
-
-        # Expand selection to cover full lines
-        cursor.setPosition(start)
-        cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-        block_start = cursor.position()
-
-        cursor.setPosition(end)
-        if cursor.atBlockStart() and end > start:
-            # Don't indent the line after the selection if cursor is at its start
-            cursor.movePosition(QTextCursor.MoveOperation.PreviousBlock)
-        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
-        block_end = cursor.position()
-
-        cursor.setPosition(block_start)
-        cursor.setPosition(block_end, QTextCursor.MoveMode.KeepAnchor)
-        selected = cursor.selectedText().replace('\u2029', '\n')
-
-        indented = '\n'.join("    " + line for line in selected.split('\n'))
-
-        cursor.beginEditBlock()
-        cursor.insertText(indented)
-        cursor.endEditBlock()
-
-        # Restore selection over the modified lines
-        cursor.setPosition(block_start)
-        cursor.setPosition(block_start + len(indented), QTextCursor.MoveMode.KeepAnchor)
-        self.setTextCursor(cursor)
-
-    def unindent_selection(self):
-        cursor = self.textCursor()
-        if not cursor.hasSelection():
-            # No selection — unindent the current line
-            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-            line = cursor.block().text()
-            if line.startswith("    "):
-                cursor.movePosition(QTextCursor.MoveOperation.Right,
-                                    QTextCursor.MoveMode.KeepAnchor, 4)
-                cursor.removeSelectedText()
-            elif line.startswith("\t"):
-                cursor.movePosition(QTextCursor.MoveOperation.Right,
-                                    QTextCursor.MoveMode.KeepAnchor, 1)
-                cursor.removeSelectedText()
-            return
-
-        start = cursor.selectionStart()
-        end = cursor.selectionEnd()
-
-        cursor.setPosition(start)
-        cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-        block_start = cursor.position()
-
-        cursor.setPosition(end)
-        if cursor.atBlockStart() and end > start:
-            cursor.movePosition(QTextCursor.MoveOperation.PreviousBlock)
-        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
-        block_end = cursor.position()
-
-        cursor.setPosition(block_start)
-        cursor.setPosition(block_end, QTextCursor.MoveMode.KeepAnchor)
-        selected = cursor.selectedText().replace('\u2029', '\n')
-
-        unindented = []
-        for line in selected.split('\n'):
-            if line.startswith("    "):
-                unindented.append(line[4:])
-            elif line.startswith("\t"):
-                unindented.append(line[1:])
-            else:
-                unindented.append(line)
-        result = '\n'.join(unindented)
-
-        cursor.beginEditBlock()
-        cursor.insertText(result)
-        cursor.endEditBlock()
-
-        cursor.setPosition(block_start)
-        cursor.setPosition(block_start + len(result), QTextCursor.MoveMode.KeepAnchor)
-        self.setTextCursor(cursor)
-
-    def contextMenuEvent(self, event):
-        menu = self.createStandardContextMenu(event.pos())
-        active_cursor = self.textCursor()
-        click_cursor = self.cursorForPosition(event.pos())
-        clicked_line = click_cursor.blockNumber() + 1
-
-        # --- REINDENT ACTION (always available) ---
-        menu.addSeparator()
-        indent_action = QAction("⇥ Indent  (Ctrl+>)", self)
-        indent_action.triggered.connect(self.indent_selection)
-        menu.addAction(indent_action)
-
-        unindent_action = QAction("⇤ Unindent  (Ctrl+<)", self)
-        unindent_action.triggered.connect(self.unindent_selection)
-        menu.addAction(unindent_action)
-        
-        menu.addSeparator()
-        dup_action = QAction("⧉ Duplicate Line  (Ctrl+D)", self)
-        dup_action.triggered.connect(self.duplicate_line)
-        menu.addAction(dup_action)
-        
-        comment_action = QAction("# Toggle Comment  (Ctrl+/)", self)
-        comment_action.triggered.connect(self.toggle_comment)
-        menu.addAction(comment_action)
-        
-        jump_action = QAction("⤵ Go to Line  (Ctrl+G)", self)
-        jump_action.triggered.connect(self._show_jump_bar)
-        menu.addAction(jump_action)
-
-        # --- SELECTION CHECK ---
-        if active_cursor.hasSelection():
-            menu.addSeparator()
-            chat_action = QAction("💬 Send to Chat", self)
-            selected_text = active_cursor.selectedText().replace('\u2029', '\n')
-            chat_action.triggered.connect(
-                lambda: self.send_to_chat_requested.emit(selected_text)
-            )
-            menu.addAction(chat_action)
-
-        # --- SYNTAX ERROR CHECK ---
-        if self.current_syntax_error and self.current_syntax_error['lineno'] == clicked_line:
-            menu.addSeparator()
-            fix_action = QAction(QIcon(), "💡 Explain & Fix Error with AI", self)
-            fix_action.triggered.connect(self.trigger_ai_error_fix)
-            font = fix_action.font()
-            font.setBold(True)
-            fix_action.setFont(font)
-            menu.addAction(fix_action)
-
-        menu.exec(event.globalPos())
-        
     def _setup_inline_chat(self):
         from editor.inline_chat import InlineChatWidget
         self._inline_chat = InlineChatWidget(self)
@@ -713,88 +340,67 @@ class GhostEditor(QPlainTextEdit):
         self._inline_chat.insert_requested.connect(self._insert_inline_chat_code)
         self._inline_chat.send_to_chat_requested.connect(self._relay_to_chat)
         self._inline_chat.closed.connect(self.setFocus)
-    
+
     def show_inline_chat(self):
         if not hasattr(self, '_inline_chat'):
             self._setup_inline_chat()
-    
         cursor = self.textCursor()
         line_num = cursor.blockNumber() + 1
         line_text = cursor.block().text()
-    
         self._inline_chat.set_context(line_num, line_text)
         self._position_inline_chat()
         self._inline_chat.show()
         self._inline_chat.raise_()
         self._inline_chat.input.setFocus()
-    
+
     def _position_inline_chat(self):
         cursor = self.textCursor()
         rect = self.cursorRect(cursor)
-        # Position below the current line, offset from left gutter
         x = self.line_number_area_width() + 20
         y = rect.bottom() + 4
-        # Keep it inside the viewport vertically
         max_y = self.viewport().height() - self._inline_chat.sizeHint().height() - 10
         y = min(y, max_y)
         self._inline_chat.move(x, y)
         self._inline_chat.adjustSize()
-    
+
     def _fire_inline_chat_worker(self, question):
-        if (hasattr(self, '_inline_chat_thread') and
-                self._inline_chat_thread is not None):
+        if hasattr(self, '_inline_chat_thread') and self._inline_chat_thread is not None:
             try:
                 if self._inline_chat_thread.isRunning():
-                    return  # silently ignore, input is disabled anyway
+                    return
             except RuntimeError:
                 self._inline_chat_thread = None
-        from ai.worker import AIWorker
-    
+
         cursor = self.textCursor()
         line_num = cursor.blockNumber() + 1
-    
-        # Build context — current line + surrounding 20 lines
+
         doc = self.document()
         start_block = max(0, cursor.blockNumber() - 10)
         end_block = min(doc.blockCount() - 1, cursor.blockNumber() + 10)
-    
+
         lines = []
         for i in range(start_block, end_block + 1):
             block = doc.findBlockByNumber(i)
             prefix = ">>>" if i == cursor.blockNumber() else "   "
             lines.append(f"{prefix} {block.text()}")
         context_snippet = "\n".join(lines)
-    
-        lang = "code"
-        if self.file_path:
-            ext_map = {
-                '.py': 'Python', '.sh': 'Bash', '.bash': 'Bash',
-                '.yml': 'YAML', '.yaml': 'YAML', '.nix': 'Nix',
-                '.html': 'HTML', '.js': 'JavaScript', '.ts': 'TypeScript',
-            }
-            for ext, name in ext_map.items():
-                if self.file_path.lower().endswith(ext):
-                    lang = name
-                    break
-    
-        prompt = f"""The user is asking about {lang} code at line {line_num}.
-    
-    Code context (>>> marks the current line):
-    {context_snippet}
-    
-    User question: {question}
-    
-    Answer concisely. If you include code, use a single fenced code block."""
-    
+
+        lang = self._get_language()
+        intent_ctx = self._get_intent_context()
+
+        prompt = f"""{intent_ctx}
+The user is asking about {lang} code at line {line_num}.
+
+Code context (>>> marks the current line):
+{context_snippet}
+
+User question: {question}
+
+Answer concisely. If you include code, use a single fenced code block."""
+
         if not self.settings_manager:
             return
-    
-        model = self.settings_manager.get_chat_model()
-        api_url = self.settings_manager.get_api_url()
-        api_key = self.settings_manager.get_api_key()
-        backend = self.settings_manager.get_backend()
-    
-        # Cancel any existing inline chat request
+
         if hasattr(self, '_inline_chat_thread') and self._inline_chat_thread is not None:
             try:
                 if self._inline_chat_thread.isRunning():
@@ -806,102 +412,377 @@ class GhostEditor(QPlainTextEdit):
                 pass
             self._inline_chat_thread = None
             self._inline_chat_worker = None
-    
+
         thread = QThread()
         worker = AIWorker(
             prompt=prompt,
             editor_text="",
             cursor_pos=0,
             is_chat=True,
-            model=model,
-            api_url=api_url,
-            api_key=api_key,
-            backend=backend,
+            model=self.settings_manager.get_chat_model(),
+            api_url=self.settings_manager.get_api_url(),
+            api_key=self.settings_manager.get_api_key(),
+            backend=self.settings_manager.get_backend(),
         )
-        
-        # Store references so they aren't garbage collected
+
         self._inline_chat_thread = thread
         self._inline_chat_worker = worker
-        
+
         worker.moveToThread(thread)
         worker.chat_update.connect(self._inline_chat.append_response)
         worker.finished.connect(self._inline_chat.response_finished)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
-        
-        # Use thread.finished instead of worker.finished for cleanup
-        # This ensures the thread is fully stopped before we clear the reference
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(self._on_inline_chat_finished)
-        
         thread.started.connect(worker.run)
         thread.start()
-    
+
     def _on_inline_chat_finished(self):
-        """Called when the inline chat thread fully stops."""
         self._inline_chat_thread = None
-        self._inline_chat_worker = None    
-    
+        self._inline_chat_worker = None
+
     def _insert_inline_chat_code(self, code):
         cursor = self.textCursor()
         cursor.insertText(code)
         self.setFocus()
-    
+
     def _relay_to_chat(self, question, response):
-        # Bubble up to main window chat panel
         self.send_to_chat_requested.emit(
             f"**Inline question:** {question}\n\n**AI response:**\n{response}"
         )
-        
+
+    # ── Editing helpers ───────────────────────────────────────────────────
+
+    def duplicate_line(self):
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            start = cursor.selectionStart()
+            end = cursor.selectionEnd()
+            selected = cursor.selectedText().replace('\u2029', '\n')
+            cursor.setPosition(end)
+            cursor.insertText('\n' + selected)
+            cursor.setPosition(end + 1)
+            cursor.setPosition(end + 1 + len(selected), QTextCursor.MoveMode.KeepAnchor)
+        else:
+            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+            line_text = cursor.selectedText()
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+            cursor.insertText('\n' + line_text)
+            cursor.movePosition(QTextCursor.MoveOperation.Down)
+        self.setTextCursor(cursor)
+
+    def toggle_comment(self):
+        cursor = self.textCursor()
+        comment_char = self._get_comment_char()
+
+        if cursor.hasSelection():
+            start = cursor.selectionStart()
+            end = cursor.selectionEnd()
+            cursor.setPosition(start)
+            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            block_start = cursor.position()
+            cursor.setPosition(end)
+            if cursor.atBlockStart() and end > start:
+                cursor.movePosition(QTextCursor.MoveOperation.PreviousBlock)
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+            block_end = cursor.position()
+            cursor.setPosition(block_start)
+            cursor.setPosition(block_end, QTextCursor.MoveMode.KeepAnchor)
+            selected = cursor.selectedText().replace('\u2029', '\n')
+            lines = selected.split('\n')
+        else:
+            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            block_start = cursor.position()
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+            block_end = cursor.position()
+            lines = [cursor.selectedText()]
+
+        all_commented = all(l.lstrip().startswith(comment_char) for l in lines if l.strip())
+
+        result = []
+        for line in lines:
+            if not line.strip():
+                result.append(line)
+                continue
+            if all_commented:
+                stripped = line.lstrip()
+                indent = line[:len(line) - len(stripped)]
+                if stripped.startswith(comment_char + ' '):
+                    result.append(indent + stripped[len(comment_char) + 1:])
+                else:
+                    result.append(indent + stripped[len(comment_char):])
+            else:
+                stripped = line.lstrip()
+                indent = line[:len(line) - len(stripped)]
+                result.append(indent + comment_char + ' ' + stripped)
+
+        new_text = '\n'.join(result)
+        cursor.setPosition(block_start)
+        cursor.setPosition(block_end, QTextCursor.MoveMode.KeepAnchor)
+        cursor.beginEditBlock()
+        cursor.insertText(new_text)
+        cursor.endEditBlock()
+        cursor.setPosition(block_start)
+        cursor.setPosition(block_start + len(new_text), QTextCursor.MoveMode.KeepAnchor)
+        self.setTextCursor(cursor)
+
+    def _get_comment_char(self):
+        if not self.file_path:
+            return '#'
+        ext = self.file_path.lower()
+        if ext.endswith(('.py', '.sh', '.bash', '.yml', '.yaml', '.nix')):
+            return '#'
+        if ext.endswith(('.js', '.ts', '.cpp', '.c', '.java', '.go')):
+            return '//'
+        if ext.endswith('.lua'):
+            return '--'
+        return '#'
+
+    def indent_selection(self):
+        cursor = self.textCursor()
+        if not cursor.hasSelection():
+            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            cursor.insertText("    ")
+            return
+        start = cursor.selectionStart()
+        end = cursor.selectionEnd()
+        cursor.setPosition(start)
+        cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        block_start = cursor.position()
+        cursor.setPosition(end)
+        if cursor.atBlockStart() and end > start:
+            cursor.movePosition(QTextCursor.MoveOperation.PreviousBlock)
+        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+        block_end = cursor.position()
+        cursor.setPosition(block_start)
+        cursor.setPosition(block_end, QTextCursor.MoveMode.KeepAnchor)
+        selected = cursor.selectedText().replace('\u2029', '\n')
+        indented = '\n'.join("    " + line for line in selected.split('\n'))
+        cursor.beginEditBlock()
+        cursor.insertText(indented)
+        cursor.endEditBlock()
+        cursor.setPosition(block_start)
+        cursor.setPosition(block_start + len(indented), QTextCursor.MoveMode.KeepAnchor)
+        self.setTextCursor(cursor)
+
+    def unindent_selection(self):
+        cursor = self.textCursor()
+        if not cursor.hasSelection():
+            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            line = cursor.block().text()
+            if line.startswith("    "):
+                cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 4)
+                cursor.removeSelectedText()
+            elif line.startswith("\t"):
+                cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+                cursor.removeSelectedText()
+            return
+        start = cursor.selectionStart()
+        end = cursor.selectionEnd()
+        cursor.setPosition(start)
+        cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        block_start = cursor.position()
+        cursor.setPosition(end)
+        if cursor.atBlockStart() and end > start:
+            cursor.movePosition(QTextCursor.MoveOperation.PreviousBlock)
+        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+        block_end = cursor.position()
+        cursor.setPosition(block_start)
+        cursor.setPosition(block_end, QTextCursor.MoveMode.KeepAnchor)
+        selected = cursor.selectedText().replace('\u2029', '\n')
+        unindented = []
+        for line in selected.split('\n'):
+            if line.startswith("    "):
+                unindented.append(line[4:])
+            elif line.startswith("\t"):
+                unindented.append(line[1:])
+            else:
+                unindented.append(line)
+        result = '\n'.join(unindented)
+        cursor.beginEditBlock()
+        cursor.insertText(result)
+        cursor.endEditBlock()
+        cursor.setPosition(block_start)
+        cursor.setPosition(block_start + len(result), QTextCursor.MoveMode.KeepAnchor)
+        self.setTextCursor(cursor)
+
+    # ── Context menu ──────────────────────────────────────────────────────
+
+    def contextMenuEvent(self, event):
+        menu = self.createStandardContextMenu(event.pos())
+        active_cursor = self.textCursor()
+        click_cursor = self.cursorForPosition(event.pos())
+        clicked_line = click_cursor.blockNumber() + 1
+
+        menu.addSeparator()
+        indent_action = QAction("⇥ Indent  (Ctrl+])", self)
+        indent_action.triggered.connect(self.indent_selection)
+        menu.addAction(indent_action)
+
+        unindent_action = QAction("⇤ Unindent  (Ctrl+[)", self)
+        unindent_action.triggered.connect(self.unindent_selection)
+        menu.addAction(unindent_action)
+
+        menu.addSeparator()
+        dup_action = QAction("⧉ Duplicate Line  (Ctrl+D)", self)
+        dup_action.triggered.connect(self.duplicate_line)
+        menu.addAction(dup_action)
+
+        comment_action = QAction("# Toggle Comment  (Ctrl+/)", self)
+        comment_action.triggered.connect(self.toggle_comment)
+        menu.addAction(comment_action)
+
+        jump_action = QAction("⤵ Go to Line  (Ctrl+G)", self)
+        jump_action.triggered.connect(self._show_jump_bar)
+        menu.addAction(jump_action)
+
+        if active_cursor.hasSelection():
+            menu.addSeparator()
+            chat_action = QAction("💬 Send to Chat", self)
+            selected_text = active_cursor.selectedText().replace('\u2029', '\n')
+            chat_action.triggered.connect(lambda: self.send_to_chat_requested.emit(selected_text))
+            menu.addAction(chat_action)
+
+        if self.current_syntax_error and self.current_syntax_error['lineno'] == clicked_line:
+            menu.addSeparator()
+            fix_action = QAction(QIcon(), "💡 Explain & Fix Error with AI", self)
+            fix_action.triggered.connect(self.trigger_ai_error_fix)
+            font = fix_action.font()
+            font.setBold(True)
+            fix_action.setFont(font)
+            menu.addAction(fix_action)
+
+        menu.exec(event.globalPos())
+
+    # ── setPlainText ──────────────────────────────────────────────────────
+
+    def setPlainText(self, text):
+        super().setPlainText(text)
+        self.minimap.setPlainText(text)
+
+        cursor = self.textCursor()
+        cursor.select(QTextCursor.SelectionType.Document)
+        fmt = QTextBlockFormat()
+        fmt.setLineHeight(150, 1)
+        cursor.mergeBlockFormat(fmt)
+        cursor.clearSelection()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        self.setTextCursor(cursor)
+
+        m_cursor = self.minimap.textCursor()
+        m_cursor.select(QTextCursor.SelectionType.Document)
+        m_cursor.mergeBlockFormat(fmt)
+        m_cursor.clearSelection()
+        m_cursor.movePosition(QTextCursor.MoveOperation.Start)
+        self.minimap.setTextCursor(m_cursor)
+
+    # ── Highlighting & linting ────────────────────────────────────────────
+
+    def highlight_current_line(self):
+        self.current_line_selection = []
+        if not self.isReadOnly():
+            selection = QTextEdit.ExtraSelection()
+            selection.format.setBackground(QColor("#2A2D2E"))
+            selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+            selection.cursor = self.textCursor()
+            selection.cursor.clearSelection()
+            self.current_line_selection.append(selection)
+        self.update_extra_selections()
+
+    def update_extra_selections(self):
+        self.setExtraSelections(self.current_line_selection + self.lint_selections)
+
+    def _draw_error_squiggle(self, line_idx, col_offset, error_msg, end_offset=None):
+        self.current_syntax_error = {'msg': error_msg, 'lineno': line_idx + 1, 'offset': col_offset}
+        selection = QTextEdit.ExtraSelection()
+        selection.format.setUnderlineStyle(QTextCharFormat.UnderlineStyle.WaveUnderline)
+        selection.format.setUnderlineColor(QColor("#F44336"))
+        cursor = QTextCursor(self.document())
+        cursor.setPosition(self.document().findBlockByNumber(line_idx).position())
+        cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.MoveAnchor, col_offset)
+        if end_offset is not None and end_offset > col_offset:
+            cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, end_offset - col_offset)
+        else:
+            cursor.select(QTextCursor.SelectionType.WordUnderCursor)
+        if not cursor.hasSelection():
+            cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.KeepAnchor, 1)
+        selection.cursor = cursor
+        self.lint_selections.append(selection)
+
+    def run_linter(self):
+        self.lint_selections = []
+        self.current_syntax_error = None
+        text = self.toPlainText()
+        if not text.strip() or not self.file_path:
+            self.update_extra_selections()
+            return
+        ext = self.file_path.lower()
+        if ext.endswith('.py'):
+            try:
+                ast.parse(text)
+            except SyntaxError as e:
+                line_idx = (e.lineno - 1) if e.lineno is not None else 0
+                col_offset = (e.offset - 1) if e.offset is not None else 0
+                end_offset = (e.end_offset - 1) if hasattr(e, 'end_offset') and e.end_offset is not None else None
+                self._draw_error_squiggle(line_idx, col_offset, e.msg, end_offset)
+            except Exception:
+                pass
+        elif ext.endswith(('.yml', '.yaml')) and HAS_YAML:
+            try:
+                yaml.safe_load(text)
+            except yaml.YAMLError as e:
+                if hasattr(e, 'problem_mark') and e.problem_mark is not None:
+                    self._draw_error_squiggle(e.problem_mark.line, e.problem_mark.column, str(e))
+            except Exception:
+                pass
+        elif ext.endswith(('.sh', '.bash')):
+            try:
+                process = subprocess.Popen(
+                    ['shellcheck', '-f', 'json', '-'],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, text=True
+                )
+                stdout, _ = process.communicate(input=text)
+                if stdout:
+                    for err in json.loads(stdout):
+                        line_idx = err.get('line', 1) - 1
+                        col_offset = err.get('column', 1) - 1
+                        end_offset = err.get('endColumn', col_offset + 1) - 1
+                        self._draw_error_squiggle(line_idx, col_offset,
+                                                  f"SC{err.get('code')}: {err.get('message')}", end_offset)
+            except FileNotFoundError:
+                print("LINTER ERROR: shellcheck binary not found in PATH!")
+            except Exception as e:
+                print(f"LINTER ERROR: {e}")
+        self.update_extra_selections()
+
+    # ── AI completion ─────────────────────────────────────────────────────
+
     def handle_text_changed_for_ai(self):
         self.clear_ghost_text()
-
         cursor = self.textCursor()
         if cursor.hasSelection():
             self.ai_suggest_timer.stop()
             return
-
-        text = self.toPlainText()
         pos = cursor.position()
-
         if pos == 0:
             self.ai_suggest_timer.stop()
             return
-
-        # --- Strong signal checks only ---
-
-        # 1. Cursor is on a brand-new blank line after a colon (entering a block body)
         current_line = cursor.block().text()
         prev_block = cursor.block().previous()
         prev_line = prev_block.text().rstrip() if prev_block.isValid() else ""
-
-        just_entered_block = (
-            current_line.strip() == ""
-            and prev_line.endswith(":")
-        )
-
-        # 2. Inside an existing function/class body but the line is completely empty
-        #    (user pressed Enter to start a new statement inside a block)
-        inside_indented_empty = (
-            current_line == ""
-            and prev_line.startswith((" ", "\t"))
-        )
-
-        # 3. Cursor is directly after a comment line that was just committed
-        #    (user hit Enter after writing a # comment, expecting a function below it)
-        prev_is_comment = prev_line.strip().startswith("#")
-        after_comment = current_line.strip() == "" and prev_is_comment
-
+        just_entered_block = current_line.strip() == "" and prev_line.endswith(":")
+        inside_indented_empty = current_line == "" and prev_line.startswith((" ", "\t"))
+        after_comment = current_line.strip() == "" and prev_line.strip().startswith("#")
         if not (just_entered_block or inside_indented_empty or after_comment):
             self.ai_suggest_timer.stop()
             return
-
         self.ai_suggest_timer.start(300)
 
     def request_completion_hotkey(self):
-        """Called directly by Ctrl+Space. Always fires a completion at the cursor."""
         self.clear_ghost_text()
-        # Cancel any in-flight worker safely
         try:
             if hasattr(self, 'ai_thread') and self.ai_thread is not None:
                 if self.ai_thread.isRunning():
@@ -909,24 +790,18 @@ class GhostEditor(QPlainTextEdit):
                         self.worker.cancel()
         except RuntimeError:
             self.ai_thread = None
-
         self.ai_suggest_timer.stop()
         self.trigger_inline_completion()
 
     def trigger_inline_completion(self):
-        """Fires when the user pauses typing at a logical boundary."""
         try:
-            # Check if the Python variable exists
             if hasattr(self, 'ai_thread') and self.ai_thread is not None:
-                # If C++ hasn't deleted it yet, check if it's running
                 if self.ai_thread.isRunning():
                     return
         except RuntimeError:
-            # Catch the crash! The C++ thread was already deleted by deleteLater().
-            # We safely clear the dead Python pointer so we can start fresh.
             self.ai_thread = None
-            
-        self.start_worker(prompt="", generate_function=False, replace_selection=False)    
+        self.start_worker(prompt="", generate_function=False, replace_selection=False)
+
     def trigger_ai_error_fix(self):
         if self.current_syntax_error:
             self.error_help_requested.emit(
@@ -938,29 +813,23 @@ class GhostEditor(QPlainTextEdit):
     def show_snippet_menu(self):
         from ui.snippet_palette import SnippetPalette
         palette = SnippetPalette(self)
-        # Center it on the editor
-        palette.move(
-            self.mapToGlobal(self.rect().center()) - palette.rect().center()
-        )
+        palette.move(self.mapToGlobal(self.rect().center()) - palette.rect().center())
         palette.snippet_selected.connect(self._insert_snippet_code)
         palette.exec()
 
     def _insert_snippet_code(self, code):
         cursor = self.textCursor()
-        # Match indentation of the current line
         current_line = cursor.block().text()
         indent_match = re.match(r'^(\s*)', current_line)
         base_indent = indent_match.group(1) if indent_match else ""
-
         lines = code.split('\n')
         indented = lines[0]
         for line in lines[1:]:
             indented += '\n' + base_indent + line
-
         cursor.insertText(indented)
         self.clear_ghost_text()
         self.setFocus()
-        
+
     def set_original_state(self, text):
         self.original_text = text
         self.line_changes.clear()
@@ -971,27 +840,19 @@ class GhostEditor(QPlainTextEdit):
 
     def calculate_diff(self):
         current_text = self.toPlainText()
-        
-        # [NEW] Safely sync the minimap text in the background without causing typing lag
         if self.minimap.toPlainText() != current_text:
             scroll = self.minimap.verticalScrollBar().value()
             self.minimap.setPlainText(current_text)
-            
-            # Re-apply line height format to the minimap
             m_cursor = self.minimap.textCursor()
             m_cursor.select(QTextCursor.SelectionType.Document)
             fmt = QTextBlockFormat()
             fmt.setLineHeight(150, 1)
             m_cursor.mergeBlockFormat(fmt)
-            
             self.minimap.verticalScrollBar().setValue(scroll)
-
         current_lines = current_text.split('\n')
         original_lines = self.original_text.split('\n')
-        
         matcher = difflib.SequenceMatcher(None, original_lines, current_lines)
         new_changes = {}
-        
         for tag, i1, i2, j1, j2 in matcher.get_opcodes():
             if tag == 'replace':
                 for j in range(j1, j2):
@@ -999,9 +860,8 @@ class GhostEditor(QPlainTextEdit):
             elif tag == 'insert':
                 for j in range(j1, j2):
                     new_changes[j] = 'added'
-                    
         self.line_changes = new_changes
-        self.line_number_area.update() 
+        self.line_number_area.update()
 
     def line_number_area_width(self):
         digits = 1
@@ -1009,8 +869,7 @@ class GhostEditor(QPlainTextEdit):
         while max_value >= 10:
             max_value /= 10
             digits += 1
-        space = 14 + self.fontMetrics().horizontalAdvance('9') * digits 
-        return space
+        return 14 + self.fontMetrics().horizontalAdvance('9') * digits
 
     def update_line_number_area_width(self, _):
         self.setViewportMargins(self.line_number_area_width(), 0, self.minimap_width, 0)
@@ -1020,56 +879,39 @@ class GhostEditor(QPlainTextEdit):
             self.line_number_area.scroll(0, dy)
         else:
             self.line_number_area.update(0, rect.y(), self.line_number_area.width(), rect.height())
-
         if rect.contains(self.viewport().rect()):
             self.update_line_number_area_width(0)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         cr = self.contentsRect()
-        self.line_number_area.setGeometry(
-            QRect(cr.left(), cr.top(),
-                  self.line_number_area_width(), cr.height()))
-        self.minimap.setGeometry(
-            QRect(cr.right() - self.minimap_width, cr.top(),
-                  self.minimap_width, cr.height()))
-        # Keep jump bar pinned to the bottom
+        self.line_number_area.setGeometry(QRect(cr.left(), cr.top(), self.line_number_area_width(), cr.height()))
+        self.minimap.setGeometry(QRect(cr.right() - self.minimap_width, cr.top(), self.minimap_width, cr.height()))
         if hasattr(self, '_jump_bar'):
             self._position_jump_bar()
-            
-        # Add to existing resizeEvent
         if hasattr(self, '_inline_chat') and self._inline_chat.isVisible():
             self._position_inline_chat()
-            
+
     def line_number_area_paint_event(self, event):
         painter = QPainter(self.line_number_area)
-        painter.fillRect(event.rect(), QColor(35, 35, 35))
-        
-        # Match the editor background perfectly for a seamless look
         painter.fillRect(event.rect(), QColor("#1E1E1E"))
-        
-        # Draw a crisp 1px separator line down the right side of the gutter
         painter.setPen(QColor("#333333"))
         painter.drawLine(self.line_number_area.width() - 1, event.rect().top(),
                          self.line_number_area.width() - 1, event.rect().bottom())
-
         block = self.firstVisibleBlock()
         block_number = block.blockNumber()
         top = round(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
         bottom = top + round(self.blockBoundingRect(block).height())
-
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
-                number = str(block_number + 1)
                 painter.setPen(QColor(120, 120, 120))
                 painter.drawText(0, top, self.line_number_area.width() - 8, self.fontMetrics().height(),
-                                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, number)
-
+                                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                                 str(block_number + 1))
                 status = self.line_changes.get(block_number)
                 if status:
                     color = QColor("#4CAF50") if status == 'added' else QColor("#F0A30A")
                     painter.fillRect(self.line_number_area.width() - 4, top, 4, self.fontMetrics().height(), color)
-
             block = block.next()
             top = bottom
             bottom = top + round(self.blockBoundingRect(block).height())
@@ -1086,8 +928,7 @@ class GhostEditor(QPlainTextEdit):
     def accept_full_completion(self):
         if not self.ghost_text:
             return
-        cursor = self.textCursor()
-        cursor.insertText(self.ghost_text)
+        self.textCursor().insertText(self.ghost_text)
         self.clear_ghost_text()
 
     def accept_next_word(self):
@@ -1096,9 +937,7 @@ class GhostEditor(QPlainTextEdit):
         parts = self.ghost_text.lstrip().split(" ", 1)
         word = parts[0]
         remainder = parts[1] if len(parts) > 1 else ""
-
-        cursor = self.textCursor()
-        cursor.insertText(word + " ")
+        self.textCursor().insertText(word + " ")
         self.ghost_text = remainder
         self.viewport().update()
 
@@ -1108,29 +947,22 @@ class GhostEditor(QPlainTextEdit):
             tree = ast.parse(text)
         except Exception:
             return text[-1000:]
-
-        functions = []
-        classes = []
-
+        functions, classes = [], []
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef):
                 functions.append(node.name)
             elif isinstance(node, ast.ClassDef):
                 classes.append(node.name)
-
-        context = f"Functions: {functions}\nClasses: {classes}\n"
-        return context + "\n" + text[-1000:]
+        return f"Functions: {functions}\nClasses: {classes}\n\n" + text[-1000:]
 
     def handle_comment_generate(self, comment):
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
         cursor.insertBlock()
         cursor.insertBlock()
-
         self.function_cursor = self.textCursor()
         self.function_active = True
         context = self.get_ast_context()
-
         prompt = f"Generate a Python function for this comment:\n\n{comment}\n\nContext:\n{context}\n\nReturn ONLY code."
         self.start_worker(prompt, generate_function=True)
 
@@ -1138,45 +970,18 @@ class GhostEditor(QPlainTextEdit):
         cursor = self.textCursor()
         if not cursor.hasSelection():
             return
-    
         self._replacement_original = cursor.selectedText().replace('\u2029', '\n')
         self.replacement_cursor = cursor
-    
-        # Detect language from file extension
-        lang = "code"
-        if self.file_path:
-            ext = self.file_path.lower()
-            lang_map = {
-                '.py':   'Python',
-                '.sh':   'Bash',
-                '.bash': 'Bash',
-                '.yml':  'YAML/Ansible',
-                '.yaml': 'YAML/Ansible',
-                '.nix':  'Nix',
-                '.html': 'HTML',
-                '.htm':  'HTML',
-                '.js':   'JavaScript',
-                '.ts':   'TypeScript',
-                '.json': 'JSON',
-                '.md':   'Markdown',
-                '.lua':  'Lua',
-                '.go':   'Go',
-                '.rs':   'Rust',
-                '.c':    'C',
-                '.cpp':  'C++',
-            }
-            for suffix, name in lang_map.items():
-                if ext.endswith(suffix):
-                    lang = name
-                    break
-    
+        lang = self._get_language()
+        intent_ctx = self._get_intent_context()
         prompt = (
+            f"{intent_ctx}"
             f"Rewrite or improve this {lang} code. "
             f"Return ONLY {lang} code with no explanation, no markdown, no backticks:\n\n"
             f"{self._replacement_original}"
         )
         self.start_worker(prompt, replace_selection=True)
-        
+
     def _create_ai_worker(self, prompt, generate_function=False, replace_selection=False):
         try:
             if hasattr(self, 'ai_thread') and self.ai_thread is not None:
@@ -1188,17 +993,21 @@ class GhostEditor(QPlainTextEdit):
         self.ai_thread = QThread()
         self.function_output = ""
 
-        # Pull settings if available, otherwise fall back to empty strings
         model = ""
         api_url = ""
         api_key = ""
         backend = "llama"
 
         if self.settings_manager:
-            model   = self.settings_manager.get_model()
+            model = self.settings_manager.get_inline_model()
             api_url = self.settings_manager.get_api_url()
             api_key = self.settings_manager.get_api_key()
             backend = self.settings_manager.get_backend()
+
+        # Inject intent context into inline completions
+        if (not generate_function and not replace_selection
+                and not prompt and self.intent_tracker):
+            prompt = self._get_intent_context()
 
         worker = AIWorker(
             prompt=prompt,
@@ -1227,23 +1036,11 @@ class GhostEditor(QPlainTextEdit):
 
         return worker, self.ai_thread
 
-
     def start_worker(self, prompt, generate_function=False, replace_selection=False):
-        """
-        Public entrypoint used everywhere else.
-        """
-
         self.ai_started.emit()
-
-        worker, thread = self._create_ai_worker(
-            prompt,
-            generate_function,
-            replace_selection
-        )
-
+        worker, thread = self._create_ai_worker(prompt, generate_function, replace_selection)
         if worker is None:
             return
-
         self.worker = worker
         thread.start()
         self.ai_thread.start()
@@ -1252,7 +1049,7 @@ class GhostEditor(QPlainTextEdit):
         if self.function_active and self.function_cursor:
             self.function_cursor.insertText(text)
         else:
-            self.function_output += text 
+            self.function_output += text
 
     def finish_function_stream(self):
         if hasattr(self, "replacement_cursor") and self.function_output:
@@ -1260,44 +1057,39 @@ class GhostEditor(QPlainTextEdit):
         self.function_active = False
         self.function_cursor = None
         self.function_output = ""
-    
+
     def _show_diff_dialog(self):
         from ui.diff_apply_dialog import DiffApplyDialog
         original = getattr(self, '_replacement_original', '')
         proposed = self.function_output.strip()
-    
         dialog = DiffApplyDialog(original, proposed, parent=self.window())
         if dialog.exec() and dialog.accepted_code is not None:
             self.replacement_cursor.removeSelectedText()
             self.replacement_cursor.insertText(dialog.accepted_code)
-        # If rejected, do nothing — original stays untouched
 
     def apply_replacement(self):
         cursor = self.replacement_cursor
         cursor.removeSelectedText()
         cursor.insertText(self.function_output)
 
+    # ── Key handling ──────────────────────────────────────────────────────
+
     def keyPressEvent(self, event):
-        # Bare modifier keys — never clear ghost text or act on these alone
-        if event.key() in (Qt.Key.Key_Control, Qt.Key.Key_Shift,
-                           Qt.Key.Key_Alt, Qt.Key.Key_Meta):
+        if event.key() in (Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta):
             super().keyPressEvent(event)
             return
 
-        # Navigation keys (except Right which needs special handling below)
         if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Up, Qt.Key.Key_Down):
             self.ai_suggest_timer.stop()
             self.clear_ghost_text()
             super().keyPressEvent(event)
             return
 
-        # Right arrow — Ctrl+Right accepts next word, bare Right clears ghost text
         if event.key() == Qt.Key.Key_Right:
             if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
                 if self.ghost_text:
                     self.accept_next_word()
                     return
-                # No ghost text — let Qt handle the normal word-jump
                 super().keyPressEvent(event)
                 return
             else:
@@ -1308,7 +1100,6 @@ class GhostEditor(QPlainTextEdit):
 
         pairs = {'(': ')', '[': ']', '{': '}', '"': '"', "'": "'"}
         char = event.text()
-
         if char in pairs:
             super().keyPressEvent(event)
             cursor = self.textCursor()
@@ -1337,21 +1128,15 @@ class GhostEditor(QPlainTextEdit):
             cursor.select(QTextCursor.SelectionType.LineUnderCursor)
             previous_line_raw = cursor.selectedText()
             previous_line_stripped = previous_line_raw.strip()
-
             super().keyPressEvent(event)
-
             whitespace_match = re.match(r"^\s*", previous_line_raw)
             indent = whitespace_match.group(0) if whitespace_match else ""
-
             if previous_line_stripped.endswith(":"):
                 indent += "    "
-
             if indent:
                 self.textCursor().insertText(indent)
-
             if previous_line_stripped.startswith("#"):
                 self.handle_comment_generate(previous_line_stripped)
-
             self.clear_ghost_text()
             return
 
@@ -1362,29 +1147,27 @@ class GhostEditor(QPlainTextEdit):
         if event.key() == Qt.Key.Key_BracketLeft and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             self.unindent_selection()
             return
-            
-        # Ctrl+G — jump to line (vim-style inline bar)
+
         if event.key() == Qt.Key.Key_G and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             self._show_jump_bar()
             return
-        
-        # Ctrl+D — duplicate line or selection
+
         if event.key() == Qt.Key.Key_D and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             self.duplicate_line()
             return
-        
-        # Ctrl+/ — toggle comment
+
         if event.key() == Qt.Key.Key_Slash and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             self.toggle_comment()
             return
-        
-        # Ctrl+I — inline chat
+
         if event.key() == Qt.Key.Key_I and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             self.show_inline_chat()
-            return        
-        
+            return
+
         super().keyPressEvent(event)
         self.clear_ghost_text()
+
+    # ── Wheel & paint ─────────────────────────────────────────────────────
 
     def wheelEvent(self, event):
         if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
@@ -1393,50 +1176,35 @@ class GhostEditor(QPlainTextEdit):
                 self.zoomIn(1)
             elif delta < 0:
                 self.zoomOut(1)
-            
             self.update_line_number_area_width(0)
             self.minimap.viewport().update()
             return
-            
         super().wheelEvent(event)
 
     def paintEvent(self, event):
         super().paintEvent(event)
-
         painter = QPainter(self.viewport())
         if not painter.isActive():
             return
-
         fm = QFontMetrics(self.font())
-
-        space_width = fm.horizontalAdvance(' ')
-        indent_width = space_width * 4 
+        indent_width = fm.horizontalAdvance(' ') * 4
         offset_x = self.contentOffset().x() + self.document().documentMargin()
-
-        painter.setPen(QColor(80, 80, 80, 80)) 
-
+        painter.setPen(QColor(80, 80, 80, 80))
         block = self.firstVisibleBlock()
         top = round(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
         bottom = top + round(self.blockBoundingRect(block).height())
-
         previous_indent = 0
-
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
                 text = block.text()
-                
                 if text.strip():
                     indent_spaces = len(text) - len(text.lstrip(' '))
                     previous_indent = indent_spaces
                 else:
                     indent_spaces = previous_indent
-
-                levels = indent_spaces // 4
-                
-                for i in range(1, levels + 1):
-                    x = int(offset_x + (i * indent_width))
-                    painter.drawLine(x, top, x, bottom)
-
+                for i in range(1, indent_spaces // 4 + 1):
+                    painter.drawLine(int(offset_x + i * indent_width), top,
+                                     int(offset_x + i * indent_width), bottom)
             block = block.next()
             top = bottom
             bottom = top + round(self.blockBoundingRect(block).height())
@@ -1444,17 +1212,12 @@ class GhostEditor(QPlainTextEdit):
         if self.ghost_text:
             painter.setPen(QColor(120, 120, 120, 160))
             painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-
             cursor = self.textCursor()
             rect = self.cursorRect(cursor)
-            
             x = rect.left()
             y = rect.top() + fm.ascent()
-
             line_spacing = round(self.blockBoundingRect(self.textCursor().block()).height())
-            if line_spacing == 0: 
-                line_spacing = fm.height() * 1.5 
-
-            lines = self.ghost_text.split("\n")
-            for i, line in enumerate(lines):
+            if line_spacing == 0:
+                line_spacing = fm.height() * 1.5
+            for i, line in enumerate(self.ghost_text.split("\n")):
                 painter.drawText(x, int(y + i * line_spacing), line)

@@ -80,6 +80,11 @@ def _open_recent_project(folder_path, window):
         window.memory_manager.set_project(folder_path)
     if hasattr(window, 'memory_panel'):
         window.memory_panel.refresh()
+        
+    if hasattr(window, 'memory_manager'):
+        window.memory_manager.set_project(folder_path)
+    if hasattr(window, 'load_project_chat'):
+        window.load_project_chat()
 
     if hasattr(window, 'update_git_branch'):
         window.update_git_branch()

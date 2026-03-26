@@ -24,8 +24,8 @@ from ui.settings_manager import SettingsManager
 from ui.settings_dialog import SettingsDialog
 from ui.memory_manager import MemoryManager
 from ui.memory_panel import MemoryPanel
-from ui.chat_history_store import load_chat_history, save_chat_history
 from ui.session_manager import save_session, load_session
+from ui.session_intent import init_tracker
 
 from editor.highlighter import registry
 from plugins.git_plugin import GitDockWidget
@@ -209,6 +209,7 @@ class CodeEditor(QMainWindow):
         
         # 2. Load memory
         self.memory_manager = MemoryManager()
+        self.intent_tracker = init_tracker(self.memory_manager)
 
         # 3. Basic App State
         self.setWindowTitle("QuillAI")
@@ -245,6 +246,7 @@ class CodeEditor(QMainWindow):
         
         self.tabs.currentChanged.connect(lambda _: self.update_status_bar())
         self.tabs.currentChanged.connect(lambda _: self.update_git_branch())
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         # --------------------------
         # Layout Assembly (Tabs + Find/Replace)
@@ -380,13 +382,51 @@ class CodeEditor(QMainWindow):
         self.setup_memory_panel()
         self.setup_markdown_preview()
         self.setup_find_in_files_panel()
-
         self.process = QProcess(self)
         self.process.readyReadStandardOutput.connect(self.handle_stdout)
         self.process.readyReadStandardError.connect(self.handle_stderr)
         self.process.finished.connect(self.process_finished)
 
         self._restore_session()
+    def _test_memory(self):
+        """Directly tests the full memory pipeline."""
+        print("DEBUG: Testing memory pipeline directly...")
+        
+        # 1. Test fact extraction
+        extracted = self.memory_manager.extract_facts_from_exchange(
+            "I always use type hints in Python",
+            "Great idea, type hints improve readability"
+        )
+        print(f"DEBUG: Extracted facts: {extracted}")
+        
+        # 2. Test add_fact directly
+        self.memory_manager.add_fact("Test fact from button", project_scoped=False)
+        print(f"DEBUG: Facts after add: {self.memory_manager.get_global_facts()}")
+        
+        # 3. Test add_conversation directly
+        self.memory_manager.add_conversation("Test conversation summary")
+        print(f"DEBUG: Conversations after add: {self.memory_manager.get_conversations()}")
+        
+        # 4. Check file contents
+        import json
+        from ui.memory_manager import GLOBAL_MEMORY_FILE
+        if os.path.exists(GLOBAL_MEMORY_FILE):
+            with open(GLOBAL_MEMORY_FILE) as f:
+                data = json.load(f)
+            print(f"DEBUG: File contents: {json.dumps(data, indent=2)}")
+        else:
+            print(f"DEBUG: File does not exist at {GLOBAL_MEMORY_FILE}")
+        
+        # 5. Refresh panel
+        if hasattr(self, 'memory_panel'):
+            self.memory_panel.refresh()
+            print("DEBUG: Memory panel refreshed")
+        
+        # 6. Now test the summarization worker directly
+        print("DEBUG: Firing summarization worker...")
+        self._summarize_conversation_to_memory(
+            "This is a test AI response to check if summarization works correctly."
+        )
     
     def update_status_bar(self):
         editor = self.current_editor()
@@ -491,7 +531,18 @@ class CodeEditor(QMainWindow):
                 self.branch_label.setText("")
         except Exception:
             self.branch_label.setText("")    
-    
+            
+    def load_project_chat(self):
+        """Clear chat and load the history for the current project."""
+        self.chat_history.clear()
+        self.current_ai_raw_text = ""
+        saved = self.memory_manager.load_chat_history()
+        if saved:
+            self.chat_history.setPlainText(saved)
+            self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
+        else:
+            self.chat_history.setPlainText("")
+        
     def estimate_tokens(self, text: str) -> int:
         """Rough token estimate — 1 token ≈ 4 characters for code."""
         return len(text) // 4
@@ -679,6 +730,9 @@ class CodeEditor(QMainWindow):
         editor.setPlainText(content)
         editor.set_original_state(content)
         editor.file_path = path
+
+        if path:
+            self.intent_tracker.record_file_edit(path)
 
         ext = os.path.splitext(name)[1].lower() if path else ".py"
 
@@ -967,7 +1021,31 @@ class CodeEditor(QMainWindow):
             if widget:
                 widget.deleteLater()
             self.tabs.removeTab(0)
+            
+    def _on_tab_changed(self, index):
+        self.update_status_bar()
+        self.update_git_branch()
+        self._refresh_markdown_preview()
+        editor = self.tabs.widget(index)
+        if editor and hasattr(editor, 'file_path') and editor.file_path:
+            self.intent_tracker.record_file_edit(editor.file_path)
 
+    def _restore_conversation(self, user_message: str, ai_response: str):
+        """Replace the chat panel with a past conversation."""
+        self.chat_dock.show()
+        self.chat_dock.raise_()
+        self.chat_history.clear()
+        self.current_ai_raw_text = ""
+    
+        self.chat_history.insertPlainText(
+            f"You:\n{user_message}\n\nQuillAI:\n{ai_response}\n"
+        )
+        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
+    
+        self.statusBar().showMessage(
+            "Past conversation restored — send a message to continue it.", 5000
+        )
+    
     # -----------------------------
     # Cross-File Context Engine
     # -----------------------------
@@ -1126,6 +1204,11 @@ class CodeEditor(QMainWindow):
             QPushButton { background-color: transparent; color: #888888; border: none; font-weight: bold; }
             QPushButton:hover { color: #F44336; }
         """)
+        
+        test_btn = QPushButton("🧪 Test Memory")
+        test_btn.setStyleSheet("QPushButton { background-color: transparent; color: #888888; border: none; font-weight: bold; } QPushButton:hover { color: #4CAF50; }")
+        test_btn.clicked.connect(self._test_memory)
+        header_layout.addWidget(test_btn)
 
         header_layout.addWidget(title_label)
         header_layout.addStretch()
@@ -1148,7 +1231,7 @@ class CodeEditor(QMainWindow):
         """)
         self.chat_history.anchorClicked.connect(self.handle_chat_link)
 
-        saved = load_chat_history()
+        saved = self.memory_manager.load_chat_history()
         if saved:
             self.chat_history.setPlainText(saved)
             self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
@@ -1208,23 +1291,23 @@ class CodeEditor(QMainWindow):
         user_text = self.chat_input.toPlainText().strip()
         if not user_text: return
         self.chat_input.clear()
-
+ 
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
         self.chat_history.insertPlainText(f"You:\n{user_text}\n\nQuillAI:\n")
         self.chat_history.ensureCursorVisible()
-
+    
         editor = self.current_editor()
         active_code = editor.toPlainText() if editor else ""
-
+    
         context = self.build_chat_context(user_text, active_code)
         prompt_with_context = f"{user_text}\n\n{context}"
-
+    
         thread = QThread()
         self.chat_worker = self.create_worker(
             prompt=prompt_with_context,
             is_chat=True,
         )
-
+      
         self.chat_worker.moveToThread(thread)
         self.chat_worker.chat_update.connect(self.append_chat_stream)
         self.chat_worker.finished.connect(self.chat_stream_finished)
@@ -1236,6 +1319,7 @@ class CodeEditor(QMainWindow):
         self.active_threads.append(thread)
         thread.finished.connect(lambda: self.active_threads.remove(thread) if thread in self.active_threads else None)
         thread.started.connect(self.chat_worker.run)
+        
         thread.start()
 
     def append_chat_stream(self, text):
@@ -1246,6 +1330,9 @@ class CodeEditor(QMainWindow):
         
     def setup_memory_panel(self):
         self.memory_panel = MemoryPanel(self.memory_manager, self)
+        self.memory_panel.restore_conversation_requested.connect(
+            self._restore_conversation
+        )
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.memory_panel)
         self.tabifyDockWidget(self.chat_dock, self.memory_panel)
         self.memory_panel.hide()
@@ -1277,84 +1364,96 @@ class CodeEditor(QMainWindow):
             encoded = base64.b64encode(last_code.encode('utf-8')).decode('utf-8')
             button_style = (
                 "color: #FFFFFF; background-color: #0E639C; padding: 5px 15px; "
-                "text-decoration: none; border-radius: 3px; font-family: sans-serif; font-weight: bold;"
+                "text-decoration: none; border-radius: 3px; "
+                "font-family: sans-serif; font-weight: bold;"
             )
-            link_html = f"<br><br><a href='insert:{encoded}' style='{button_style}'>&nbsp;⚡ INSERT CODE AT CURSOR&nbsp;</a><br>"
+            link_html = f"<br><br><a href='insert:{encoded}' style='{button_style}'>" \
+                        f"&nbsp;⚡ INSERT CODE AT CURSOR&nbsp;</a><br>"
             self.chat_history.insertHtml(link_html)
     
         if self.current_ai_raw_text.strip():
             self._summarize_conversation_to_memory(self.current_ai_raw_text)
     
-        # Save chat to disk
-        save_chat_history(self.chat_history.toPlainText())
+        # Save chat history scoped to current project
+        self.memory_manager.save_chat_history(self.chat_history.toPlainText())
     
         self.chat_history.append("<br>")
         self.current_ai_raw_text = ""
         
     def _summarize_conversation_to_memory(self, ai_response: str):
-        last_user = ""
-        text = self.chat_history.toPlainText()
-        lines = text.strip().split('\n')
-        for i in range(len(lines) - 1, -1, -1):
-            if lines[i].startswith("You:"):
-                last_user = lines[i].replace("You:", "").strip()
-                break
+        try:
+            last_user = ""
+            text = self.chat_history.toPlainText()
+            lines = text.strip().split('\n')
     
-        if not last_user:
-            return
+            for i in range(len(lines) - 1, -1, -1):
+                line = lines[i]
+                if line.startswith("You:"):
+                    inline = line.replace("You:", "").strip()
+                    if inline:
+                        last_user = inline
+                    elif i + 1 < len(lines) and lines[i + 1].strip():
+                        last_user = lines[i + 1].strip()
+                    break
     
-        # Auto-extract facts heuristically before firing the LLM
-        extracted = self.memory_manager.extract_facts_from_exchange(
-            last_user, ai_response
-        )
-        for fact in extracted:
-            self.memory_manager.add_fact(fact, project_scoped=False)
-        if extracted and hasattr(self, 'memory_panel'):
-            self.memory_panel.refresh()
+            if not last_user:
+                return
     
-        prompt = f"""In one sentence (max 20 words), summarize what this exchange was about.
-    User asked: {last_user[:300]}
-    Assistant answered: {ai_response[:500]}
-    Reply with ONLY the one-sentence summary, nothing else."""
+            # Auto-extract facts
+            extracted = self.memory_manager.extract_facts_from_exchange(
+                last_user, ai_response
+            )
+            for fact in extracted:
+                self.memory_manager.add_fact(fact, project_scoped=False)
+            if extracted and hasattr(self, 'memory_panel'):
+                self.memory_panel.refresh()
     
-        thread = QThread()
-        backend = self.settings_manager.get_backend()
-        if backend == "openai":
-            model = self.settings_manager.get("chat_model") or "gpt-4o-mini"
-        elif backend == "claude":
-            model = self.settings_manager.get("chat_model") or "claude-haiku-4-5-20251001"
-        else:
-            model = self.settings_manager.get_model()
+            # Record for intent tracking
+            self.intent_tracker.record_chat_exchange(last_user, ai_response[:500])
     
-        worker = AIWorker(
-            prompt=prompt,
-            editor_text="",
-            cursor_pos=0,
-            is_chat=True,
-            model=model,
-            api_url=self.settings_manager.get_api_url(),
-            api_key=self.settings_manager.get_api_key(),
-            backend=backend,
-        )
-        worker.moveToThread(thread)
+            # Save full exchange so it can be restored later
+            summary = last_user[:80] + ("..." if len(last_user) > 80 else "")
+            self.memory_manager.add_conversation(
+                summary=summary,
+                user_message=last_user,
+                ai_response=ai_response[:2000],
+            )
+            if hasattr(self, 'memory_panel'):
+                self.memory_panel.refresh()
     
-        summary_buf = []
-        worker.chat_update.connect(lambda t: summary_buf.append(t))
-        worker.finished.connect(lambda: self.memory_manager.add_conversation(
-            "".join(summary_buf).strip()
-        ))
-        worker.finished.connect(lambda: self.memory_panel.refresh()
-                                if hasattr(self, 'memory_panel') else None)
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        self.active_threads.append(thread)
-        thread.finished.connect(
-            lambda: self.active_threads.remove(thread)
-            if thread in self.active_threads else None
-        )
-        thread.started.connect(worker.run)
-        thread.start()
+        except Exception as e:
+            import traceback
+            print(f"_summarize_conversation_to_memory error: {e}")
+            traceback.print_exc()
+        
+            def on_finished():
+                try:
+                    summary = "".join(summary_buf).strip()
+                    print(f"DEBUG on_finished: summary='{summary}'")
+                    if summary:
+                        self.memory_manager.add_conversation(summary)
+                    if hasattr(self, 'memory_panel'):
+                        self.memory_panel.refresh()
+                except Exception as e:
+                    import traceback
+                    print(f"DEBUG on_finished error: {e}")
+                    traceback.print_exc()
+
+            worker.finished.connect(on_finished)
+            worker.finished.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            self.active_threads.append(thread)
+            thread.finished.connect(
+                lambda: self.active_threads.remove(thread)
+                if thread in self.active_threads else None
+            )
+            thread.started.connect(worker.run)
+            thread.start()
+    
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
 
     def handle_chat_link(self, url: QUrl):
         url_str = url.toString()
@@ -1638,57 +1737,87 @@ class CodeEditor(QMainWindow):
 
     def ask_ai(self):
         editor = self.current_editor()
-        if not editor or not editor.hasFocus(): return
-
+        if not editor or not editor.hasFocus():
+            return
+    
         cursor = editor.textCursor()
         line_text = cursor.block().text()
-
+    
         generate_function = False
         if line_text.strip().startswith("#") and "function" in line_text.lower():
             generate_function = True
-
+    
         if line_text.strip().endswith(":") or line_text.strip().endswith(")"):
             return
-
-        use_cloud = self.settings_manager.get("use_cloud_for_chat")
-        target_url = self.settings_manager.get("cloud_llm_url") if use_cloud else self.settings_manager.get("local_llm_url")
-        api_key = self.settings_manager.get("cloud_api_key") if use_cloud else ""
-
+    
         text = editor.toPlainText()
         cursor_pos = int(cursor.position())
-        context = text[max(0, cursor_pos-1500):cursor_pos]
+        context = text[max(0, cursor_pos - 1500):cursor_pos]
         cross_file_context = self.resolve_local_imports(text)
-
+    
+        # Detect language for intent context
+        lang = "code"
+        if editor.file_path:
+            ext_map = {
+                '.py': 'Python', '.sh': 'Bash', '.bash': 'Bash',
+                '.yml': 'YAML', '.yaml': 'YAML', '.nix': 'Nix',
+                '.html': 'HTML', '.js': 'JavaScript', '.ts': 'TypeScript',
+            }
+            for ext, name in ext_map.items():
+                if editor.file_path.lower().endswith(ext):
+                    lang = name
+                    break
+    
+        # Record current symbol for intent tracking
+        current_symbol = self.intent_tracker.get_current_symbol(text, cursor_pos)
+        if current_symbol:
+            self.intent_tracker.record_cursor_symbol(current_symbol)
+    
+        # Build intent prefix — cached, nearly free on repeated calls
+        intent_ctx = self.intent_tracker.build_intent_context(
+            current_file_path=editor.file_path or "",
+            language=lang,
+        )
+    
         if generate_function:
-            prompt = f"You are a coding assistant.\nGenerate a full Python function that fulfills the following comment.\nComment: {line_text}\n{cross_file_context}\nOnly output the code for the function. Do not repeat the comment."
+            prompt = (
+                f"{intent_ctx}\n"
+                f"Generate a {lang} function for this comment:\n"
+                f"{line_text}\n"
+                f"{cross_file_context}\n"
+                f"Return ONLY code. Do not repeat the comment."
+            )
         else:
-            prompt = f"{cross_file_context}\nComplete the following code:\n\n{context}"
-
+            prompt = (
+                f"{intent_ctx}\n"
+                f"{cross_file_context}\n"
+                f"Complete the following {lang} code:\n\n{context}"
+            )
+    
         thread = QThread()
-
         worker = self.create_worker(
             prompt=prompt,
             editor_text=text,
             cursor_pos=cursor_pos,
             generate_function=generate_function,
         )
-
+    
         worker.moveToThread(thread)
-
         worker.update_ghost.connect(editor.set_ghost_text)
         worker.function_ready.connect(editor.handle_function_output)
-
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-
+    
         self.last_worker = worker
         self.active_threads.append(thread)
-        thread.finished.connect(lambda: self.active_threads.remove(thread) if thread in self.active_threads else None)
-
+        thread.finished.connect(
+            lambda: self.active_threads.remove(thread)
+            if thread in self.active_threads else None
+        )
         thread.started.connect(worker.run)
         thread.start()
-
+        
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 

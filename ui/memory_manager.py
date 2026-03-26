@@ -96,27 +96,61 @@ class MemoryManager:
         return []
 
     # ── Conversations ──────────────────────────────────────────────────────
-    def add_conversation(self, summary: str, tags: list = None):
+    def add_conversation(self, summary: str, user_message: str = "",
+                         ai_response: str = "", tags: list = None):
         entry = {
             "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "summary": summary.strip(),
+            "user_message": user_message.strip(),
+            "ai_response": ai_response.strip(),
             "tags": tags or [],
         }
-        # Store in project memory if available, otherwise global
-        target = self.project_memory if self.project_memory is not None else self.global_memory
-        target["conversations"].append(entry)
-        if len(target["conversations"]) > MAX_CONVERSATIONS:
-            target["conversations"] = target["conversations"][-MAX_CONVERSATIONS:]
-        if self.project_memory is not None:
+        if self.project_path and self.project_memory is not None:
+            self.project_memory["conversations"].append(entry)
+            if len(self.project_memory["conversations"]) > MAX_CONVERSATIONS:
+                self.project_memory["conversations"] = \
+                    self.project_memory["conversations"][-MAX_CONVERSATIONS:]
             self._save_project()
         else:
+            self.global_memory["conversations"].append(entry)
+            if len(self.global_memory["conversations"]) > MAX_CONVERSATIONS:
+                self.global_memory["conversations"] = \
+                    self.global_memory["conversations"][-MAX_CONVERSATIONS:]
             self._save_global()
-
+    
+    def get_chat_history_file(self) -> str:
+        """Returns the path to the project-scoped chat history file."""
+        if self.project_path:
+            import hashlib
+            path_hash = hashlib.md5(self.project_path.encode()).hexdigest()[:12]
+            name = os.path.basename(self.project_path.rstrip('/'))
+            return os.path.join(MEMORY_DIR, f"chat_{name}_{path_hash}.txt")
+        return os.path.join(MEMORY_DIR, "chat_global.txt")
+    
+    def save_chat_history(self, text: str):
+        """Save chat history scoped to the current project."""
+        os.makedirs(MEMORY_DIR, exist_ok=True)
+        try:
+            with open(self.get_chat_history_file(), "w", encoding="utf-8") as f:
+                f.write(text)
+        except Exception as e:
+            print(f"Could not save chat history: {e}")
+    
+    def load_chat_history(self) -> str:
+        """Load chat history for the current project."""
+        path = self.get_chat_history_file()
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return f.read()
+            except Exception:
+                pass
+        return ""
+            
     def get_conversations(self) -> list:
         convs = list(self.global_memory["conversations"])
-        if self.project_memory:
+        if self.project_path and self.project_memory:
             convs += self.project_memory["conversations"]
-        # Sort by date descending
         convs.sort(key=lambda x: x.get("date", ""), reverse=True)
         return convs
 

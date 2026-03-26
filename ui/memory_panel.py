@@ -2,12 +2,13 @@ from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QListWidget, QListWidgetItem,
                              QLabel, QLineEdit, QMessageBox, QAbstractItemView,
                              QTabWidget, QCheckBox)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 import os
 
 
 class MemoryPanel(QDockWidget):
+    restore_conversation_requested = pyqtSignal(str, str)
     def __init__(self, memory_manager, parent=None):
         super().__init__("Memory", parent)
         self.mm = memory_manager
@@ -130,6 +131,7 @@ class MemoryPanel(QDockWidget):
         layout.addWidget(self.conv_search)
 
         self.conv_list = QListWidget()
+        self.conv_list.itemDoubleClicked.connect(self._on_conversation_clicked)
         self.conv_list.setStyleSheet("""
             QListWidget {
                 background-color: #1E1E1E;
@@ -173,6 +175,42 @@ class MemoryPanel(QDockWidget):
             QDockWidget.DockWidgetFeature.DockWidgetMovable
         )
 
+    def _on_conversation_clicked(self, item):
+        """Restore a past conversation into the chat panel."""
+        row = self.conv_list.currentRow()
+        if row < 0:
+            return
+    
+        # Get the actual conversation data
+        if self.mm.project_path and self.mm.project_memory:
+            convs = list(reversed(self.mm.project_memory["conversations"]))
+        else:
+            convs = list(reversed(self.mm.global_memory["conversations"]))
+    
+        # Filter to only those with full exchange data
+        full_convs = [c for c in convs if c.get("user_message")]
+    
+        if row < len(full_convs):
+            conv = full_convs[row]
+            user_msg = conv.get("user_message", "")
+            ai_resp = conv.get("ai_response", "")
+            if user_msg:
+                self.restore_conversation_requested.emit(user_msg, ai_resp)
+    
+    def _filter_conversations(self, query):
+        self.conv_list.clear()
+        if query.strip():
+            convs = self.mm.search_conversations(query, limit=20)
+        else:
+            convs = self.mm.get_conversations()[:30]
+    
+        for conv in convs:
+            tags = f" [{', '.join(conv['tags'])}]" if conv.get("tags") else ""
+            has_full = "💬 " if conv.get("user_message") else "   "
+            item = QListWidgetItem(f"{has_full}{conv['date']}{tags}\n{conv['summary']}")
+            item.setForeground(QColor("#AAAAAA"))
+            self.conv_list.addItem(item)
+        
     def refresh(self):
         self.global_facts_list.clear()
         for fact in self.mm.get_global_facts():
