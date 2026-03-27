@@ -1,36 +1,24 @@
-from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QListWidget, QListWidgetItem,
-                             QLabel, QLineEdit, QMessageBox, QAbstractItemView,
+                             QLabel, QLineEdit, QMessageBox,
                              QTabWidget, QCheckBox)
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 import os
 
 
-class MemoryPanel(QDockWidget):
+class MemoryPanel(QWidget):
     restore_conversation_requested = pyqtSignal(str, str)
+
     def __init__(self, memory_manager, parent=None):
-        super().__init__("Memory", parent)
+        super().__init__(parent)
         self.mm = memory_manager
-        self.setStyleSheet("""
-            QDockWidget {
-                color: #CCCCCC;
-                font-family: 'Inter', sans-serif;
-                font-weight: bold;
-                font-size: 10pt;
-            }
-            QDockWidget::title {
-                background-color: #252526;
-                padding: 6px 10px;
-            }
-        """)
+        self.setStyleSheet("background-color: #252526;")
         self.setup_ui()
         self.refresh()
 
     def setup_ui(self):
-        container = QWidget()
-        container.setStyleSheet("background-color: #252526;")
-        layout = QVBoxLayout(container)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
@@ -58,12 +46,11 @@ class MemoryPanel(QDockWidget):
             QLineEdit:focus { border: 1px solid #0E639C; }
         """
 
-        # ── Facts section ──────────────────────────────────────────────
+        # ── Facts section ──────────────────────────────────────────
         facts_label = QLabel("📌 Pinned Facts")
         facts_label.setStyleSheet(LABEL_STYLE)
         layout.addWidget(facts_label)
 
-        # Tab widget for global vs project facts
         self.facts_tabs = QTabWidget()
         self.facts_tabs.setStyleSheet("""
             QTabWidget::pane { border: 1px solid #3E3E42; background: #1E1E1E; }
@@ -99,7 +86,8 @@ class MemoryPanel(QDockWidget):
         add_btn = QPushButton("+")
         add_btn.setFixedWidth(28)
         add_btn.setStyleSheet(
-            "QPushButton { background-color: #0E639C; color: white; border: none; border-radius: 4px; font-weight: bold; }"
+            "QPushButton { background-color: #0E639C; color: white; border: none;"
+            " border-radius: 4px; font-weight: bold; }"
             "QPushButton:hover { background-color: #1177BB; }"
         )
         add_btn.clicked.connect(self.add_fact)
@@ -107,7 +95,8 @@ class MemoryPanel(QDockWidget):
         del_btn = QPushButton("🗑")
         del_btn.setFixedWidth(28)
         del_btn.setStyleSheet(
-            "QPushButton { background-color: #3E3E42; color: #CCCCCC; border: none; border-radius: 4px; }"
+            "QPushButton { background-color: #3E3E42; color: #CCCCCC; border: none;"
+            " border-radius: 4px; }"
             "QPushButton:hover { background-color: #F44336; color: white; }"
         )
         del_btn.clicked.connect(self.delete_fact)
@@ -118,12 +107,11 @@ class MemoryPanel(QDockWidget):
         fact_input_layout.addWidget(del_btn)
         layout.addLayout(fact_input_layout)
 
-        # ── Conversations section ──────────────────────────────────────
+        # ── Conversations section ──────────────────────────────────
         conv_label = QLabel("💬 Past Conversations")
         conv_label.setStyleSheet(LABEL_STYLE)
         layout.addWidget(conv_label)
 
-        # Search box
         self.conv_search = QLineEdit()
         self.conv_search.setPlaceholderText("Search conversations...")
         self.conv_search.setStyleSheet(INPUT_STYLE)
@@ -152,14 +140,16 @@ class MemoryPanel(QDockWidget):
         btn_layout = QHBoxLayout()
         clear_conv_btn = QPushButton("Clear History")
         clear_conv_btn.setStyleSheet(
-            "QPushButton { background-color: #3E3E42; color: #CCCCCC; border: none; border-radius: 4px; padding: 4px 10px; font-size: 9pt; }"
+            "QPushButton { background-color: #3E3E42; color: #CCCCCC; border: none;"
+            " border-radius: 4px; padding: 4px 10px; font-size: 9pt; }"
             "QPushButton:hover { background-color: #4E4E52; }"
         )
         clear_conv_btn.clicked.connect(self.clear_conversations)
 
         clear_all_btn = QPushButton("Clear All")
         clear_all_btn.setStyleSheet(
-            "QPushButton { background-color: #3E3E42; color: #CCCCCC; border: none; border-radius: 4px; padding: 4px 10px; font-size: 9pt; }"
+            "QPushButton { background-color: #3E3E42; color: #CCCCCC; border: none;"
+            " border-radius: 4px; padding: 4px 10px; font-size: 9pt; }"
             "QPushButton:hover { background-color: #F44336; color: white; }"
         )
         clear_all_btn.clicked.connect(self.clear_all)
@@ -169,48 +159,39 @@ class MemoryPanel(QDockWidget):
         btn_layout.addWidget(clear_all_btn)
         layout.addLayout(btn_layout)
 
-        self.setWidget(container)
-        self.setFeatures(
-            QDockWidget.DockWidgetFeature.DockWidgetClosable |
-            QDockWidget.DockWidgetFeature.DockWidgetMovable
-        )
-
     def _on_conversation_clicked(self, item):
-        """Restore a past conversation into the chat panel."""
         row = self.conv_list.currentRow()
         if row < 0:
             return
-    
-        # Get the actual conversation data
+
         if self.mm.project_path and self.mm.project_memory:
             convs = list(reversed(self.mm.project_memory["conversations"]))
         else:
             convs = list(reversed(self.mm.global_memory["conversations"]))
-    
-        # Filter to only those with full exchange data
+
         full_convs = [c for c in convs if c.get("user_message")]
-    
+
         if row < len(full_convs):
             conv = full_convs[row]
             user_msg = conv.get("user_message", "")
             ai_resp = conv.get("ai_response", "")
             if user_msg:
                 self.restore_conversation_requested.emit(user_msg, ai_resp)
-    
+
     def _filter_conversations(self, query):
         self.conv_list.clear()
         if query.strip():
             convs = self.mm.search_conversations(query, limit=20)
         else:
             convs = self.mm.get_conversations()[:30]
-    
+
         for conv in convs:
             tags = f" [{', '.join(conv['tags'])}]" if conv.get("tags") else ""
             has_full = "💬 " if conv.get("user_message") else "   "
             item = QListWidgetItem(f"{has_full}{conv['date']}{tags}\n{conv['summary']}")
             item.setForeground(QColor("#AAAAAA"))
             self.conv_list.addItem(item)
-        
+
     def refresh(self):
         self.global_facts_list.clear()
         for fact in self.mm.get_global_facts():
@@ -220,7 +201,6 @@ class MemoryPanel(QDockWidget):
         for fact in self.mm.get_project_facts():
             self.project_facts_list.addItem(QListWidgetItem(fact))
 
-        # Update project tab label
         if self.mm.project_path:
             name = os.path.basename(self.mm.project_path)
             self.facts_tabs.setTabText(1, f"Project: {name}")
@@ -228,19 +208,6 @@ class MemoryPanel(QDockWidget):
             self.facts_tabs.setTabText(1, "Project")
 
         self._filter_conversations(self.conv_search.text())
-
-    def _filter_conversations(self, query):
-        self.conv_list.clear()
-        if query.strip():
-            convs = self.mm.search_conversations(query, limit=20)
-        else:
-            convs = self.mm.get_conversations()[:30]
-
-        for conv in convs:
-            tags = f" [{', '.join(conv['tags'])}]" if conv.get("tags") else ""
-            item = QListWidgetItem(f"{conv['date']}{tags}\n{conv['summary']}")
-            item.setForeground(QColor("#AAAAAA"))
-            self.conv_list.addItem(item)
 
     def add_fact(self):
         text = self.fact_input.text().strip()
@@ -251,7 +218,6 @@ class MemoryPanel(QDockWidget):
             self.refresh()
 
     def delete_fact(self):
-        # Check which tab is active
         is_project = self.facts_tabs.currentIndex() == 1
         list_widget = self.project_facts_list if is_project else self.global_facts_list
         row = list_widget.currentRow()
@@ -260,19 +226,21 @@ class MemoryPanel(QDockWidget):
             self.refresh()
 
     def clear_conversations(self):
-        reply = QMessageBox.question(self, "Clear History",
-                                     "Clear all conversation summaries?",
-                                     QMessageBox.StandardButton.Yes |
-                                     QMessageBox.StandardButton.No)
+        reply = QMessageBox.question(
+            self, "Clear History",
+            "Clear all conversation summaries?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
         if reply == QMessageBox.StandardButton.Yes:
             self.mm.clear_conversations()
             self.refresh()
 
     def clear_all(self):
-        reply = QMessageBox.question(self, "Clear All Memory",
-                                     "Clear all facts and conversation history?",
-                                     QMessageBox.StandardButton.Yes |
-                                     QMessageBox.StandardButton.No)
+        reply = QMessageBox.question(
+            self, "Clear All Memory",
+            "Clear all facts and conversation history?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
         if reply == QMessageBox.StandardButton.Yes:
             self.mm.clear_all()
             self.refresh()

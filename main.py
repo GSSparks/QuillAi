@@ -565,7 +565,6 @@ class CodeEditor(QMainWindow):
             self.md_preview_dock.update_preview(editor.toPlainText())
                     
     def _restore_window_state(self):
-        """Restore window geometry and dock positions."""
         geometry = self.settings_manager.get('window_geometry')
         if geometry:
             try:
@@ -573,7 +572,9 @@ class CodeEditor(QMainWindow):
                 self.restoreGeometry(QByteArray.fromHex(geometry.encode()))
             except Exception:
                 pass
-
+    
+        # Only restore dock state if we have a valid saved state
+        # Skip if it might contain stale memory panel dock position
         dock_state = self.settings_manager.get('dock_state')
         if dock_state:
             try:
@@ -581,18 +582,17 @@ class CodeEditor(QMainWindow):
                 self.restoreState(QByteArray.fromHex(dock_state.encode()))
             except Exception:
                 pass
-
-        # Restore markdown preview visibility
+    
         md_visible = self.settings_manager.get('md_preview_visible')
         if hasattr(self, 'md_preview_dock'):
             if md_visible:
                 self.md_preview_dock.show()
             else:
                 self.md_preview_dock.hide()
-
-        # Always re-raise the sliding panel after dock restore
+    
         if hasattr(self, 'chat_panel'):
             self.chat_panel.raise_()
+            
     # -----------------------------
     # Find / Replace Method
     # -----------------------------
@@ -1608,11 +1608,11 @@ class CodeEditor(QMainWindow):
         return escaped   
            
     def setup_memory_panel(self):
+        from ui.memory_panel import MemoryPanel
         self.memory_panel = MemoryPanel(self.memory_manager, self)
         self.memory_panel.restore_conversation_requested.connect(
             self._restore_conversation
         )
-        self.memory_panel.setObjectName("memory_panel_dock")
         QTimer.singleShot(100, lambda: self.chat_panel.set_memory_widget(
             self.memory_panel
         ))

@@ -181,9 +181,19 @@ class SlidingPanel(QWidget):
         self.pin_btn.setCheckable(True)
         self.pin_btn.setToolTip("Pin open")
         self.pin_btn.setStyleSheet("""
-            QPushButton { background: transparent; color: #555555; border: none; }
-            QPushButton:checked { color: #0E639C; }
-            QPushButton:hover { color: #CCCCCC; }
+            QPushButton {
+                background: transparent;
+                color: #555555;
+                border: none;
+                font-size: 12pt;
+                padding: 0;
+            }
+            QPushButton:checked {
+                color: #0E639C;
+            }
+            QPushButton:hover {
+                color: #CCCCCC;
+            }
         """)
         self.pin_btn.toggled.connect(self._on_pin_toggled)
         tab_bar_layout.addWidget(self.pin_btn)
@@ -279,19 +289,9 @@ class SlidingPanel(QWidget):
             item = layout.takeAt(0)
             if item.widget():
                 item.widget().setParent(None)
-
-        from PyQt6.QtWidgets import QDockWidget
-        if isinstance(widget, QDockWidget):
-            inner = widget.widget()
-            if inner:
-                inner.setParent(self._memory_panel_widget)
-                layout.addWidget(inner)
-            else:
-                widget.setParent(self._memory_panel_widget)
-                layout.addWidget(widget)
-        else:
-            widget.setParent(self._memory_panel_widget)
-            layout.addWidget(widget)
+        widget.setParent(self._memory_panel_widget)
+        layout.addWidget(widget)
+        widget.show()
 
     # ── Tab switching ─────────────────────────────────────────────
 
@@ -313,7 +313,11 @@ class SlidingPanel(QWidget):
 
     def _on_pin_toggled(self, pinned: bool):
         self._pinned = pinned
-        if not pinned:
+        self.pin_btn.setToolTip("Unpin panel" if pinned else "Pin panel open")
+        if pinned:
+            self._hover_timer.stop()
+            self.expand()
+        else:
             self._hover_timer.start()
 
     # ── Positioning ───────────────────────────────────────────────
@@ -338,20 +342,24 @@ class SlidingPanel(QWidget):
     # ── Animation ─────────────────────────────────────────────────
 
     def expand(self):
-        if self._expanded or self._animating:
+        if self._animating:
+            return
+        if self._expanded:
+            # Already open — just make sure arrow is correct
+            self.arrow_label.setText("❮")
             return
         self._animating = True
         self._expanded = True
         self.raise_()
         self.arrow_label.setText("❮")
-
+    
         parent = self.parent()
         h = parent.height()
-        start = QRect(parent.width() - self.HANDLE_WIDTH, 0,
+        start = QRect(parent.width() - self.HANDLE_WIDTH, self.y(),
                       self.PANEL_WIDTH, h)
-        end = QRect(parent.width() - self.PANEL_WIDTH, 0,
+        end = QRect(parent.width() - self.PANEL_WIDTH, self.y(),
                     self.PANEL_WIDTH, h)
-
+    
         self._anim = QPropertyAnimation(self, b"geometry")
         self._anim.setDuration(180)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
