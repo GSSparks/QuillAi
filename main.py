@@ -416,14 +416,12 @@ class CodeEditor(QMainWindow):
             self.branch_label.setText("")    
             
     def load_project_chat(self):
-        self.chat_history.clear()
+        self.chat_panel.chat_history.clear()
         self.current_ai_raw_text = ""
         saved = self.memory_manager.load_chat_history()
         if saved:
-            self.chat_history.setHtml(saved)
-            self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-        else:
-            self.chat_history.setPlainText("")
+            self.chat_panel.chat_history.setHtml(saved)
+            self.chat_panel.chat_history.moveCursor(QTextCursor.MoveOperation.End)
         
     def estimate_tokens(self, text: str) -> int:
         """Rough token estimate — 1 token ≈ 4 characters for code."""
@@ -676,51 +674,49 @@ class CodeEditor(QMainWindow):
 
     def handle_editor_error_help(self, error_msg, code, line_num):
         self.chat_panel.expand()
-        self.chat_panel.chat_input.setFocus()
-
+        self.chat_panel.switch_to_chat()
+    
         user_text = f"I have a SyntaxError on line {line_num}: {error_msg}. Can you help me fix it?"
-
-        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-        self.chat_history.insertPlainText(f"\nYou: {user_text}\n\n[Code Context Sent]\n\nQuillAI: ")
-        self.chat_history.ensureCursorVisible()
-
-        prompt = f"""
-        The user has encountered a SyntaxError in their Python file.
-
-        Error Message: {error_msg}
-        Error Location: Line {line_num}
-
-        Full Code:
-        ```python
-        {code}
-        ```
-
-        Instructions:
-        1. Briefly explain what the error means and why it happened.
-        2. Provide the corrected code for that line or block.
-        """
-
+    
+        prompt = f"""The user has encountered a SyntaxError in their Python file.
+    
+    Error Message: {error_msg}
+    Error Location: Line {line_num}
+    
+    Full Code:
+    ```python
+    {code}
+    ```
+    
+    Instructions:
+    1. Briefly explain what the error means and why it happened.
+    2. Provide the corrected code for that line or block."""
+    
+        # Use the standard chat message flow
+        self._last_user_message = user_text
+        self._append_user_message(user_text)
+    
+        self._ai_response_buffer = ""
+        self.current_ai_raw_text = ""
+    
         thread = QThread()
         self.chat_worker = self.create_worker(
-            prompt=prompt_with_context,
+            prompt=prompt,
             is_chat=True,
         )
-
         self.chat_worker.moveToThread(thread)
         self.chat_worker.chat_update.connect(self.append_chat_stream)
-
         self.chat_worker.finished.connect(self.chat_stream_finished)
-
         self.chat_worker.finished.connect(thread.quit)
         self.chat_worker.finished.connect(self.chat_worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-
         self.show_loading_indicator()
         self.chat_worker.finished.connect(self.hide_loading_indicator)
-
         self.active_threads.append(thread)
-        thread.finished.connect(lambda: self.active_threads.remove(thread) if thread in self.active_threads else None)
-
+        thread.finished.connect(
+            lambda: self.active_threads.remove(thread)
+            if thread in self.active_threads else None
+        )
         thread.started.connect(self.chat_worker.run)
         thread.start()
 
@@ -773,7 +769,16 @@ class CodeEditor(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, 'chat_panel'):
-            self.chat_panel.setFixedHeight(self.height())
+            # Use centralWidget height + menuBar to avoid covering status bar
+            status_bar_height = self.statusBar().height()
+            menu_bar_height = self.menuBar().height()
+            available_height = self.height() - status_bar_height - menu_bar_height
+            y_offset = menu_bar_height
+            self.chat_panel.setFixedHeight(available_height)
+            self.chat_panel.move(
+                self.chat_panel.x(),
+                y_offset
+            )
             self.chat_panel.reposition()
             self.chat_panel.raise_()
 
@@ -973,7 +978,7 @@ class CodeEditor(QMainWindow):
 
     def _restore_conversation(self, user_message: str, ai_response: str):
         self.chat_panel.expand()
-        self.chat_panel.chat_input.setFocus()
+        self.chat_panel.switch_to_chat()
         self.chat_history.clear()
         self.current_ai_raw_text = ""
         self._ai_response_buffer = ""
@@ -1126,31 +1131,28 @@ class CodeEditor(QMainWindow):
             self,
             settings_manager=self.settings_manager
         )
-
         self.chat_panel.message_sent.connect(self._on_chat_message)
         self.chat_panel.show()
         self.chat_panel.raise_()
-
+    
         saved = self.memory_manager.load_chat_history()
         if saved:
             self.chat_panel.chat_history.setHtml(saved)
             self.chat_panel.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-
-        QTimer.singleShot(500, self._connect_chat_signals)
+    
+        # Store direct references — safe because SlidingPanel is parented to self
+        self.chat_history = self.chat_panel.chat_history
+        self.chat_input = self.chat_panel.chat_input
+        self.chat_history.anchorClicked.connect(self.handle_chat_link)
 
     def _connect_chat_signals(self):
-        try:
-            hist = self.chat_panel.chat_history
-            # Test if C++ object is still alive
-            _ = hist.toPlainText()
-            self.chat_history = hist
-            self.chat_input = self.chat_panel.chat_input
-            self.chat_history.anchorClicked.connect(self.handle_chat_link)
-        except RuntimeError as e:
-            import traceback
-            traceback.print_exc()
+        # No longer needed — references set directly in setup_chat_panel
+        pass
 
     def _on_chat_message(self, user_text: str):
+        # Store for memory summarization — replaces the broken plain text search
+        self._last_user_message = user_text
+    
         self._append_user_message(user_text)
     
         editor = self.current_editor()
@@ -1158,44 +1160,6 @@ class CodeEditor(QMainWindow):
         context = self.build_chat_context(user_text, active_code)
         prompt_with_context = f"{user_text}\n\n{context}"
     
-        self._ai_response_buffer = ""
-        self.current_ai_raw_text = ""
-    
-        thread = QThread()
-        self.chat_worker = self.create_worker(
-            prompt=prompt_with_context,
-            is_chat=True,
-        )
-        self.chat_worker.moveToThread(thread)
-        self.chat_worker.chat_update.connect(self.append_chat_stream)
-        self.chat_worker.finished.connect(self.chat_stream_finished)
-        self.chat_worker.finished.connect(thread.quit)
-        self.chat_worker.finished.connect(self.chat_worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        self.show_loading_indicator()
-        self.chat_worker.finished.connect(self.hide_loading_indicator)
-        self.active_threads.append(thread)
-        thread.finished.connect(
-            lambda: self.active_threads.remove(thread)
-            if thread in self.active_threads else None
-        )
-        thread.started.connect(self.chat_worker.run)
-        thread.start()
-
-    def send_chat_message(self):
-        user_text = self.chat_input.toPlainText().strip()
-        if not user_text: return
-        self.chat_input.clear()
-    
-        # Render user message as HTML bubble
-        self._append_user_message(user_text)
-    
-        editor = self.current_editor()
-        active_code = editor.toPlainText() if editor else ""
-        context = self.build_chat_context(user_text, active_code)
-        prompt_with_context = f"{user_text}\n\n{context}"
-    
-        # Start AI response placeholder
         self._ai_response_buffer = ""
         self.current_ai_raw_text = ""
     
@@ -1649,7 +1613,6 @@ class CodeEditor(QMainWindow):
             self._restore_conversation
         )
         self.memory_panel.setObjectName("memory_panel_dock")
-        # Inject into the sliding panel's memory tab
         QTimer.singleShot(100, lambda: self.chat_panel.set_memory_widget(
             self.memory_panel
         ))
@@ -1659,37 +1622,28 @@ class CodeEditor(QMainWindow):
     # ==========================================
     def load_snippet_to_chat(self, text):
         self.chat_panel.expand()
-        self.chat_panel.chat_input.setFocus()
-        current_input = self.chat_input.toPlainText()
+        self.chat_panel.switch_to_chat()
+    
+        chat_input = self.chat_panel.chat_input
+        current_input = chat_input.toPlainText()
         new_text = f"```python\n{text}\n```\n"
-
+    
         if current_input.strip():
             final_text = current_input + "\n\n" + new_text
         else:
             final_text = new_text
-
-        self.chat_input.setPlainText(final_text)
-        self.chat_input.setFocus()
-
-        cursor = self.chat_input.textCursor()
+    
+        chat_input.setPlainText(final_text)
+        chat_input.setFocus()
+        cursor = chat_input.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        self.chat_input.setTextCursor(cursor)
+        chat_input.setTextCursor(cursor)
      
     def _summarize_conversation_to_memory(self, ai_response: str):
         try:
-            last_user = ""
-            text = self.chat_history.toPlainText()
-            lines = text.strip().split('\n')
-    
-            for i in range(len(lines) - 1, -1, -1):
-                line = lines[i]
-                if line.startswith("You:"):
-                    inline = line.replace("You:", "").strip()
-                    if inline:
-                        last_user = inline
-                    elif i + 1 < len(lines) and lines[i + 1].strip():
-                        last_user = lines[i + 1].strip()
-                    break
+            # Extract last user message from stored buffer
+            # since chat uses HTML bubbles we track it separately
+            last_user = getattr(self, '_last_user_message', "")
     
             if not last_user:
                 return
@@ -1706,7 +1660,7 @@ class CodeEditor(QMainWindow):
             # Record for intent tracking
             self.intent_tracker.record_chat_exchange(last_user, ai_response[:500])
     
-            # Save full exchange so it can be restored later
+            # Save full exchange
             summary = last_user[:80] + ("..." if len(last_user) > 80 else "")
             self.memory_manager.add_conversation(
                 summary=summary,

@@ -330,11 +330,10 @@ class SlidingPanel(QWidget):
         if not self.parent():
             return
         parent = self.parent()
-        self.setFixedHeight(parent.height())
         if self._expanded:
-            self.move(parent.width() - self.PANEL_WIDTH, 0)
+            self.move(parent.width() - self.PANEL_WIDTH, self.y())
         else:
-            self.move(parent.width() - self.HANDLE_WIDTH, 0)
+            self.move(parent.width() - self.HANDLE_WIDTH, self.y())
 
     # ── Animation ─────────────────────────────────────────────────
 
