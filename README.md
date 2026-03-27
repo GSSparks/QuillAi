@@ -77,6 +77,7 @@ Switch backends at any time with the mode button in the status bar (`🏠 LOCAL`
 Python 3.10+
 PyQt6
 requests
+markdown
 ```
 
 Optional:

@@ -43,6 +43,7 @@
           pyqt6
           pyyaml
           requests
+          markdown
         ];
 
         buildInputs = [

@@ -1,12 +1,11 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                               QLabel, QTextEdit, QTextBrowser, QStackedWidget,
                               QSizePolicy)
-from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QRect, pyqtSignal, QTimer, QPoint
+from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QRect, pyqtSignal, QTimer
 from PyQt6.QtGui import QKeySequence, QTextCursor, QShortcut, QCursor
 
 
 class ResizeGrip(QWidget):
-    """Draggable left edge for resizing the panel."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedWidth(5)
@@ -33,7 +32,6 @@ class ResizeGrip(QWidget):
     def mouseReleaseEvent(self, event):
         if self._dragging:
             self._dragging = False
-            # Save width to settings
             self.parent()._save_width()
             event.accept()
 
@@ -60,9 +58,9 @@ class SlidingPanel(QWidget):
         self._expanded = False
         self._animating = False
         self._pinned = False
+        self._hover_enabled = True
         self.settings_manager = settings_manager
 
-        # Load saved width
         self.PANEL_WIDTH = self.DEFAULT_WIDTH
         if settings_manager:
             saved_width = settings_manager.get("panel_width")
@@ -81,7 +79,6 @@ class SlidingPanel(QWidget):
         self._position_collapsed()
 
     def set_panel_width(self, width: int):
-        """Resize the panel live while dragging."""
         self.PANEL_WIDTH = width
         self.setFixedWidth(width)
         self.content.setFixedWidth(width - self.HANDLE_WIDTH - 5)
@@ -104,10 +101,10 @@ class SlidingPanel(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # ── Handle (hover trigger) ────────────────────────────────
-        self.handle = QWidget()
+        # ── Handle ────────────────────────────────────────────────
+        self.handle = QWidget(self)
         self.handle.setFixedWidth(self.HANDLE_WIDTH)
-        self.handle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.handle.setCursor(Qt.CursorShape.ArrowCursor)
         self.handle.setMouseTracking(True)
         self.handle.setStyleSheet("background-color: transparent;")
 
@@ -123,11 +120,11 @@ class SlidingPanel(QWidget):
         handle_layout.addWidget(self.arrow_label)
         handle_layout.addStretch()
 
-        # ── Resize grip (left edge of content) ───────────────────
+        # ── Resize grip ───────────────────────────────────────────
         self.resize_grip = ResizeGrip(self)
 
         # ── Content ───────────────────────────────────────────────
-        self.content = QWidget()
+        self.content = QWidget(self)
         self.content.setFixedWidth(self.PANEL_WIDTH - self.HANDLE_WIDTH - 5)
         self.content.setMouseTracking(True)
         self.content.setStyleSheet("background-color: #252526;")
@@ -137,7 +134,7 @@ class SlidingPanel(QWidget):
         content_layout.setSpacing(0)
 
         # Tab bar
-        tab_bar = QWidget()
+        tab_bar = QWidget(self.content)
         tab_bar.setFixedHeight(38)
         tab_bar.setStyleSheet(
             "background-color: #1E1E1E; border-bottom: 1px solid #3E3E42;"
@@ -147,13 +144,12 @@ class SlidingPanel(QWidget):
         tab_bar_layout.setSpacing(4)
 
         self._tab_buttons = {}
-        self._stack = QStackedWidget()
+        self._stack = QStackedWidget(self.content)
         self._stack.setMouseTracking(True)
 
         for i, (name, icon) in enumerate([
-            ("Chat",    "💬"),
-            ("Memory",  "🧠"),
-            ("Preview", "👁"),
+            ("Chat",   "💬"),
+            ("Memory", "🧠"),
         ]):
             btn = QPushButton(f"{icon}  {name}")
             btn.setCheckable(True)
@@ -180,7 +176,6 @@ class SlidingPanel(QWidget):
 
         tab_bar_layout.addStretch()
 
-        # Pin button
         self.pin_btn = QPushButton("📌")
         self.pin_btn.setFixedSize(24, 24)
         self.pin_btn.setCheckable(True)
@@ -198,7 +193,6 @@ class SlidingPanel(QWidget):
 
         self._build_chat_panel()
         self._build_memory_panel()
-        self._build_preview_panel()
         self._switch_tab(0)
 
         main_layout.addWidget(self.handle)
@@ -208,13 +202,13 @@ class SlidingPanel(QWidget):
     # ── Chat panel ────────────────────────────────────────────────
 
     def _build_chat_panel(self):
-        panel = QWidget()
+        panel = QWidget(self.content)
         panel.setMouseTracking(True)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
-        self.chat_history = QTextBrowser()
+        self.chat_history = QTextBrowser(panel)
         self.chat_history.setOpenLinks(False)
         self.chat_history.setMouseTracking(True)
         self.chat_history.setStyleSheet("""
@@ -229,7 +223,7 @@ class SlidingPanel(QWidget):
         layout.addWidget(self.chat_history)
 
         input_row = QHBoxLayout()
-        self.chat_input = QTextEdit()
+        self.chat_input = QTextEdit(panel)
         self.chat_input.setFixedHeight(70)
         self.chat_input.setPlaceholderText("Ask QuillAI... (Ctrl+Enter)")
         self.chat_input.setMouseTracking(True)
@@ -246,7 +240,7 @@ class SlidingPanel(QWidget):
             QTextEdit:focus { border: 1px solid #0E639C; }
         """)
 
-        send_btn = QPushButton("➤")
+        send_btn = QPushButton("➤", panel)
         send_btn.setFixedSize(36, 70)
         send_btn.setStyleSheet("""
             QPushButton {
@@ -265,12 +259,14 @@ class SlidingPanel(QWidget):
         input_row.addWidget(self.chat_input)
         input_row.addWidget(send_btn)
         layout.addLayout(input_row)
+
+        # THIS was the missing line
         self._stack.addWidget(panel)
 
     # ── Memory panel ──────────────────────────────────────────────
 
     def _build_memory_panel(self):
-        panel = QWidget()
+        panel = QWidget(self.content)
         panel.setMouseTracking(True)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -283,63 +279,19 @@ class SlidingPanel(QWidget):
             item = layout.takeAt(0)
             if item.widget():
                 item.widget().setParent(None)
-        widget.setParent(self._memory_panel_widget)
-        layout.addWidget(widget)
 
-    # ── Preview panel ─────────────────────────────────────────────
-
-    def _build_preview_panel(self):
-        panel = QWidget()
-        panel.setMouseTracking(True)
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        self.preview_browser = QTextBrowser()
-        self.preview_browser.setOpenLinks(True)
-        self.preview_browser.setMouseTracking(True)
-        self.preview_browser.setStyleSheet("""
-            QTextBrowser {
-                background-color: #1E1E1E;
-                color: #D4D4D4;
-                border: none;
-                padding: 12px;
-                font-family: Inter, sans-serif;
-                font-size: 10pt;
-            }
-        """)
-        layout.addWidget(self.preview_browser)
-        self._stack.addWidget(panel)
-
-    def update_preview(self, markdown_text: str):
-        try:
-            import markdown
-            html = markdown.markdown(
-                markdown_text,
-                extensions=['fenced_code', 'tables', 'nl2br']
-            )
-        except ImportError:
-            html = markdown_text.replace('\n', '<br>')
-
-        styled = f"""
-        <style>
-            body {{ color:#D4D4D4; font-family:Inter,sans-serif;
-                    font-size:10pt; line-height:1.6; }}
-            h1,h2,h3 {{ color:#569CD6; }}
-            code {{ background:#2A2A2D; color:#CE9178; padding:1px 4px;
-                   border-radius:3px; font-family:Hack,monospace; }}
-            pre {{ background:#1A1A1C; border:1px solid #3E3E42;
-                  border-radius:8px; padding:12px;
-                  font-family:Hack,monospace; font-size:9pt; }}
-            blockquote {{ border-left:3px solid #0E639C; margin:0;
-                         padding-left:12px; color:#888888; }}
-            table {{ border-collapse:collapse; width:100%; }}
-            th,td {{ border:1px solid #3E3E42; padding:6px 10px; }}
-            th {{ background:#2D2D30; }}
-            a {{ color:#0E639C; }}
-        </style>
-        {html}
-        """
-        self.preview_browser.setHtml(styled)
+        from PyQt6.QtWidgets import QDockWidget
+        if isinstance(widget, QDockWidget):
+            inner = widget.widget()
+            if inner:
+                inner.setParent(self._memory_panel_widget)
+                layout.addWidget(inner)
+            else:
+                widget.setParent(self._memory_panel_widget)
+                layout.addWidget(widget)
+        else:
+            widget.setParent(self._memory_panel_widget)
+            layout.addWidget(widget)
 
     # ── Tab switching ─────────────────────────────────────────────
 
@@ -355,10 +307,6 @@ class SlidingPanel(QWidget):
 
     def switch_to_memory(self):
         self._switch_tab(1)
-        self.expand()
-
-    def switch_to_preview(self):
-        self._switch_tab(2)
         self.expand()
 
     # ── Pin ───────────────────────────────────────────────────────
@@ -444,11 +392,17 @@ class SlidingPanel(QWidget):
     # ── Mouse ─────────────────────────────────────────────────────
 
     def enterEvent(self, event):
+        if not self._hover_enabled:
+            super().enterEvent(event)
+            return
         self._hover_timer.stop()
         self.expand()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
+        if not self._hover_enabled:
+            super().leaveEvent(event)
+            return
         if not self._pinned:
             self._hover_timer.start()
         super().leaveEvent(event)

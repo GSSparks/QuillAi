@@ -27,6 +27,7 @@ from ui.memory_panel import MemoryPanel
 from ui.session_manager import save_session, load_session
 from ui.session_intent import init_tracker
 from ui.sliding_chat_panel import SlidingPanel
+from ui.markdown_preview import MarkdownPreviewDock
 
 from editor.highlighter import registry
 from plugins.git_plugin import GitDockWidget
@@ -299,6 +300,7 @@ class CodeEditor(QMainWindow):
         self.process.readyReadStandardError.connect(self.handle_stderr)
         self.process.finished.connect(self.process_finished)
 
+        self._restore_window_state()
         self._restore_session()
         
     def toggle_inline_completion(self, enabled):
@@ -538,9 +540,17 @@ class CodeEditor(QMainWindow):
             editor.request_completion_hotkey()
     
     def setup_markdown_preview(self):
-        # Preview is now built into the sliding panel
-        # _refresh_markdown_preview calls chat_panel.update_preview directly
-        pass
+        from ui.markdown_preview import MarkdownPreviewDock
+        self.md_preview_dock = MarkdownPreviewDock(self)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.md_preview_dock)
+        # Allow it to float so user can position it anywhere
+        self.md_preview_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetClosable |
+            QDockWidget.DockWidgetFeature.DockWidgetMovable |
+            QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        )
+        self.md_preview_dock.setObjectName("md_preview_dock")
+        self.md_preview_dock.hide()
         
     def _refresh_markdown_preview(self, editor=None):
         if editor is None:
@@ -549,10 +559,42 @@ class CodeEditor(QMainWindow):
             return
         path = getattr(editor, 'file_path', '') or ''
         is_md = path.lower().endswith(('.md', '.markdown'))
-        if is_md and hasattr(self, 'chat_panel'):
-            self.chat_panel.update_preview(editor.toPlainText())
-            self.chat_panel.switch_to_preview()
+        if not is_md:
+            return
+        if hasattr(self, 'md_preview_dock'):
+            self.md_preview_dock.show()
+            self.md_preview_dock.raise_()
+            self.md_preview_dock.update_preview(editor.toPlainText())
                     
+    def _restore_window_state(self):
+        """Restore window geometry and dock positions."""
+        geometry = self.settings_manager.get('window_geometry')
+        if geometry:
+            try:
+                from PyQt6.QtCore import QByteArray
+                self.restoreGeometry(QByteArray.fromHex(geometry.encode()))
+            except Exception:
+                pass
+
+        dock_state = self.settings_manager.get('dock_state')
+        if dock_state:
+            try:
+                from PyQt6.QtCore import QByteArray
+                self.restoreState(QByteArray.fromHex(dock_state.encode()))
+            except Exception:
+                pass
+
+        # Restore markdown preview visibility
+        md_visible = self.settings_manager.get('md_preview_visible')
+        if hasattr(self, 'md_preview_dock'):
+            if md_visible:
+                self.md_preview_dock.show()
+            else:
+                self.md_preview_dock.hide()
+
+        # Always re-raise the sliding panel after dock restore
+        if hasattr(self, 'chat_panel'):
+            self.chat_panel.raise_()
     # -----------------------------
     # Find / Replace Method
     # -----------------------------
@@ -569,6 +611,7 @@ class CodeEditor(QMainWindow):
 
         self.search_dock.setWidget(self.find_in_files_widget)
         self.search_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
+        self.search_dock.setObjectName("search_dock")
 
         # Dock it at the bottom, and tabify it with the Output panel to save space!
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.search_dock)
@@ -712,14 +755,27 @@ class CodeEditor(QMainWindow):
         # Save session on the way out
         if event.isAccepted():
             self._save_current_session()
+            # Save dock states
+            self.settings_manager.set(
+                'dock_state',
+                self.saveState().toHex().data().decode()
+            )
+            self.settings_manager.set(
+                'window_geometry',
+                self.saveGeometry().toHex().data().decode()
+            )
+            if hasattr(self, 'md_preview_dock'):
+                self.settings_manager.set(
+                    'md_preview_visible',
+                    self.md_preview_dock.isVisible()
+                )
             
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, 'chat_panel'):
+            self.chat_panel.setFixedHeight(self.height())
             self.chat_panel.reposition()
-            self.chat_panel.setFixedHeight(
-                self.central_container.height()
-            )
+            self.chat_panel.raise_()
 
     def close_tab(self, index):
         editor = self.tabs.widget(index)
@@ -1065,22 +1121,34 @@ class CodeEditor(QMainWindow):
         return "".join(imported_context)
 
     def setup_chat_panel(self):
+        from ui.sliding_chat_panel import SlidingPanel
         self.chat_panel = SlidingPanel(
-            self.central_container,
+            self,
             settings_manager=self.settings_manager
         )
+
         self.chat_panel.message_sent.connect(self._on_chat_message)
         self.chat_panel.show()
         self.chat_panel.raise_()
-    
-        self.chat_history = self.chat_panel.chat_history
-        self.chat_input = self.chat_panel.chat_input
-        self.chat_history.anchorClicked.connect(self.handle_chat_link)
-    
+
         saved = self.memory_manager.load_chat_history()
         if saved:
-            self.chat_history.setHtml(saved)
-            self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
+            self.chat_panel.chat_history.setHtml(saved)
+            self.chat_panel.chat_history.moveCursor(QTextCursor.MoveOperation.End)
+
+        QTimer.singleShot(500, self._connect_chat_signals)
+
+    def _connect_chat_signals(self):
+        try:
+            hist = self.chat_panel.chat_history
+            # Test if C++ object is still alive
+            _ = hist.toPlainText()
+            self.chat_history = hist
+            self.chat_input = self.chat_panel.chat_input
+            self.chat_history.anchorClicked.connect(self.handle_chat_link)
+        except RuntimeError as e:
+            import traceback
+            traceback.print_exc()
 
     def _on_chat_message(self, user_text: str):
         self._append_user_message(user_text)
@@ -1580,8 +1648,11 @@ class CodeEditor(QMainWindow):
         self.memory_panel.restore_conversation_requested.connect(
             self._restore_conversation
         )
+        self.memory_panel.setObjectName("memory_panel_dock")
         # Inject into the sliding panel's memory tab
-        self.chat_panel.set_memory_widget(self.memory_panel)
+        QTimer.singleShot(100, lambda: self.chat_panel.set_memory_widget(
+            self.memory_panel
+        ))
 
     # ==========================================
     # The Two-Way Bridge Methods
@@ -1711,7 +1782,7 @@ class CodeEditor(QMainWindow):
         panels = [
             ("Chat",            lambda: self.chat_panel.switch_to_chat()),
             ("Memory",          lambda: self.chat_panel.switch_to_memory()),
-            ("Markdown Preview",lambda: self.chat_panel.switch_to_preview()),
+            ("Markdown Preview", lambda: (self.md_preview_dock.show(), self.md_preview_dock.raise_(), self._refresh_markdown_preview())),
             ("Explorer",        lambda: (self.sidebar_dock.show(), self.sidebar_dock.raise_())),
             ("Source Control",  lambda: (self.git_dock.show(),     self.git_dock.raise_())),
             ("Output",          lambda: (self.output_dock.show(),  self.output_dock.raise_())),
@@ -1766,6 +1837,7 @@ class CodeEditor(QMainWindow):
         self.output_dock.setStyleSheet(DOCK_STYLE)
         self.output_dock.setWidget(output_container)
         self.output_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
+        self.output_dock.setObjectName("output_dock")
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.output_dock)
         self.output_dock.hide()
 
@@ -1921,11 +1993,13 @@ class CodeEditor(QMainWindow):
         self.sidebar_dock.setStyleSheet(DOCK_STYLE)
         self.sidebar_dock.setWidget(self.tree_view)
         self.sidebar_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
+        self.sidebar_dock.setObjectName("sidebar_dock")
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.sidebar_dock)
 
     def setup_git_panel(self):
         self.git_dock = GitDockWidget(self)
         self.git_dock.file_double_clicked.connect(self.open_file_in_tab)
+        self.git_dock.setObjectName("git_dock")
 
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.git_dock)
         self.tabifyDockWidget(self.sidebar_dock, self.git_dock)
