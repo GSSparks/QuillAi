@@ -1126,7 +1126,6 @@ class CodeEditor(QMainWindow):
         return "".join(imported_context)
 
     def setup_chat_panel(self):
-        from ui.sliding_chat_panel import SlidingPanel
         self.chat_panel = SlidingPanel(
             self,
             settings_manager=self.settings_manager
@@ -1191,12 +1190,12 @@ class CodeEditor(QMainWindow):
                        .replace("\n", "<br>"))
     
         html = (
-            # Right-aligned user bubble
             f'<table width="100%" cellpadding="0" cellspacing="0" '
             f'style="margin:8px 0;">'
-            f'<tr><td width="10%"></td>'
-            f'<td width="90%" align="right">'
-            f'<table cellpadding="0" cellspacing="0" align="right">'
+            f'<tr>'
+            f'<td width="30%"></td>'
+            f'<td width="70%" align="right">'
+            f'<table cellpadding="0" cellspacing="0" align="right" width="100%">'
             f'<tr><td style="background-color:#0E639C; border-radius:18px 18px 4px 18px; '
             f'padding:10px 14px; color:#FFFFFF; '
             f'font-family:Inter,sans-serif; font-size:10pt; '
@@ -1205,47 +1204,77 @@ class CodeEditor(QMainWindow):
             f'color:#555555; font-size:8pt; '
             f'font-family:Inter,sans-serif;">You</td></tr>'
             f'</table></td></tr></table>'
-    
-            # Left-aligned QuillAI label ready for streaming
-            f'<table width="100%" cellpadding="0" cellspacing="0">'
-            f'<tr><td width="90%">'
-            f'<table cellpadding="0" cellspacing="0">'
-            f'<tr><td style="padding:2px 0 4px 4px; color:#8A2BE2; '
+            f'<p style="margin:8px 0 2px 4px; color:#8A2BE2; '
             f'font-size:8pt; font-family:Inter,sans-serif; '
-            f'font-weight:bold;">QuillAI</td></tr>'
-            f'<tr><td style="background-color:#252526; '
-            f'border-radius:8px 18px 18px 18px; '
-            f'padding:10px 14px; color:#D4D4D4; '
-            f'font-family:Inter,sans-serif; font-size:10pt; '
-            f'line-height:1.5;" id="streaming"> </td></tr>'
-            f'</table></td><td width="20%"></td></tr></table>'
+            f'font-weight:bold;">QuillAI</p>'
         )
     
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
         self.chat_history.insertHtml(html)
+    
+        # Move to end AFTER insertion and record that position
+        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
+        self._stream_start_pos = self.chat_history.textCursor().position()
         self.chat_history.ensureCursorVisible()
     
     def append_chat_stream(self, text):
         self.current_ai_raw_text += text
+        self._stream_buffer = getattr(self, '_stream_buffer', '') + text
+    
+        should_render = (
+            '\n' in self._stream_buffer or        
+            self._stream_buffer.endswith('```') or
+            len(self._stream_buffer) > 80         
+        )
+    
+        if should_render:
+            self._flush_stream_buffer()
+        
+    def _flush_stream_buffer(self):
+        if not self.current_ai_raw_text.strip():
+            return
+    
+        start_pos = getattr(self, '_stream_start_pos', 0)
+    
+        # Safety guard — if start_pos is 0 something went wrong, don't wipe the chat
+        if start_pos == 0:
+            return
+    
+        cursor = self.chat_history.textCursor()
+        cursor.setPosition(start_pos)
+        cursor.movePosition(QTextCursor.MoveOperation.End,
+                            QTextCursor.MoveMode.KeepAnchor)
+        cursor.removeSelectedText()
+        self.chat_history.setTextCursor(cursor)
+    
+        rendered = self._render_partial_response(self.current_ai_raw_text)
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-        self.chat_history.insertPlainText(text)
+        self.chat_history.insertHtml(rendered)
+        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
         self.chat_history.ensureCursorVisible()
+    
+        self._stream_buffer = ''
+    
+    def _render_partial_response(self, text: str) -> str:
+        import re
+        # Temporarily close any unclosed code block
+        open_fences = len(re.findall(r'^```', text, re.MULTILINE))
+        if open_fences % 2 == 1:
+            text = text + '\n```'
+        return self._render_ai_response(text)
     
     def chat_stream_finished(self):
         full_response = self.current_ai_raw_text
     
-        # Remove the streamed plain text placeholder
-        full_plain = self.chat_history.toPlainText()
-        last_quillai = full_plain.rfind("QuillAI")
-        if last_quillai >= 0:
+        start_pos = getattr(self, '_stream_start_pos', 0)
+        if start_pos > 0:
             cursor = self.chat_history.textCursor()
-            cursor.setPosition(last_quillai + len("QuillAI"))
+            cursor.setPosition(start_pos)
             cursor.movePosition(QTextCursor.MoveOperation.End,
                                 QTextCursor.MoveMode.KeepAnchor)
             cursor.removeSelectedText()
             self.chat_history.setTextCursor(cursor)
     
-        # Insert the properly rendered bubble
         rendered = self._render_ai_response(full_response)
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
         self.chat_history.insertHtml(rendered)
@@ -1256,26 +1285,31 @@ class CodeEditor(QMainWindow):
             self._summarize_conversation_to_memory(full_response)
     
         self.memory_manager.save_chat_history(self.chat_history.toHtml())
-
         self.current_ai_raw_text = ""
         self._ai_response_buffer = ""
+        self._stream_buffer = ""
+        self._stream_start_pos = 0
     
     def _render_markdown_text(self, text: str) -> str:
-        """Convert markdown text to HTML for display in chat bubbles."""
-        import re
     
         lines = text.split('\n')
         html_lines = []
-        in_list = False
+        in_ul = False
+        in_ol = False
     
         for line in lines:
             stripped = line.strip()
     
-            # Bullet points — -, *, +
             if re.match(r'^[-*+]\s+', stripped):
-                if not in_list:
-                    html_lines.append('<ul style="margin:4px 0 4px 16px; padding:0;">')
-                    in_list = True
+                if not in_ul:
+                    if in_ol:
+                        html_lines.append('</ol>')
+                        in_ol = False
+                    html_lines.append(
+                        '<ul style="margin:4px 0 4px 16px; padding:0; '
+                        'list-style-type:disc;">'
+                    )
+                    in_ul = True
                 content = re.sub(r'^[-*+]\s+', '', stripped)
                 content = self._apply_inline_markdown(content)
                 html_lines.append(
@@ -1285,11 +1319,15 @@ class CodeEditor(QMainWindow):
                 )
                 continue
     
-            # Numbered list
             if re.match(r'^\d+\.\s+', stripped):
-                if not in_list:
-                    html_lines.append('<ol style="margin:4px 0 4px 16px; padding:0;">')
-                    in_list = True
+                if not in_ol:
+                    if in_ul:
+                        html_lines.append('</ul>')
+                        in_ul = False
+                    html_lines.append(
+                        '<ol style="margin:4px 0 4px 16px; padding:0;">'
+                    )
+                    in_ol = True
                 content = re.sub(r'^\d+\.\s+', '', stripped)
                 content = self._apply_inline_markdown(content)
                 html_lines.append(
@@ -1299,12 +1337,14 @@ class CodeEditor(QMainWindow):
                 )
                 continue
     
-            # Close list if we hit a non-list line
-            if in_list:
-                html_lines.append('</ul>' if not re.match(r'^\d+', stripped) else '</ol>')
-                in_list = False
+            # Close any open list before other elements
+            if in_ul:
+                html_lines.append('</ul>')
+                in_ul = False
+            if in_ol:
+                html_lines.append('</ol>')
+                in_ol = False
     
-            # Headings
             if re.match(r'^#{1,3}\s', stripped):
                 level = len(re.match(r'^(#+)', stripped).group(1))
                 content = re.sub(r'^#+\s+', '', stripped)
@@ -1317,7 +1357,6 @@ class CodeEditor(QMainWindow):
                 )
                 continue
     
-            # Horizontal rule
             if re.match(r'^[-*_]{3,}\s*$', stripped):
                 html_lines.append(
                     '<hr style="border:none; border-top:1px solid #3E3E42; '
@@ -1325,12 +1364,10 @@ class CodeEditor(QMainWindow):
                 )
                 continue
     
-            # Blank line
             if not stripped:
                 html_lines.append('<p style="margin:4px 0;">&nbsp;</p>')
                 continue
     
-            # Normal paragraph
             content = self._apply_inline_markdown(stripped)
             html_lines.append(
                 f'<p style="margin:2px 0; color:#D4D4D4; '
@@ -1338,8 +1375,10 @@ class CodeEditor(QMainWindow):
                 f'font-size:10pt; line-height:1.8;">{content}</p>'
             )
     
-        if in_list:
+        if in_ul:
             html_lines.append('</ul>')
+        if in_ol:
+            html_lines.append('</ol>')
     
         return ''.join(html_lines)
     
@@ -1363,6 +1402,43 @@ class CodeEditor(QMainWindow):
         text = re.sub(r'_(.+?)_',   r'<em>\1</em>', text)
         return text
     
+    def _append_user_message(self, text: str):
+        escaped = (text.replace("&", "&amp;")
+                       .replace("<", "&lt;")
+                       .replace(">", "&gt;")
+                       .replace("\n", "<br>"))
+    
+        html = (
+            f'<table width="100%" cellpadding="0" cellspacing="0" '
+            f'style="margin:8px 0;">'
+            f'<tr>'
+            f'<td width="30%"></td>'
+            f'<td width="70%" align="right">'
+            f'<table cellpadding="0" cellspacing="0" align="right" width="100%">'
+            f'<tr><td style="background-color:#0E639C; border-radius:18px 18px 4px 18px; '
+            f'padding:10px 14px; color:#FFFFFF; '
+            f'font-family:Inter,sans-serif; font-size:10pt; '
+            f'line-height:1.5;">{escaped}</td></tr>'
+            f'<tr><td align="right" style="padding:2px 4px 8px 0; '
+            f'color:#555555; font-size:8pt; '
+            f'font-family:Inter,sans-serif;">You</td></tr>'
+            f'</table></td></tr></table>'
+            f'<p style="margin:8px 0 2px 4px; color:#8A2BE2; '
+            f'font-size:8pt; font-family:Inter,sans-serif; '
+            f'font-weight:bold;">QuillAI</p>'
+            f'<p style="margin:0; font-size:1px;">&nbsp;</p>'
+        )
+    
+        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
+        self.chat_history.insertHtml(html)
+    
+        # Insert a plain block to guarantee cursor is past the label
+        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
+        
+        # Record position — this is where streamed content will start
+        self._stream_start_pos = self.chat_history.textCursor().position()
+        self.chat_history.ensureCursorVisible()
+
     def _render_ai_response(self, text: str) -> str:
         import re
     
@@ -1375,18 +1451,15 @@ class CodeEditor(QMainWindow):
                 lang = lang_match.group(1).lower() if lang_match else ""
                 code = re.sub(r'^```[\w]*\n?', '', part)
                 code = re.sub(r'\n?```$', '', code)
-            
+    
                 highlighted = self._highlight_code_block(code, lang)
-            
-                # Encode code for the copy link
-                import base64
                 encoded = base64.b64encode(code.encode('utf-8')).decode('utf-8')
                 lang_label = lang.upper() if lang else "CODE"
-            
+    
                 html_parts.append(
                     f'<table width="100%" cellpadding="0" cellspacing="0" '
                     f'style="margin:8px 0;">'
-                    f'<tr><td style="background-color:#2A2A2D; '
+                    f'<tr><td width="100%" style="background-color:#2A2A2D; '
                     f'border-radius:12px 12px 0 0; '
                     f'padding:4px 12px;">'
                     f'<span style="color:#888888; font-family:Hack,monospace; '
@@ -1396,7 +1469,7 @@ class CodeEditor(QMainWindow):
                     f'font-family:Hack,monospace; font-size:8pt; '
                     f'text-decoration:none;">⎘ Copy</a>'
                     f'</td></tr>'
-                    f'<tr><td style="background-color:#1A1A1C; '
+                    f'<tr><td width="100%" style="background-color:#1A1A1C; '
                     f'border:1px solid #3E3E42; border-radius:0 0 12px 12px; '
                     f'padding:12px 16px;">'
                     f'<pre style="margin:0; '
@@ -1408,27 +1481,21 @@ class CodeEditor(QMainWindow):
             else:
                 if not part.strip():
                     continue
-                # Escape HTML before markdown processing
                 escaped = (part.replace("&", "&amp;")
                               .replace("<", "&lt;")
                               .replace(">", "&gt;"))
                 html_parts.append(self._render_markdown_text(escaped))
     
+        # Use a table row instead of div to force block separation
         inner = ''.join(html_parts)
         return (
             f'<table width="100%" cellpadding="0" cellspacing="0" '
-            f'style="margin:0 0 16px 0;">'
-            f'<tr>'
-            f'<td width="80%" valign="top">'
-            f'<table cellpadding="0" cellspacing="0" width="100%">'
-            f'<tr><td style="background-color:#252526; '
-            f'border-radius:4px 18px 18px 18px; '
-            f'padding:12px 16px;">{inner}</td></tr>'
-            f'</table></td>'
-            f'<td width="20%"></td>'
-            f'</tr></table>'
+            f'style="margin:0 0 12px 0;">'
+            f'<tr><td width="100%" style="padding:0;">'
+            f'{inner}'
+            f'</td></tr></table>'
         )
-
+        
     def _highlight_code_block(self, code: str, lang: str = "") -> str:
         """
         Apply syntax highlighting to a code block by injecting
