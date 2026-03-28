@@ -762,17 +762,21 @@ class CodeEditor(QMainWindow, ChatRenderer):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, 'chat_panel'):
-            # Use centralWidget height + menuBar to avoid covering status bar
             status_bar_height = self.statusBar().height()
             menu_bar_height = self.menuBar().height()
             available_height = self.height() - status_bar_height - menu_bar_height
-            y_offset = menu_bar_height
             self.chat_panel.setFixedHeight(available_height)
+            # Position flush against the right edge of the window
+            # ignoring the content margin since the panel is a direct child
             self.chat_panel.move(
-                self.chat_panel.x(),
-                y_offset
+                self.width() - SlidingPanel.HANDLE_WIDTH,
+                menu_bar_height
             )
-            self.chat_panel.reposition()
+            if self.chat_panel._expanded:
+                self.chat_panel.move(
+                    self.width() - self.chat_panel.PANEL_WIDTH,
+                    menu_bar_height
+                )
             self.chat_panel.raise_()
 
     def close_tab(self, index):
@@ -1112,7 +1116,10 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.chat_panel.message_sent.connect(self._on_chat_message)
         self.chat_panel.show()
         self.chat_panel.raise_()
-    
+        
+        # Set margin on the main window so ALL content respects the handle space
+        self.setContentsMargins(0, 0, SlidingPanel.HANDLE_WIDTH, 0)
+
         saved = self.memory_manager.load_chat_history()
         if saved:
             self.chat_panel.chat_history.setHtml(saved)
