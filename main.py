@@ -299,6 +299,11 @@ class CodeEditor(QMainWindow, ChatRenderer):
             self
         )
         
+        self._lang_detect_timer = QTimer()
+        self._lang_detect_timer.setSingleShot(True)
+        self._lang_detect_timer.timeout.connect(self._fire_ai_lang_detect)
+        self._lang_detect_running = False
+        
     def toggle_inline_completion(self, enabled):
         self.inline_completion_enabled = enabled
         # Optional: Add code to visually indicate the toggle state, e.g., status bar message.
@@ -520,6 +525,140 @@ class CodeEditor(QMainWindow, ChatRenderer):
             backend=backend,
         )
         
+    def detect_language_from_content(self, text: str) -> str:
+        """
+        Fast pattern-based language detection.
+        Returns an extension string like '.py' or '' if unknown.
+        """
+        if not text.strip() or len(text) < 20:
+            return ""
+    
+        first_line = text.split('\n')[0].strip()
+    
+        # Shebangs — strongest signal
+        shebang_map = {
+            'python': '.py',
+            'node':   '.js',
+            'bash':   '.sh',
+            'sh':     '.sh',
+            'ruby':   '.rb',
+            'perl':   '.pl',
+            'php':    '.php',
+        }
+        if first_line.startswith('#!'):
+            for key, ext in shebang_map.items():
+                if key in first_line:
+                    return ext
+    
+        import re
+    
+        # Strong structural patterns
+        checks = [
+            (r'^(import|from)\s+\w+|^def \w+\(|^class \w+\s*[:(]|^@\w+',            '.py'),
+            (r'^---\s*$|^-\s+name:\s|^hosts:\s|^tasks:\s|^\s+ansible\.',             '.yml'),
+            (r'interface\s+\w+\s*\{|:\s*(string|number|boolean|any)\b|<[A-Z]\w*>',   '.ts'),
+            (r'\b(const|let|var)\s+\w+\s*=|=>\s*\{|require\s*\(|\.then\s*\(',        '.js'),
+            (r'<html|<!DOCTYPE|<head>|<body>|<div',                                    '.html'),
+            (r'nixpkgs|mkShell|buildInputs|stdenv\.mkDerivation|pkgs\.',              '.nix'),
+            (r'^#{1,6}\s\w|\*\*\w+\*\*|\[.+\]\(https?://',                           '.md'),
+            (r'^\s*(if|for|while|case)\s+.*;\s*(then|do)\b|^\s*fi\b|^\s*done\b',     '.sh'),
+        ]
+        for pattern, ext in checks:
+            if re.search(pattern, text, re.MULTILINE):
+                return ext
+    
+        return ""
+
+
+    def _ai_detect_language(self, text: str):
+        """
+        Ask the AI to identify the programming language.
+        Fires only when pattern matching comes up empty.
+        Runs in a background thread — updates the highlighter when done.
+        """
+        editor = self.current_editor()
+        if not editor or editor.file_path:
+            return
+    
+        # Don't fire if we already have a detection in progress
+        if getattr(self, '_lang_detect_running', False):
+            return
+    
+        self._lang_detect_running = True
+    
+        # Send only the first 800 chars — enough to identify the language
+        snippet = text[:800]
+    
+        prompt = (
+            "Identify the programming language of the following code snippet. "
+            "Reply with ONLY a single file extension including the dot, "
+            "for example: .py  .js  .ts  .sh  .yml  .html  .nix  .md  .go  .rs  .cpp  .c  .lua\n"
+            "If you cannot determine the language, reply with: unknown\n\n"
+            f"```\n{snippet}\n```"
+        )
+    
+        thread = QThread()
+        worker = self.create_worker(prompt=prompt, is_chat=False)
+        worker.moveToThread(thread)
+    
+        result_buf = []
+    
+        def on_update(text):
+            result_buf.append(text)
+    
+        def on_finished():
+            self._lang_detect_running = False
+            raw = ''.join(result_buf).strip().lower()
+    
+            # Extract just the extension — AI might return extra text
+            import re
+            match = re.search(r'\.[a-z]+', raw)
+            if not match:
+                return
+            ext = match.group(0)
+    
+            # Validate it's something we actually support
+            if ext not in registry.registered_extensions:
+                return
+    
+            # Only apply if the file is still unsaved and extension changed
+            current_editor = self.current_editor()
+            if not current_editor or current_editor.file_path:
+                return
+    
+            current_ext = getattr(current_editor, '_detected_ext', '')
+            if ext != current_ext:
+                current_editor._detected_ext = ext
+                current_editor.highlighter = registry.get_highlighter(
+                    current_editor.document(), ext
+                )
+                self.update_status_bar()
+                self.statusBar().showMessage(
+                    f"Language detected: {ext.lstrip('.')} (AI)", 3000
+                )
+    
+        worker.update_ghost.connect(on_update)
+        worker.finished.connect(on_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.started.connect(worker.run)
+    
+        self.active_threads.append(thread)
+        thread.finished.connect(
+            lambda: self.active_threads.remove(thread)
+            if thread in self.active_threads else None
+        )
+        thread.start()   
+        
+    def _fire_ai_lang_detect(self):
+        editor = self.current_editor()
+        if not editor or editor.file_path:
+            return
+        text = editor.toPlainText()
+        if len(text) > 40:
+            self._ai_detect_language(text)     
+       
     def request_manual_completion(self):
         editor = self.current_editor()
         if editor and editor.hasFocus():
@@ -906,9 +1045,41 @@ class CodeEditor(QMainWindow, ChatRenderer):
             if hasattr(self, 'git_dock') and self.git_dock.repo_path:
                 start_dir = self.git_dock.repo_path
     
+            # Build the filter list — put the detected type first
+            detected_ext = getattr(editor, '_detected_ext', '')
+    
+            all_filters = {
+                '.py':   'Python Files (*.py)',
+                '.js':   'JavaScript Files (*.js)',
+                '.ts':   'TypeScript Files (*.ts)',
+                '.tsx':  'TypeScript JSX Files (*.tsx)',
+                '.html': 'HTML Files (*.html)',
+                '.htm':  'HTML Files (*.htm)',
+                '.yml':  'YAML Files (*.yml)',
+                '.yaml': 'YAML Files (*.yaml)',
+                '.sh':   'Shell Scripts (*.sh)',
+                '.bash': 'Bash Scripts (*.bash)',
+                '.nix':  'Nix Files (*.nix)',
+                '.md':   'Markdown Files (*.md)',
+                '.json': 'JSON Files (*.json)',
+                '.txt':  'Text Files (*.txt)',
+            }
+    
+            # Put detected type first, then the rest, then All Files
+            if detected_ext and detected_ext in all_filters:
+                first = all_filters[detected_ext]
+                rest  = [v for k, v in all_filters.items() if k != detected_ext]
+                filter_str = ';;'.join([first] + rest + ['All Files (*)'])
+                # Pre-fill the filename with the detected extension
+                default_name = os.path.join(start_dir, f"untitled{detected_ext}")
+            else:
+                filter_str = ';;'.join(list(all_filters.values()) + ['All Files (*)'])
+                default_name = start_dir
+    
             path, _ = QFileDialog.getSaveFileName(
-                self, "Save File", start_dir,
-                "Python Files (*.py);;Markdown Files (*.md);;All Files (*)"
+                self, "Save File",
+                default_name,
+                filter_str
             )
     
             if path:
@@ -916,11 +1087,10 @@ class CodeEditor(QMainWindow, ChatRenderer):
                 filename = os.path.basename(path)
                 self.tabs.setTabText(index, filename)
                 ext = os.path.splitext(path)[1].lower()
-    
-                # Apply correct highlighter for the new file type
                 editor.highlighter = registry.get_highlighter(editor.document(), ext)
-    
-                # Update word wrap — markdown benefits from word wrap
+                editor._detected_ext = ''
+                self._lang_detect_timer.stop()
+                self._lang_detect_running = False
                 self._apply_editor_mode(editor, ext)
             else:
                 return False
@@ -931,16 +1101,14 @@ class CodeEditor(QMainWindow, ChatRenderer):
                 f.write(code)
     
             editor.set_original_state(code)
+            editor._detected_ext = ''
     
             current_text = self.tabs.tabText(index)
             if current_text.endswith("*"):
                 self.tabs.setTabText(index, current_text[:-1])
     
-            # Refresh highlighter in case Save As changed the extension
             ext = os.path.splitext(editor.file_path)[1].lower()
             editor.highlighter = registry.get_highlighter(editor.document(), ext)
-    
-            # Update editor mode for the current file type
             self._apply_editor_mode(editor, ext)
     
             if hasattr(self, 'git_dock'):
@@ -951,7 +1119,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Could not save file: {e}")
             return False
-
+            
     def _save_current_session(self):
         """Save the current tab state for the current project."""
         tabs = []
@@ -1502,10 +1670,36 @@ class CodeEditor(QMainWindow, ChatRenderer):
 
     def on_text_changed(self):
         editor = self.current_editor()
-
+    
         if not editor or getattr(self, '_is_loading', False) or editor.function_active or not editor.hasFocus():
             return
-
+    
+        # Language detection for unsaved files
+        if not editor.file_path:
+            text = editor.toPlainText()
+            if len(text) > 20:
+                # Fast pattern check first
+                ext = self.detect_language_from_content(text)
+                current_ext = getattr(editor, '_detected_ext', '')
+    
+                if ext and ext != current_ext:
+                    # Pattern match succeeded — apply immediately
+                    editor._detected_ext = ext
+                    editor.highlighter = registry.get_highlighter(
+                        editor.document(), ext
+                    )
+                    self.update_status_bar()
+                    self.statusBar().showMessage(
+                        f"Language detected: {ext.lstrip('.')}", 3000
+                    )
+                    # Cancel any pending AI detection
+                    self._lang_detect_timer.stop()
+    
+                elif not ext and not current_ext:
+                    # Pattern match failed — queue AI detection after 2s pause
+                    # Long debounce so we don't spam the AI on every keystroke
+                    self._lang_detect_timer.start(2000)
+    
         if hasattr(editor, 'is_dirty'):
             index = self.tabs.indexOf(editor)
             current_title = self.tabs.tabText(index)
@@ -1513,10 +1707,10 @@ class CodeEditor(QMainWindow, ChatRenderer):
                 self.tabs.setTabText(index, current_title + "*")
             elif not editor.is_dirty() and current_title.endswith("*"):
                 self.tabs.setTabText(index, current_title[:-1])
-
+    
         self.timer.start(500)
         editor.clear_ghost_text()
-
+    
         if self.last_worker:
             self.last_worker.cancel()
 
