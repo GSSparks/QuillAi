@@ -199,6 +199,7 @@ All settings stored locally at `~/.config/quillai/settings.json`.
 | `Ctrl+H` | Find / replace (focus replace field) |
 | `Ctrl+Shift+F` | Find in files |
 | `Ctrl+N` | New tab |
+| `Ctrl+Shift+N` | New project |
 | `Ctrl+O` | Open file |
 | `Ctrl+S` | Save |
 | `Ctrl+Shift+S` | Save as |

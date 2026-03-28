@@ -55,6 +55,50 @@ MENU_STYLE = """
     }
 """
 
+def _new_project(window):
+    from ui.new_project_dialog import NewProjectDialog
+    dialog = NewProjectDialog(window)
+    if dialog.exec() and dialog.result_path:
+        folder_path = dialog.result_path
+        open_file = dialog.result_open_file
+
+        # Save current session
+        if hasattr(window, '_save_current_session'):
+            window._save_current_session()
+
+        # Switch to new project
+        window._close_all_tabs_for_switch()
+
+        if hasattr(window, 'tree_view') and hasattr(window, 'file_model'):
+            window.file_model.setRootPath(folder_path)
+            window.tree_view.setRootIndex(window.file_model.index(folder_path))
+
+        if hasattr(window, 'git_dock'):
+            window.git_dock.repo_path = folder_path
+            window.git_dock.refresh_status()
+
+        if hasattr(window, 'memory_manager'):
+            window.memory_manager.set_project(folder_path)
+        if hasattr(window, 'memory_panel'):
+            window.memory_panel.refresh()
+
+        if hasattr(window, 'update_git_branch'):
+            window.update_git_branch()
+        if hasattr(window, 'update_status_bar'):
+            window.update_status_bar()
+
+        if hasattr(window, 'load_project_chat'):
+            window.load_project_chat()
+
+        # Open the entry point file
+        if open_file and os.path.exists(open_file):
+            window.open_file_in_tab(open_file)
+        else:
+            window.add_new_tab("Untitled", "")
+
+        window.statusBar().showMessage(
+            f"Project '{os.path.basename(folder_path)}' created.", 4000
+        )
 
 def _open_recent_project(folder_path, window):
     """Opens a recent project — same logic as open_folder."""
@@ -163,6 +207,9 @@ def setup_file_menu(window):
     file_menu = menu.addMenu("File")
 
     new_file_action = QAction("New File", window)
+    new_project_action = QAction("New Project...", window)
+    new_project_action.setShortcut(QKeySequence("Ctrl+Shift+N"))
+    new_project_action.triggered.connect(lambda: _new_project(window)) 
     open_action = QAction("Open File...", window)
     open_folder_action = QAction("Open Folder (Project)...", window)
     save_action = QAction("Save", window)
@@ -254,6 +301,7 @@ def setup_file_menu(window):
     settings_action.triggered.connect(window.show_settings_dialog)
 
     file_menu.addAction(new_file_action)
+    file_menu.addAction(new_project_action)
     file_menu.addSeparator()
     file_menu.addAction(open_action)
     file_menu.addAction(open_folder_action)
