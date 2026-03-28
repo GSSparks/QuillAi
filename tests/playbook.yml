@@ -1,0 +1,12 @@
+- name: Install Nginx
+  hosts: webservers
+  become: yes
+  tasks:
+    - name: Ensure Nginx is at the latest version
+      apt:
+        name: nginx
+        state: latest
+    - name: Start Nginx service
+      service:
+        name: "{{ service_name }}"
+        state: started
