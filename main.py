@@ -18,6 +18,7 @@ from PyQt6.QtGui import (QFileSystemModel, QAction, QKeySequence, QTextCursor,
 from editor.ghost_editor import GhostEditor
 from ai.worker import AIWorker
 from ui.menu import setup_file_menu
+from ui.about_dialog import AboutDialog
 from ui.find_replace import FindReplaceWidget
 from ui.find_in_files import FindInFilesWidget
 from ui.settings_manager import SettingsManager
@@ -198,6 +199,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         setup_file_menu(self)
         self.setup_run_menu()
         self.setup_view_menu()
+        self.setup_help_menu()
 
         # UI Status Bar
         self.status_bar = self.statusBar()
@@ -1280,6 +1282,17 @@ class CodeEditor(QMainWindow, ChatRenderer):
         toggle_completion_action.setChecked(True) 
         toggle_completion_action.toggled.connect(self.toggle_inline_completion)
         view_menu.addAction(toggle_completion_action)
+        
+    def setup_help_menu(self):
+        help_menu = self.menuBar().addMenu("Help")
+        about_action = QAction("About QuillAI", self)
+        about_action.triggered.connect(self._show_about)
+        help_menu.addAction(about_action)
+    
+    def _show_about(self):
+        from ui.about_dialog import AboutDialog
+        dialog = AboutDialog(self)
+        dialog.exec()
 
     def setup_output_panel(self):
         output_container = QWidget()
