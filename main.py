@@ -22,6 +22,7 @@ from ui.find_replace import FindReplaceWidget
 from ui.find_in_files import FindInFilesWidget
 from ui.settings_manager import SettingsManager
 from ui.settings_dialog import SettingsDialog
+from ui.chat_renderer import ChatRenderer
 from ui.memory_manager import MemoryManager
 from ui.memory_panel import MemoryPanel
 from ui.session_manager import save_session, load_session
@@ -113,7 +114,7 @@ DOCK_STYLE = """
     }
 """
 
-class CodeEditor(QMainWindow):
+class CodeEditor(QMainWindow, ChatRenderer):
     def __init__(self):
         super().__init__()
         # 1. Load settings FIRST
@@ -413,16 +414,8 @@ class CodeEditor(QMainWindow):
             else:
                 self.branch_label.setText("")
         except Exception:
-            self.branch_label.setText("")    
-            
-    def load_project_chat(self):
-        self.chat_panel.chat_history.clear()
-        self.current_ai_raw_text = ""
-        saved = self.memory_manager.load_chat_history()
-        if saved:
-            self.chat_panel.chat_history.setHtml(saved)
-            self.chat_panel.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-        
+            self.branch_label.setText("")         
+
     def estimate_tokens(self, text: str) -> int:
         """Rough token estimate — 1 token ≈ 4 characters for code."""
         return len(text) // 4
@@ -975,20 +968,6 @@ class CodeEditor(QMainWindow):
         editor = self.tabs.widget(index)
         if editor and hasattr(editor, 'file_path') and editor.file_path:
             self.intent_tracker.record_file_edit(editor.file_path)
-
-    def _restore_conversation(self, user_message: str, ai_response: str):
-        self.chat_panel.expand()
-        self.chat_panel.switch_to_chat()
-        self.chat_history.clear()
-        self.current_ai_raw_text = ""
-        self._ai_response_buffer = ""
-    
-        self._append_user_message(user_message)
-        self.chat_history.insertHtml(self._render_ai_response(ai_response))
-        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-        self.statusBar().showMessage(
-            "Past conversation restored — send a message to continue it.", 5000
-        )
     
     # -----------------------------
     # Cross-File Context Engine
@@ -1144,10 +1123,6 @@ class CodeEditor(QMainWindow):
         self.chat_input = self.chat_panel.chat_input
         self.chat_history.anchorClicked.connect(self.handle_chat_link)
 
-    def _connect_chat_signals(self):
-        # No longer needed — references set directly in setup_chat_panel
-        pass
-
     def _on_chat_message(self, user_text: str):
         # Store for memory summarization — replaces the broken plain text search
         self._last_user_message = user_text
@@ -1182,498 +1157,7 @@ class CodeEditor(QMainWindow):
         )
         thread.started.connect(self.chat_worker.run)
         thread.start()
-    
-    def _append_user_message(self, text: str):
-        escaped = (text.replace("&", "&amp;")
-                       .replace("<", "&lt;")
-                       .replace(">", "&gt;")
-                       .replace("\n", "<br>"))
-    
-        html = (
-            f'<table width="100%" cellpadding="0" cellspacing="0" '
-            f'style="margin:8px 0;">'
-            f'<tr>'
-            f'<td width="30%"></td>'
-            f'<td width="70%" align="right">'
-            f'<table cellpadding="0" cellspacing="0" align="right" width="100%">'
-            f'<tr><td style="background-color:#0E639C; border-radius:18px 18px 4px 18px; '
-            f'padding:10px 14px; color:#FFFFFF; '
-            f'font-family:Inter,sans-serif; font-size:10pt; '
-            f'line-height:1.5;">{escaped}</td></tr>'
-            f'<tr><td align="right" style="padding:2px 4px 8px 0; '
-            f'color:#555555; font-size:8pt; '
-            f'font-family:Inter,sans-serif;">You</td></tr>'
-            f'</table></td></tr></table>'
-            f'<p style="margin:8px 0 2px 4px; color:#8A2BE2; '
-            f'font-size:8pt; font-family:Inter,sans-serif; '
-            f'font-weight:bold;">QuillAI</p>'
-        )
-    
-        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-        self.chat_history.insertHtml(html)
-    
-        # Move to end AFTER insertion and record that position
-        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-        self._stream_start_pos = self.chat_history.textCursor().position()
-        self.chat_history.ensureCursorVisible()
-    
-    def append_chat_stream(self, text):
-        self.current_ai_raw_text += text
-        self._stream_buffer = getattr(self, '_stream_buffer', '') + text
-    
-        should_render = (
-            '\n' in self._stream_buffer or        
-            self._stream_buffer.endswith('```') or
-            len(self._stream_buffer) > 80         
-        )
-    
-        if should_render:
-            self._flush_stream_buffer()
-        
-    def _flush_stream_buffer(self):
-        if not self.current_ai_raw_text.strip():
-            return
-    
-        start_pos = getattr(self, '_stream_start_pos', 0)
-    
-        # Safety guard — if start_pos is 0 something went wrong, don't wipe the chat
-        if start_pos == 0:
-            return
-    
-        cursor = self.chat_history.textCursor()
-        cursor.setPosition(start_pos)
-        cursor.movePosition(QTextCursor.MoveOperation.End,
-                            QTextCursor.MoveMode.KeepAnchor)
-        cursor.removeSelectedText()
-        self.chat_history.setTextCursor(cursor)
-    
-        rendered = self._render_partial_response(self.current_ai_raw_text)
-        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-        self.chat_history.insertHtml(rendered)
-        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-        self.chat_history.ensureCursorVisible()
-    
-        self._stream_buffer = ''
-    
-    def _render_partial_response(self, text: str) -> str:
-        import re
-        # Temporarily close any unclosed code block
-        open_fences = len(re.findall(r'^```', text, re.MULTILINE))
-        if open_fences % 2 == 1:
-            text = text + '\n```'
-        return self._render_ai_response(text)
-    
-    def chat_stream_finished(self):
-        full_response = self.current_ai_raw_text
-    
-        start_pos = getattr(self, '_stream_start_pos', 0)
-        if start_pos > 0:
-            cursor = self.chat_history.textCursor()
-            cursor.setPosition(start_pos)
-            cursor.movePosition(QTextCursor.MoveOperation.End,
-                                QTextCursor.MoveMode.KeepAnchor)
-            cursor.removeSelectedText()
-            self.chat_history.setTextCursor(cursor)
-    
-        rendered = self._render_ai_response(full_response)
-        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-        self.chat_history.insertHtml(rendered)
-        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-        self.chat_history.ensureCursorVisible()
-    
-        if full_response.strip():
-            self._summarize_conversation_to_memory(full_response)
-    
-        self.memory_manager.save_chat_history(self.chat_history.toHtml())
-        self.current_ai_raw_text = ""
-        self._ai_response_buffer = ""
-        self._stream_buffer = ""
-        self._stream_start_pos = 0
-    
-    def _render_markdown_text(self, text: str) -> str:
-    
-        lines = text.split('\n')
-        html_lines = []
-        in_ul = False
-        in_ol = False
-    
-        for line in lines:
-            stripped = line.strip()
-    
-            if re.match(r'^[-*+]\s+', stripped):
-                if not in_ul:
-                    if in_ol:
-                        html_lines.append('</ol>')
-                        in_ol = False
-                    html_lines.append(
-                        '<ul style="margin:4px 0 4px 16px; padding:0; '
-                        'list-style-type:disc;">'
-                    )
-                    in_ul = True
-                content = re.sub(r'^[-*+]\s+', '', stripped)
-                content = self._apply_inline_markdown(content)
-                html_lines.append(
-                    f'<li style="color:#D4D4D4; font-family:Hack,JetBrains Mono,'
-                    f'monospace; font-size:10pt; line-height:1.8; '
-                    f'margin:2px 0;">{content}</li>'
-                )
-                continue
-    
-            if re.match(r'^\d+\.\s+', stripped):
-                if not in_ol:
-                    if in_ul:
-                        html_lines.append('</ul>')
-                        in_ul = False
-                    html_lines.append(
-                        '<ol style="margin:4px 0 4px 16px; padding:0;">'
-                    )
-                    in_ol = True
-                content = re.sub(r'^\d+\.\s+', '', stripped)
-                content = self._apply_inline_markdown(content)
-                html_lines.append(
-                    f'<li style="color:#D4D4D4; font-family:Hack,JetBrains Mono,'
-                    f'monospace; font-size:10pt; line-height:1.8; '
-                    f'margin:2px 0;">{content}</li>'
-                )
-                continue
-    
-            # Close any open list before other elements
-            if in_ul:
-                html_lines.append('</ul>')
-                in_ul = False
-            if in_ol:
-                html_lines.append('</ol>')
-                in_ol = False
-    
-            if re.match(r'^#{1,3}\s', stripped):
-                level = len(re.match(r'^(#+)', stripped).group(1))
-                content = re.sub(r'^#+\s+', '', stripped)
-                sizes = {1: '14pt', 2: '12pt', 3: '11pt'}
-                html_lines.append(
-                    f'<p style="margin:10px 0 4px 0; color:#569CD6; '
-                    f'font-weight:bold; font-family:Hack,JetBrains Mono,monospace; '
-                    f'font-size:{sizes.get(level, "11pt")};">'
-                    f'{self._apply_inline_markdown(content)}</p>'
-                )
-                continue
-    
-            if re.match(r'^[-*_]{3,}\s*$', stripped):
-                html_lines.append(
-                    '<hr style="border:none; border-top:1px solid #3E3E42; '
-                    'margin:8px 0;"/>'
-                )
-                continue
-    
-            if not stripped:
-                html_lines.append('<p style="margin:4px 0;">&nbsp;</p>')
-                continue
-    
-            content = self._apply_inline_markdown(stripped)
-            html_lines.append(
-                f'<p style="margin:2px 0; color:#D4D4D4; '
-                f'font-family:Hack,JetBrains Mono,monospace; '
-                f'font-size:10pt; line-height:1.8;">{content}</p>'
-            )
-    
-        if in_ul:
-            html_lines.append('</ul>')
-        if in_ol:
-            html_lines.append('</ol>')
-    
-        return ''.join(html_lines)
-    
-    def _apply_inline_markdown(self, text: str) -> str:
-        """Apply inline markdown — bold, italic, inline code."""
-        import re
-        # Inline code
-        text = re.sub(
-            r'`([^`]+)`',
-            r'<code style="background:#2A2A2D;color:#CE9178;'
-            r'padding:1px 5px;border-radius:3px;'
-            r'font-family:Hack,JetBrains Mono,monospace;font-size:9pt;">'
-            r'\1</code>',
-            text
-        )
-        # Bold
-        text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
-        text = re.sub(r'__(.+?)__',     r'<strong>\1</strong>', text)
-        # Italic
-        text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
-        text = re.sub(r'_(.+?)_',   r'<em>\1</em>', text)
-        return text
-    
-    def _append_user_message(self, text: str):
-        escaped = (text.replace("&", "&amp;")
-                       .replace("<", "&lt;")
-                       .replace(">", "&gt;")
-                       .replace("\n", "<br>"))
-    
-        html = (
-            f'<table width="100%" cellpadding="0" cellspacing="0" '
-            f'style="margin:8px 0;">'
-            f'<tr>'
-            f'<td width="30%"></td>'
-            f'<td width="70%" align="right">'
-            f'<table cellpadding="0" cellspacing="0" align="right" width="100%">'
-            f'<tr><td style="background-color:#0E639C; border-radius:18px 18px 4px 18px; '
-            f'padding:10px 14px; color:#FFFFFF; '
-            f'font-family:Inter,sans-serif; font-size:10pt; '
-            f'line-height:1.5;">{escaped}</td></tr>'
-            f'<tr><td align="right" style="padding:2px 4px 8px 0; '
-            f'color:#555555; font-size:8pt; '
-            f'font-family:Inter,sans-serif;">You</td></tr>'
-            f'</table></td></tr></table>'
-            f'<p style="margin:8px 0 2px 4px; color:#8A2BE2; '
-            f'font-size:8pt; font-family:Inter,sans-serif; '
-            f'font-weight:bold;">QuillAI</p>'
-            f'<p style="margin:0; font-size:1px;">&nbsp;</p>'
-        )
-    
-        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-        self.chat_history.insertHtml(html)
-    
-        # Insert a plain block to guarantee cursor is past the label
-        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-        
-        # Record position — this is where streamed content will start
-        self._stream_start_pos = self.chat_history.textCursor().position()
-        self.chat_history.ensureCursorVisible()
-
-    def _render_ai_response(self, text: str) -> str:
-        import re
-    
-        parts = re.split(r'(```(?:[\w]*)\n.*?```)', text, flags=re.DOTALL)
-        html_parts = []
-    
-        for part in parts:
-            if part.startswith('```'):
-                lang_match = re.match(r'```([\w]*)\n?', part)
-                lang = lang_match.group(1).lower() if lang_match else ""
-                code = re.sub(r'^```[\w]*\n?', '', part)
-                code = re.sub(r'\n?```$', '', code)
-    
-                highlighted = self._highlight_code_block(code, lang)
-                encoded = base64.b64encode(code.encode('utf-8')).decode('utf-8')
-                lang_label = lang.upper() if lang else "CODE"
-    
-                html_parts.append(
-                    f'<table width="100%" cellpadding="0" cellspacing="0" '
-                    f'style="margin:8px 0;">'
-                    f'<tr><td width="100%" style="background-color:#2A2A2D; '
-                    f'border-radius:12px 12px 0 0; '
-                    f'padding:4px 12px;">'
-                    f'<span style="color:#888888; font-family:Hack,monospace; '
-                    f'font-size:8pt;">{lang_label}</span>'
-                    f'&nbsp;&nbsp;'
-                    f'<a href="copy:{encoded}" style="color:#569CD6; '
-                    f'font-family:Hack,monospace; font-size:8pt; '
-                    f'text-decoration:none;">⎘ Copy</a>'
-                    f'</td></tr>'
-                    f'<tr><td width="100%" style="background-color:#1A1A1C; '
-                    f'border:1px solid #3E3E42; border-radius:0 0 12px 12px; '
-                    f'padding:12px 16px;">'
-                    f'<pre style="margin:0; '
-                    f'font-family:Hack,JetBrains Mono,Courier New,monospace; '
-                    f'font-size:10pt; line-height:1.8; white-space:pre; '
-                    f'color:#D4D4D4;">{highlighted}</pre>'
-                    f'</td></tr></table>'
-                )
-            else:
-                if not part.strip():
-                    continue
-                escaped = (part.replace("&", "&amp;")
-                              .replace("<", "&lt;")
-                              .replace(">", "&gt;"))
-                html_parts.append(self._render_markdown_text(escaped))
-    
-        # Use a table row instead of div to force block separation
-        inner = ''.join(html_parts)
-        return (
-            f'<table width="100%" cellpadding="0" cellspacing="0" '
-            f'style="margin:0 0 12px 0;">'
-            f'<tr><td width="100%" style="padding:0;">'
-            f'{inner}'
-            f'</td></tr></table>'
-        )
-        
-    def _highlight_code_block(self, code: str, lang: str = "") -> str:
-        """
-        Apply syntax highlighting to a code block by injecting
-        inline HTML span tags. Works inside QTextBrowser.
-        """
-        import re
-    
-        escaped = (code.replace("&", "&amp;")
-                       .replace("<", "&lt;")
-                       .replace(">", "&gt;"))
-    
-        # Detect language if not specified
-        if not lang:
-            if re.search(r'\bdef \w+|import \w+|class \w+:', escaped):
-                lang = "python"
-            elif re.search(r'\bfunction\b|\bconst\b|\blet\b|\bvar\b', escaped):
-                lang = "javascript"
-            elif re.search(r'^\s*-\s+\w+:|hosts:|tasks:', escaped, re.MULTILINE):
-                lang = "yaml"
-            elif re.search(r'#!/.*bash|echo\b|\bfi\b|\bdone\b', escaped):
-                lang = "bash"
-            elif re.search(r'nixpkgs|mkShell|buildInputs', escaped):
-                lang = "nix"
-    
-        if lang in ("python", "py"):
-            keywords = (r'\b(def|class|import|from|return|if|elif|else|for|while|'
-                        r'in|and|or|not|True|False|None|pass|try|except|with|as|'
-                        r'async|await|lambda|yield|raise|break|continue|global|'
-                        r'nonlocal|del|assert|is)\b')
-            builtins = (r'\b(print|len|range|str|int|float|list|dict|set|tuple|'
-                        r'bool|type|isinstance|hasattr|getattr|setattr|open|'
-                        r'enumerate|zip|map|filter|any|all|sum|min|max|abs|'
-                        r'round|sorted|reversed|super|self)\b')
-    
-            # Order matters — process strings and comments first to avoid
-            # highlighting keywords inside them
-    
-            # Protect strings first by replacing with placeholders
-            string_map = {}
-            counter = [0]
-    
-            def protect_string(m):
-                key = f"\x00STR{counter[0]}\x00"
-                counter[0] += 1
-                content = m.group(0)
-                colored = (f'<span style="color:#E6DB74;">{content}</span>')
-                string_map[key] = colored
-                return key
-    
-            # Triple quoted strings
-            escaped = re.sub(r'""".*?"""|\'\'\'.*?\'\'\'',
-                             protect_string, escaped, flags=re.DOTALL)
-            # Single quoted strings
-            escaped = re.sub(r'"[^"\n]*"|\'[^\'\n]*\'',
-                             protect_string, escaped)
-    
-            # Comments
-            def protect_comment(m):
-                key = f"\x00CMT{counter[0]}\x00"
-                counter[0] += 1
-                string_map[key] = f'<span style="color:#75715E;font-style:italic;">{m.group(0)}</span>'
-                return key
-    
-            escaped = re.sub(r'#[^\n]*', protect_comment, escaped)
-    
-            # Decorators
-            escaped = re.sub(
-                r'(@\w+)',
-                r'<span style="color:#A6E22E;">\1</span>',
-                escaped
-            )
-    
-            # Keywords
-            escaped = re.sub(
-                keywords,
-                r'<span style="color:#F92672;font-weight:bold;">\1</span>',
-                escaped
-            )
-    
-            # Builtins
-            escaped = re.sub(
-                builtins,
-                r'<span style="color:#66D9EF;font-style:italic;">\1</span>',
-                escaped
-            )
-    
-            # Numbers
-            escaped = re.sub(
-                r'\b(\d+\.?\d*)\b',
-                r'<span style="color:#AE81FF;">\1</span>',
-                escaped
-            )
-    
-            # Function/class definitions — highlight the name
-            escaped = re.sub(
-                r'(def|class)\s+(<span[^>]*>)?(\w+)',
-                lambda m: f'{m.group(1)} <span style="color:#A6E22E;font-weight:bold;">{m.group(3)}</span>',
-                escaped
-            )
-    
-            # Restore protected strings and comments
-            for key, value in string_map.items():
-                escaped = escaped.replace(key, value)
-    
-        elif lang in ("javascript", "js", "typescript", "ts"):
-            keywords = (r'\b(function|const|let|var|return|if|else|for|while|'
-                        r'class|import|export|from|new|this|typeof|instanceof|'
-                        r'async|await|try|catch|throw|true|false|null|undefined|'
-                        r'switch|case|break|continue|default|of|in)\b')
-            escaped = re.sub(r'"[^"\n]*"|\'[^\'\n]*\'|`[^`]*`',
-                             lambda m: f'<span style="color:#E6DB74;">{m.group(0)}</span>',
-                             escaped)
-            escaped = re.sub(r'//[^\n]*',
-                             lambda m: f'<span style="color:#75715E;font-style:italic;">{m.group(0)}</span>',
-                             escaped)
-            escaped = re.sub(keywords,
-                             r'<span style="color:#F92672;font-weight:bold;">\1</span>',
-                             escaped)
-            escaped = re.sub(r'\b(\d+\.?\d*)\b',
-                             r'<span style="color:#AE81FF;">\1</span>', escaped)
-    
-        elif lang in ("bash", "sh"):
-            escaped = re.sub(r'#[^\n]*',
-                             lambda m: f'<span style="color:#75715E;font-style:italic;">{m.group(0)}</span>',
-                             escaped)
-            escaped = re.sub(r'"[^"\n]*"|\'[^\'\n]*\'',
-                             lambda m: f'<span style="color:#E6DB74;">{m.group(0)}</span>',
-                             escaped)
-            escaped = re.sub(r'\$\{?\w+\}?',
-                             lambda m: f'<span style="color:#AE81FF;">{m.group(0)}</span>',
-                             escaped)
-            escaped = re.sub(
-                r'\b(if|then|else|elif|fi|for|while|do|done|case|esac|'
-                r'function|return|export|local|echo|source)\b',
-                r'<span style="color:#F92672;font-weight:bold;">\1</span>',
-                escaped
-            )
-    
-        elif lang in ("yaml", "yml", "ansible"):
-            lines = escaped.split('\n')
-            result = []
-            for line in lines:
-                # Keys
-                line = re.sub(
-                    r'^(\s*)(\w[\w\s]*?)(:)',
-                    r'\1<span style="color:#66D9EF;">\2</span>\3',
-                    line
-                )
-                # Comments
-                line = re.sub(
-                    r'(#[^\n]*)',
-                    r'<span style="color:#75715E;font-style:italic;">\1</span>',
-                    line
-                )
-                # Values that are strings
-                line = re.sub(
-                    r':\s*(["\'].*?["\'])',
-                    lambda m: f': <span style="color:#E6DB74;">{m.group(1)}</span>',
-                    line
-                )
-                result.append(line)
-            escaped = '\n'.join(result)
-    
-        elif lang in ("nix",):
-            escaped = re.sub(r'#[^\n]*',
-                             lambda m: f'<span style="color:#75715E;font-style:italic;">{m.group(0)}</span>',
-                             escaped)
-            escaped = re.sub(r'"[^"\n]*"',
-                             lambda m: f'<span style="color:#E6DB74;">{m.group(0)}</span>',
-                             escaped)
-            escaped = re.sub(
-                r'\b(let|in|with|rec|if|then|else|import|inherit|true|false|null)\b',
-                r'<span style="color:#F92672;font-weight:bold;">\1</span>',
-                escaped
-            )
-    
-        return escaped   
-           
+          
     def setup_memory_panel(self):
         from ui.memory_panel import MemoryPanel
         self.memory_panel = MemoryPanel(self.memory_manager, self)
@@ -1684,109 +1168,6 @@ class CodeEditor(QMainWindow):
             self.memory_panel
         ))
 
-    # ==========================================
-    # The Two-Way Bridge Methods
-    # ==========================================
-    def load_snippet_to_chat(self, text):
-        self.chat_panel.expand()
-        self.chat_panel.switch_to_chat()
-    
-        chat_input = self.chat_panel.chat_input
-        current_input = chat_input.toPlainText()
-        new_text = f"```python\n{text}\n```\n"
-    
-        if current_input.strip():
-            final_text = current_input + "\n\n" + new_text
-        else:
-            final_text = new_text
-    
-        chat_input.setPlainText(final_text)
-        chat_input.setFocus()
-        cursor = chat_input.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        chat_input.setTextCursor(cursor)
-     
-    def _summarize_conversation_to_memory(self, ai_response: str):
-        try:
-            # Extract last user message from stored buffer
-            # since chat uses HTML bubbles we track it separately
-            last_user = getattr(self, '_last_user_message', "")
-    
-            if not last_user:
-                return
-    
-            # Auto-extract facts
-            extracted = self.memory_manager.extract_facts_from_exchange(
-                last_user, ai_response
-            )
-            for fact in extracted:
-                self.memory_manager.add_fact(fact, project_scoped=False)
-            if extracted and hasattr(self, 'memory_panel'):
-                self.memory_panel.refresh()
-    
-            # Record for intent tracking
-            self.intent_tracker.record_chat_exchange(last_user, ai_response[:500])
-    
-            # Save full exchange
-            summary = last_user[:80] + ("..." if len(last_user) > 80 else "")
-            self.memory_manager.add_conversation(
-                summary=summary,
-                user_message=last_user,
-                ai_response=ai_response[:2000],
-            )
-            if hasattr(self, 'memory_panel'):
-                self.memory_panel.refresh()
-    
-        except Exception as e:
-            import traceback
-            print(f"_summarize_conversation_to_memory error: {e}")
-            traceback.print_exc()
-        
-            def on_finished():
-                try:
-                    summary = "".join(summary_buf).strip()
-                    print(f"DEBUG on_finished: summary='{summary}'")
-                    if summary:
-                        self.memory_manager.add_conversation(summary)
-                    if hasattr(self, 'memory_panel'):
-                        self.memory_panel.refresh()
-                except Exception as e:
-                    import traceback
-                    print(f"DEBUG on_finished error: {e}")
-                    traceback.print_exc()
-
-            worker.finished.connect(on_finished)
-            worker.finished.connect(thread.quit)
-            worker.finished.connect(worker.deleteLater)
-            thread.finished.connect(thread.deleteLater)
-            self.active_threads.append(thread)
-            thread.finished.connect(
-                lambda: self.active_threads.remove(thread)
-                if thread in self.active_threads else None
-            )
-            thread.started.connect(worker.run)
-            thread.start()
-    
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-
-    def handle_chat_link(self, url: QUrl):
-        url_str = url.toString()
-        
-        if url_str.startswith("insert:"):
-            encoded_code = url_str.replace("insert:", "")
-            decoded_code = base64.b64decode(encoded_code).decode('utf-8')
-            editor = self.current_editor()
-            if editor:
-                editor.textCursor().insertText(decoded_code)
-                editor.setFocus()
-    
-        elif url_str.startswith("copy:"):
-            encoded_code = url_str.replace("copy:", "")
-            decoded_code = base64.b64decode(encoded_code).decode('utf-8')
-            QApplication.clipboard().setText(decoded_code)
-            self.statusBar().showMessage("Code copied to clipboard.", 2000)
     # -----------------------------
     # Runner Methods
     # -----------------------------
@@ -1909,52 +1290,35 @@ class CodeEditor(QMainWindow):
     def explain_error(self):
         if not self.current_error_text.strip():
             return
-
+    
         self.chat_panel.expand()
-        self.chat_panel.chat_input.setFocus()
+        self.chat_panel.switch_to_chat()
         self.explain_error_btn.hide()
-
+    
         user_text = "My script crashed with an error. Can you explain what went wrong and how to fix it?"
-
-        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
-        self.chat_history.insertPlainText(f"You: {user_text}\n\n[Error Trace Sent]\n\nQuillAI: ")
-        self.chat_history.ensureCursorVisible()
-
-        editor = self.current_editor()
-        active_code = editor.toPlainText() if editor else ""
-        cross_file_context = self.resolve_local_imports(active_code)
-
-        if len(active_code) > 2000:
-            active_code = "...(truncated)...\n" + active_code[-2000:]
-
-        if len(cross_file_context) > 2000:
-            cross_file_context = "...(truncated)...\n" + cross_file_context[-2000:]
-
-        open_tabs_context = self.get_open_tabs_context()
-        project_tree = self.get_project_tree()
-
-        context = self.build_chat_context(user_text, active_code)
-        prompt_with_context = f"""
-        {user_text}
-
-        [Error Trace]
-        {self.current_error_text[:8000]}
-
-        {context}
-
-        Instructions:
-        - Explain the error clearly
-        - Identify the root cause  
-        - Show how to fix it
-        - Include corrected code if possible
-        """
-
+        context = self.build_chat_context(user_text, self.current_editor().toPlainText() if self.current_editor() else "")
+    
+        prompt = f"""{user_text}
+    
+    [Error Trace]
+    {self.current_error_text[:8000]}
+    
+    {context}
+    
+    Instructions:
+    - Explain the error clearly
+    - Identify the root cause
+    - Show how to fix it
+    - Include corrected code if possible
+    """
+    
+        self._last_user_message = user_text
+        self._append_user_message(user_text)
+        self._ai_response_buffer = ""
+        self.current_ai_raw_text = ""
+    
         thread = QThread()
-
-        self.chat_worker = self.create_worker(
-            prompt=prompt_with_context,
-            is_chat=True,
-        )
+        self.chat_worker = self.create_worker(prompt=prompt, is_chat=True)
         self.chat_worker.moveToThread(thread)
         self.chat_worker.chat_update.connect(self.append_chat_stream)
         self.chat_worker.finished.connect(self.chat_stream_finished)
@@ -1964,7 +1328,10 @@ class CodeEditor(QMainWindow):
         self.show_loading_indicator()
         self.chat_worker.finished.connect(self.hide_loading_indicator)
         self.active_threads.append(thread)
-        thread.finished.connect(lambda: self.active_threads.remove(thread) if thread in self.active_threads else None)
+        thread.finished.connect(
+            lambda: self.active_threads.remove(thread)
+            if thread in self.active_threads else None
+        )
         thread.started.connect(self.chat_worker.run)
         thread.start()
 
