@@ -1,4 +1,5 @@
 import os
+import re 
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                               QLineEdit, QPushButton, QComboBox, QFileDialog,
                               QCheckBox, QMessageBox, QWidget, QGroupBox)
@@ -323,6 +324,3 @@ class NewProjectDialog(QDialog):
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not create project:\n{e}")
-
-
-import re  # needed for sanitization
