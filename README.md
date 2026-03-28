@@ -1,4 +1,12 @@
+<p align="center">
+  <img src="./images/quillai_logo.svg" width="200" alt="QuillAI logo"/>
+</p>
+
 # QuillAI
+
+
+
+
 
 **A privacy-first, AI-powered code editor built for developers who want AI assistance without sending their code to the cloud.**
 
