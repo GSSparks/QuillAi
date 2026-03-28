@@ -32,24 +32,8 @@ from ui.sliding_chat_panel import SlidingPanel
 from ui.markdown_preview import MarkdownPreviewDock
 
 from editor.highlighter import registry
-from plugins.git_plugin import GitDockWidget
-from plugins.python_plugin import PythonPlugin
-from plugins.html_plugin import HTMLPlugin
-from plugins.ansible_plugin import AnsiblePlugin
-from plugins.nix_plugin import NixPlugin
-from plugins.bash_plugin import BashPlugin
-from plugins.markdown_plugin import MarkdownPlugin
 
-registry.register(".html", HTMLPlugin)
-registry.register(".htm", HTMLPlugin)
-registry.register(".py", PythonPlugin)
-registry.register(".yml", AnsiblePlugin)
-registry.register(".yaml", AnsiblePlugin)
-registry.register(".nix", NixPlugin)
-registry.register(".sh", BashPlugin)
-registry.register(".bash", BashPlugin)
-registry.register(".md", MarkdownPlugin)
-registry.register(".markdown", MarkdownPlugin)
+from ui.git_panel import GitDockWidget
 
 # ==========================================
 # Main Application
@@ -298,6 +282,10 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.setup_memory_panel()
         self.setup_markdown_preview()
         self.setup_find_in_files_panel()
+        _plugins_dir = os.path.join(os.path.dirname(__file__), 'plugins')
+        registry.auto_register_languages(
+            os.path.join(_plugins_dir, 'languages')
+        )
         self.process = QProcess(self)
         self.process.readyReadStandardOutput.connect(self.handle_stdout)
         self.process.readyReadStandardError.connect(self.handle_stderr)
@@ -305,6 +293,11 @@ class CodeEditor(QMainWindow, ChatRenderer):
 
         self._restore_window_state()
         self._restore_session()
+        
+        registry.auto_register_features(
+            os.path.join(os.path.dirname(__file__), 'plugins', 'features'),
+            self
+        )
         
     def toggle_inline_completion(self, enabled):
         self.inline_completion_enabled = enabled
@@ -804,6 +797,8 @@ class CodeEditor(QMainWindow, ChatRenderer):
     
         # Save session on the way out
         if event.isAccepted():
+            registry.deactivate_all_features()
+            self._save_current_session()  
             self._save_current_session()
             # Save dock states
             self.settings_manager.set(

@@ -2,6 +2,7 @@ from editor.highlighter import LanguagePlugin, THEME
 from PyQt6.QtCore import QRegularExpression
 
 class PythonPlugin(LanguagePlugin):
+    EXTENSIONS = ['.py']
     def __init__(self):
         super().__init__()
 

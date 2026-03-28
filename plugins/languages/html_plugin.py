@@ -2,6 +2,7 @@ from editor.highlighter import LanguagePlugin, THEME
 from PyQt6.QtCore import QRegularExpression
 
 class HTMLPlugin(LanguagePlugin):
+    EXTENSIONS = ['.html', '.htm']
     def __init__(self):
         super().__init__()
 

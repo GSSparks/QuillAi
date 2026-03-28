@@ -3,6 +3,7 @@ from PyQt6.QtCore import QRegularExpression
 from editor.highlighter import LanguagePlugin
 
 class BashPlugin(LanguagePlugin):
+    EXTENSIONS = ['.sh', '.bash']
     def __init__(self):
         super().__init__()
 

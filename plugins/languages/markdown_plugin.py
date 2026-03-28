@@ -6,7 +6,7 @@ import re
 class MarkdownPlugin(QSyntaxHighlighter):
     """Standalone highlighter for Markdown — bypasses UniversalHighlighter
     because it needs a code-block state machine."""
-
+    EXTENSIONS = ['.md', '.markdown']
     def __init__(self, document):
         super().__init__(document)
 

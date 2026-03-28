@@ -5,12 +5,13 @@ from PyQt6.QtCore import QRegularExpression
 from editor.highlighter import LanguagePlugin
 
 class AnsiblePlugin(LanguagePlugin):
+    EXTENSIONS = ['.yml', '.yaml']
     def __init__(self):
         # [NEW] Call the parent init to set up self.rules and the multiline attributes
         super().__init__()
 
         # --- Define Color Formats ---
-        
+
         # 1. YAML Keys (e.g., name:, hosts:, tasks:, apt:)
         key_format = QTextCharFormat()
         key_format.setForeground(QColor("#569CD6")) # VS Code Blue
