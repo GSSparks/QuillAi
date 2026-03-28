@@ -40,6 +40,7 @@ class LineNumberArea(QWidget):
     def paintEvent(self, event):
         self.codeEditor.line_number_area_paint_event(event)
 
+
 # ==========================================
 # The "Microcode" Minimap
 # ==========================================
@@ -243,8 +244,13 @@ class GhostEditor(QPlainTextEdit):
                 return name
         return "code"
 
+    def _is_markdown_file(self) -> bool:
+        """Returns True if the current file is a markdown file."""
+        if not self.file_path:
+            return False
+        return self.file_path.lower().endswith(('.md', '.markdown'))
+
     def _track_cursor_symbol(self):
-        """Record which function/class the cursor is inside for intent tracking."""
         if not self.intent_tracker:
             return
         text = self.toPlainText()
@@ -254,13 +260,80 @@ class GhostEditor(QPlainTextEdit):
             self.intent_tracker.record_cursor_symbol(symbol)
 
     def _get_intent_context(self) -> str:
-        """Returns the cached intent context string, or empty if no tracker."""
         if not self.intent_tracker:
             return ""
         return self.intent_tracker.build_intent_context(
             current_file_path=self.file_path or "",
             language=self._get_language(),
         )
+
+    # ── Function generation guard ─────────────────────────────────────────
+
+    def _should_generate_function(self, line: str) -> bool:
+        """
+        Smarter check — only generate when the comment clearly
+        describes a function/class to create. Never fires for
+        markdown files, shebangs, or casual comments.
+        """
+        # Never fire for markdown files
+        if self._is_markdown_file():
+            return False
+
+        # Only applies to Python files — other languages handled differently
+        if self.file_path and not self.file_path.lower().endswith('.py'):
+            return False
+
+        stripped = line.strip()
+
+        # Must start with # to be a comment
+        if not stripped.startswith('#'):
+            return False
+
+        # Never fire for shebangs
+        if stripped.startswith('#!'):
+            return False
+
+        comment_text = stripped.lstrip('#').strip().lower()
+
+        # Must have enough words to be meaningful
+        if len(comment_text) < 8:
+            return False
+
+        # Must contain at least 3 words — single-word comments are notes, not specs
+        if len(comment_text.split()) < 3:
+            return False
+
+        # Explicit action keywords — user is clearly asking for code generation
+        action_keywords = [
+            'create', 'make', 'build', 'write', 'generate',
+            'implement', 'add a', 'define', 'build a', 'make a',
+            'create a', 'write a', 'implement a',
+        ]
+        if any(kw in comment_text for kw in action_keywords):
+            # Also needs a code concept word to avoid false positives
+            # e.g. "create a note" should NOT trigger
+            code_concepts = [
+                'function', 'class', 'method', 'def', 'decorator',
+                'parser', 'handler', 'manager', 'helper', 'util',
+                'api', 'endpoint', 'route', 'model', 'schema',
+                'validator', 'serializer', 'middleware', 'hook',
+                'worker', 'task', 'job', 'service', 'client',
+                'server', 'database', 'query', 'cache',
+            ]
+            if any(concept in comment_text for concept in code_concepts):
+                return True
+
+        # Pattern: explicit "function that/to" phrasing
+        if re.search(r'\b(function|class|method)\s+(that|to|for|which)\b', comment_text):
+            return True
+
+        # TODO/FIXME with implementation keyword
+        if re.match(r'^(todo|fixme|hack)\s*:?\s*', comment_text):
+            todo_body = re.sub(r'^(todo|fixme|hack)\s*:?\s*', '', comment_text)
+            if any(kw in todo_body for kw in ['implement', 'create', 'add', 'build', 'write']):
+                return True
+
+        return False
 
     # ── Jump bar ──────────────────────────────────────────────────────────
 
@@ -762,26 +835,56 @@ Answer concisely. If you include code, use a single fenced code block."""
 
     def handle_text_changed_for_ai(self):
         self.clear_ghost_text()
+
+        # Never auto-complete in markdown
+        if self._is_markdown_file():
+            self.ai_suggest_timer.stop()
+            return
+
         cursor = self.textCursor()
         if cursor.hasSelection():
             self.ai_suggest_timer.stop()
             return
+
         pos = cursor.position()
         if pos == 0:
             self.ai_suggest_timer.stop()
             return
+
         current_line = cursor.block().text()
         prev_block = cursor.block().previous()
         prev_line = prev_block.text().rstrip() if prev_block.isValid() else ""
-        just_entered_block = current_line.strip() == "" and prev_line.endswith(":")
-        inside_indented_empty = current_line == "" and prev_line.startswith((" ", "\t"))
-        after_comment = current_line.strip() == "" and prev_line.strip().startswith("#")
-        if not (just_entered_block or inside_indented_empty or after_comment):
+
+        # Trigger on entering a block body (after colon)
+        just_entered_block = (
+            current_line.strip() == ""
+            and prev_line.endswith(":")
+        )
+
+        # Trigger inside an indented empty line
+        inside_indented_empty = (
+            current_line == ""
+            and prev_line.startswith((" ", "\t"))
+        )
+
+        # Only trigger after a comment if it passes the function generation check
+        after_generatable_comment = (
+            current_line.strip() == ""
+            and prev_line.strip().startswith("#")
+            and self._should_generate_function(prev_line.strip())
+        )
+
+        if not (just_entered_block or inside_indented_empty or after_generatable_comment):
             self.ai_suggest_timer.stop()
             return
+
         self.ai_suggest_timer.start(300)
 
     def request_completion_hotkey(self):
+        # No completions in markdown
+        if self._is_markdown_file():
+            return
+
         self.clear_ghost_text()
         try:
             if hasattr(self, 'ai_thread') and self.ai_thread is not None:
@@ -794,6 +897,10 @@ Answer concisely. If you include code, use a single fenced code block."""
         self.trigger_inline_completion()
 
     def trigger_inline_completion(self):
+        # No completions in markdown
+        if self._is_markdown_file():
+            return
+
         try:
             if hasattr(self, 'ai_thread') and self.ai_thread is not None:
                 if self.ai_thread.isRunning():
@@ -963,7 +1070,15 @@ Answer concisely. If you include code, use a single fenced code block."""
         self.function_cursor = self.textCursor()
         self.function_active = True
         context = self.get_ast_context()
-        prompt = f"Generate a Python function for this comment:\n\n{comment}\n\nContext:\n{context}\n\nReturn ONLY code."
+        lang = self._get_language()
+        intent_ctx = self._get_intent_context()
+        prompt = (
+            f"{intent_ctx}\n"
+            f"Generate a {lang} function based on this comment:\n\n"
+            f"{comment}\n\n"
+            f"Context (existing functions and classes):\n{context}\n\n"
+            f"Return ONLY the {lang} code. No explanation, no markdown, no backticks."
+        )
         self.start_worker(prompt, generate_function=True)
 
     def replace_selection_with_ai(self):
@@ -1004,7 +1119,6 @@ Answer concisely. If you include code, use a single fenced code block."""
             api_key = self.settings_manager.get_api_key()
             backend = self.settings_manager.get_backend()
 
-        # Inject intent context into inline completions
         if (not generate_function and not replace_selection
                 and not prompt and self.intent_tracker):
             prompt = self._get_intent_context()
@@ -1135,7 +1249,8 @@ Answer concisely. If you include code, use a single fenced code block."""
                 indent += "    "
             if indent:
                 self.textCursor().insertText(indent)
-            if previous_line_stripped.startswith("#"):
+            # Use smart check before generating
+            if self._should_generate_function(previous_line_stripped):
                 self.handle_comment_generate(previous_line_stripped)
             self.clear_ghost_text()
             return

@@ -586,6 +586,65 @@ class CodeEditor(QMainWindow, ChatRenderer):
         if hasattr(self, 'chat_panel'):
             self.chat_panel.raise_()
             
+    def open_file_in_tab(self, file_path, line_number=None):
+        if os.path.isdir(file_path):
+            return
+    
+        editor_to_focus = None
+    
+        for i in range(self.tabs.count()):
+            editor = self.tabs.widget(i)
+            if hasattr(editor, 'file_path') and editor.file_path == file_path:
+                self.tabs.setCurrentIndex(i)
+                editor_to_focus = editor
+                break
+    
+        if not editor_to_focus:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                filename = os.path.basename(file_path)
+                editor_to_focus = self.add_new_tab(filename, content, file_path)
+                # Apply correct mode for this file type
+                ext = os.path.splitext(file_path)[1].lower()
+                self._apply_editor_mode(editor_to_focus, ext)
+            except Exception as e:
+                print(f"Could not open file: {e}")
+                return
+    
+        if editor_to_focus and line_number is not None:
+            cursor = editor_to_focus.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.Start)
+            cursor.movePosition(QTextCursor.MoveOperation.NextBlock, n=line_number - 1)
+            editor_to_focus.setTextCursor(cursor)
+            editor_to_focus.ensureCursorVisible()
+            editor_to_focus.setFocus()
+            editor_to_focus.highlight_current_line()
+            
+    def _apply_editor_mode(self, editor, ext: str):
+        """
+        Applies the correct editor settings for a given file extension.
+        Called when a file is opened or saved with a new extension.
+        """
+        from PyQt6.QtGui import QTextOption
+    
+        is_md = ext in ('.md', '.markdown')
+    
+        # Word wrap on for markdown, off for code
+        if is_md:
+            editor.setWordWrapMode(QTextOption.WrapMode.WordWrap)
+        else:
+            editor.setWordWrapMode(QTextOption.WrapMode.NoWrap)
+    
+        # Update the file_path on the editor so linter and
+        # language detection pick up the new extension immediately
+        # (already set by caller, but make sure intent tracker knows too)
+        if hasattr(self, 'intent_tracker') and editor.file_path:
+            self.intent_tracker.record_file_edit(editor.file_path)
+    
+        # Trigger markdown preview if opening/saving a md file
+        self._refresh_markdown_preview(editor)
+            
     # -----------------------------
     # Find / Replace Method
     # -----------------------------
@@ -840,43 +899,56 @@ class CodeEditor(QMainWindow, ChatRenderer):
     def save_file(self, index=None):
         if index is None or isinstance(index, bool):
             index = self.tabs.currentIndex()
-
+    
         editor = self.tabs.widget(index)
         if not editor:
             return False
-
+    
         if not editor.file_path:
             start_dir = QDir.currentPath()
             if hasattr(self, 'git_dock') and self.git_dock.repo_path:
                 start_dir = self.git_dock.repo_path
-
+    
             path, _ = QFileDialog.getSaveFileName(
                 self, "Save File", start_dir,
-                "Python Files (*.py);;All Files (*)"
+                "Python Files (*.py);;Markdown Files (*.md);;All Files (*)"
             )
-
+    
             if path:
                 editor.file_path = path
-                self.tabs.setTabText(index, os.path.basename(path))
+                filename = os.path.basename(path)
+                self.tabs.setTabText(index, filename)
                 ext = os.path.splitext(path)[1].lower()
+    
+                # Apply correct highlighter for the new file type
                 editor.highlighter = registry.get_highlighter(editor.document(), ext)
+    
+                # Update word wrap — markdown benefits from word wrap
+                self._apply_editor_mode(editor, ext)
             else:
                 return False
-
+    
         try:
             code = editor.toPlainText()
             with open(editor.file_path, "w", encoding="utf-8") as f:
                 f.write(code)
-
+    
             editor.set_original_state(code)
-
+    
             current_text = self.tabs.tabText(index)
             if current_text.endswith("*"):
                 self.tabs.setTabText(index, current_text[:-1])
-
+    
+            # Refresh highlighter in case Save As changed the extension
+            ext = os.path.splitext(editor.file_path)[1].lower()
+            editor.highlighter = registry.get_highlighter(editor.document(), ext)
+    
+            # Update editor mode for the current file type
+            self._apply_editor_mode(editor, ext)
+    
             if hasattr(self, 'git_dock'):
                 self.git_dock.refresh_status()
-
+    
             self.statusBar().showMessage(f"Saved: {editor.file_path}", 3000)
             return True
         except Exception as e:
