@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QPlainTextEdit, QWidget, QTextEdit, QMenu
+from PyQt6.QtWidgets import QPlainTextEdit, QWidget, QTextEdit, QMenu, QLabel
 from PyQt6.QtGui import QPainter, QColor, QFontMetrics, QTextCursor, QFont, QTextFormat, QAction, QTextCharFormat, QTextBlockFormat, QTextOption, QIcon
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect, QSize, QTimer
 import re
@@ -225,6 +225,19 @@ class GhostEditor(QPlainTextEdit):
         self.cursorPositionChanged.connect(self.highlight_current_line)
         self.cursorPositionChanged.connect(self._track_cursor_symbol)
         self.highlight_current_line()
+        
+        self._setup_color_swatch()
+        self._swatch.mousePressEvent = lambda e: (
+            self._on_color_swatch_clicked(
+                self._get_hex_color_at_cursor()[0]
+            ) if self._get_hex_color_at_cursor() else None
+        )
+        self.cursorPositionChanged.connect(self._update_color_swatch)
+        
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        if hasattr(self, '_swatch'):
+            self._swatch.hide()
 
     # ── Intent tracking ───────────────────────────────────────────────────
 
@@ -1185,6 +1198,130 @@ Answer concisely. If you include code, use a single fenced code block."""
         cursor = self.replacement_cursor
         cursor.removeSelectedText()
         cursor.insertText(self.function_output)
+        
+    # ── Color picker ──────────────────────────────────────────────────────
+    
+    def _setup_color_swatch(self):
+        """Small floating swatch that appears near hex colors."""
+        self._swatch = QLabel(self.viewport())
+        self._swatch.setFixedSize(56, 24)
+        self._swatch.setStyleSheet("""
+            QLabel {
+                border: 1px solid #555555;
+                border-radius: 4px;
+            }
+        """)
+        self._swatch.hide()
+        self._current_color_range = None
+    
+    def _get_hex_color_at_cursor(self):
+        """
+        Checks if the cursor is on or adjacent to a hex color.
+        Returns (hex_string, start, end) or None.
+        """
+        cursor = self.textCursor()
+        block = cursor.block()
+        text = block.text()
+        pos_in_block = cursor.positionInBlock()
+    
+        for match in re.finditer(
+            r'#([0-9A-Fa-f]{8}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{3})\b', text
+        ):
+            start = match.start()
+            end = match.end()
+            # Include one char either side so cursor can be adjacent
+            if start - 1 <= pos_in_block <= end + 1:
+                return match.group(0), block.position() + start, block.position() + end
+        return None
+    
+    def _update_color_swatch(self):
+        """Show or hide the swatch based on cursor position."""
+        result = self._get_hex_color_at_cursor()
+        if not result:
+            self._swatch.hide()
+            self._current_color_range = None
+            return
+    
+        hex_color, start, end = result
+        self._current_color_range = (start, end)
+    
+        # Validate the color
+        try:
+            color = QColor(hex_color)
+            if not color.isValid():
+                self._swatch.hide()
+                return
+        except Exception:
+            self._swatch.hide()
+            return
+    
+        # Position swatch just above the cursor
+        cursor = self.textCursor()
+        rect = self.cursorRect(cursor)
+    
+        # Show hex value on swatch, use contrasting text color
+        brightness = (
+            color.red() * 299 +
+            color.green() * 587 +
+            color.blue() * 114
+        ) / 1000
+        text_color = "#000000" if brightness > 128 else "#FFFFFF"
+    
+        self._swatch.setStyleSheet(f"""
+            QLabel {{
+                background-color: {hex_color};
+                border: 1px solid #555555;
+                border-radius: 4px;
+                color: {text_color};
+                font-family: 'Hack', monospace;
+                font-size: 8pt;
+                padding: 0 4px;
+            }}
+        """)
+        self._swatch.setText(hex_color.upper())
+        self._swatch.adjustSize()
+        self._swatch.setFixedHeight(20)
+    
+        # Position above the cursor, clamped to viewport
+        swatch_x = max(0, rect.left() - 4)
+        swatch_y = max(0, rect.top() - 26)
+    
+        # Don't go off the right edge
+        if swatch_x + self._swatch.width() > self.viewport().width():
+            swatch_x = self.viewport().width() - self._swatch.width() - 4
+    
+        self._swatch.move(swatch_x, swatch_y)
+        self._swatch.show()
+        self._swatch.raise_()
+    
+    def _on_color_swatch_clicked(self, hex_color: str):
+        """
+        Open a color dialog to pick a new color.
+        Replaces the hex value in the editor on accept.
+        """
+        from PyQt6.QtWidgets import QColorDialog
+        current = QColor(hex_color)
+        new_color = QColorDialog.getColor(
+            current, self,
+            "Pick a Color",
+            QColorDialog.ColorDialogOption.ShowAlphaChannel
+        )
+        if not new_color.isValid():
+            return
+    
+        # Format to match original — 8 char if alpha, 6 otherwise
+        if new_color.alpha() < 255 or len(hex_color) == 9:
+            new_hex = new_color.name(QColor.NameFormat.HexArgb).upper()
+        else:
+            new_hex = new_color.name().upper()
+    
+        if self._current_color_range:
+            start, end = self._current_color_range
+            cursor = self.textCursor()
+            cursor.setPosition(start)
+            cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+            cursor.insertText(new_hex)
+            self._update_color_swatch()
 
     # ── Key handling ──────────────────────────────────────────────────────
 
