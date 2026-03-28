@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./images/quillai_logo.svg" width="200" alt="QuillAI logo"/>
+  <img src="./images/quillai_logo.svg" width="400" alt="QuillAI logo"/>
 </p>
 
 # QuillAI
