@@ -24,27 +24,21 @@ mkdir -p "$APPDIR/usr/share/icons/hicolor/scalable/apps"
 
 echo "🖼️ Fixing desktop + icon..."
 
-# Safe desktop detection
-shopt -s nullglob
-desktop_files=("$APPDIR/usr/share/applications/"*.desktop)
-shopt -u nullglob
+DESKTOP_SRC=$(ls "$APPDIR/usr/share/applications/"*.desktop | head -n 1)
+DESKTOP_DST="$APPDIR/usr/share/applications/${APP_ID}.desktop"
 
-if [ ${#desktop_files[@]} -eq 0 ]; then
+if [ ! -f "$DESKTOP_SRC" ]; then
   echo "❌ No desktop file found!"
   exit 1
 fi
 
-DESKTOP_SRC="${desktop_files[0]}"
-DESKTOP_DST="$APPDIR/usr/share/applications/${APP_ID}.desktop"
+# Copy to writable AppDir path
+cp "$DESKTOP_SRC" "$DESKTOP_DST"
 
-# Copy only if needed
-if [ "$DESKTOP_SRC" != "$DESKTOP_DST" ]; then
-  cp "$DESKTOP_SRC" "$DESKTOP_DST"
-fi
-
-# Fix desktop entries
-sed -i "s|Exec=.*|Exec=${APP_ID}|g" "$DESKTOP_DST"
-sed -i "s|Icon=.*|Icon=${APP_ID}|g" "$DESKTOP_DST"
+# Fix fields using temp file (avoids sed -i on read-only files)
+tmpfile=$(mktemp)
+sed "s|Exec=.*|Exec=${APP_ID}|g; s|Icon=.*|Icon=${APP_ID}|g" "$DESKTOP_DST" > "$tmpfile"
+mv "$tmpfile" "$DESKTOP_DST"
 
 # Copy icon
 if [ -f "images/quillai_logo_min.svg" ]; then
@@ -80,7 +74,7 @@ echo "⚙️ Building AppImage..."
 
 ./$LINUXDEPLOY \
   --appdir "$APPDIR" \
-  --desktop-file "$DESKTOP_DST" \
+  --desktop-file "$APPDIR/usr/share/applications/${APP_ID}.desktop" \
   --icon-file "$APPDIR/usr/share/icons/hicolor/scalable/apps/${APP_ID}.svg" \
   --plugin qt \
   --output appimage
@@ -89,9 +83,13 @@ echo "🏷️ Renaming output..."
 
 APPIMAGE=$(ls *.AppImage | head -n 1)
 
-VERSION="${GITHUB_REF_NAME:-local}"
-FINAL_NAME="${APP_NAME}-${VERSION}-x86_64.AppImage"
+if [ -n "${GITHUB_REF_NAME:-}" ]; then
+  VERSION="$GITHUB_REF_NAME"
+else
+  VERSION="local"
+fi
 
+FINAL_NAME="${APP_NAME}-${VERSION}-x86_64.AppImage"
 mv "$APPIMAGE" "$FINAL_NAME"
 
 echo ""
