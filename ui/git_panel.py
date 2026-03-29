@@ -5,10 +5,11 @@ from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QTreeWidget,
                               QTreeWidgetItem, QPushButton, QHBoxLayout,
                               QLineEdit, QMessageBox, QTreeWidgetItemIterator,
                               QMenu, QApplication)
-from PyQt6.QtCore import Qt, pyqtSignal, QDir
+from PyQt6.QtCore import Qt, pyqtSignal, QDir, QThread
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor
 
 from ui.diff_viewer import DiffViewerDialog
+from ai.worker import AIWorker
 
 
 class GitDockWidget(QDockWidget):
@@ -19,6 +20,8 @@ class GitDockWidget(QDockWidget):
         self.setObjectName("git_dock")
         self.parent_window = parent
         self.repo_path = None
+        self._ai_thread = None
+        self._ai_worker = None
 
         self.folder_icon = self._create_icon("#D4A373", is_folder=True)
         self.file_icon   = self._create_icon("#A9A9A9", is_folder=False)
@@ -113,7 +116,7 @@ class GitDockWidget(QDockWidget):
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.show_context_menu)
 
-        # Commit area
+        # Commit message input
         self.commit_input = QLineEdit()
         self.commit_input.setPlaceholderText("Message (Enter to commit)")
         self.commit_input.setStyleSheet("""
@@ -128,6 +131,25 @@ class GitDockWidget(QDockWidget):
         """)
         self.commit_input.returnPressed.connect(self.commit_changes)
 
+        # AI message button + commit button row
+        commit_btn_layout = QHBoxLayout()
+        commit_btn_layout.setSpacing(4)
+
+        self.ai_msg_btn = QPushButton("✨ AI Message")
+        self.ai_msg_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #8A2BE2;
+                color: white;
+                border-radius: 4px;
+                padding: 6px 10px;
+                font-weight: bold;
+                font-size: 9pt;
+            }
+            QPushButton:hover { background-color: #9B30FF; }
+            QPushButton:disabled { background-color: #4A1A7A; color: #888888; }
+        """)
+        self.ai_msg_btn.clicked.connect(self.generate_ai_commit_message)
+
         self.commit_btn = QPushButton("✓ Commit Selected")
         self.commit_btn.setStyleSheet("""
             QPushButton {
@@ -141,10 +163,13 @@ class GitDockWidget(QDockWidget):
         """)
         self.commit_btn.clicked.connect(self.commit_changes)
 
+        commit_btn_layout.addWidget(self.ai_msg_btn)
+        commit_btn_layout.addWidget(self.commit_btn)
+
         layout.addLayout(btn_layout)
         layout.addWidget(self.tree)
         layout.addWidget(self.commit_input)
-        layout.addWidget(self.commit_btn)
+        layout.addLayout(commit_btn_layout)
         self.setWidget(container)
 
     # ── Git operations ────────────────────────────────────────────
@@ -161,6 +186,7 @@ class GitDockWidget(QDockWidget):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding='utf-8',
                 check=True
             )
             return True, result.stdout.strip()
@@ -170,6 +196,156 @@ class GitDockWidget(QDockWidget):
             return False, "Git executable not found in PATH."
         except Exception as e:
             return False, str(e)
+
+    def _get_diff_for_ai(self) -> str:
+        """
+        Gets the diff of checked files, or falls back to unstaged
+        diff if nothing is checked. Caps at 6000 chars so we don't
+        blow the context window.
+        """
+        CAP = 6000
+
+        # Collect checked files
+        checked = []
+        it = QTreeWidgetItemIterator(self.tree)
+        while it.value():
+            item = it.value()
+            rel_path = item.data(0, Qt.ItemDataRole.UserRole)
+            if rel_path and item.checkState(0) == Qt.CheckState.Checked:
+                checked.append(rel_path)
+            it += 1
+
+        if checked:
+            # Diff only the checked files against HEAD
+            ok, diff = self.run_git_command(
+                ['git', 'diff', 'HEAD', '--'] + checked
+            )
+            if not ok or not diff.strip():
+                # Try staged diff
+                ok, diff = self.run_git_command(
+                    ['git', 'diff', '--cached', '--'] + checked
+                )
+        else:
+            # No files checked — diff everything
+            ok, diff = self.run_git_command(['git', 'diff', 'HEAD'])
+            if not ok or not diff.strip():
+                ok, diff = self.run_git_command(['git', 'diff', '--cached'])
+
+        if not ok or not diff.strip():
+            return ""
+
+        # Cap the diff size
+        if len(diff) > CAP:
+            diff = diff[:CAP] + "\n...(diff truncated)..."
+
+        return diff
+
+    def generate_ai_commit_message(self):
+        """Generate a commit message using the AI based on the current diff."""
+        if not self.parent_window:
+            return
+    
+        if self._ai_thread is not None:
+            try:
+                if self._ai_thread.isRunning():
+                    return
+            except RuntimeError:
+                self._ai_thread = None
+    
+        diff = self._get_diff_for_ai()
+        if not diff:
+            QMessageBox.information(
+                self, "No Changes",
+                "No changes found to generate a commit message from.\n\n"
+                "Make sure you have uncommitted changes or check the files you want to commit."
+            )
+            return
+    
+        _, log = self.run_git_command(['git', 'log', '--oneline', '-10'])
+    
+        prompt = f"""Generate a concise git commit message for the following diff.
+    
+    Rules:
+    - Use the imperative mood ("Add feature" not "Added feature")
+    - Keep it under 72 characters — be concise
+    - If you cannot fit it in 72 characters, summarize rather than truncate
+    - Be specific about what changed and why
+    - Do not include bullet points or line breaks — single line only
+    - Do not wrap in quotes
+    - Match the style of the recent commit history if provided
+    
+    Recent commit history (for style reference):
+    {log if log else "No history available"}
+    
+    Diff:
+    {diff}
+    
+    Respond with ONLY the commit message. Nothing else."""
+    
+        self.ai_msg_btn.setText("✨ Thinking...")
+        self.ai_msg_btn.setEnabled(False)
+        self.commit_input.clear()
+        self.commit_input.setPlaceholderText("Generating commit message...")
+    
+        thread = QThread()
+        worker = AIWorker(
+            prompt=prompt,
+            editor_text="",
+            cursor_pos=0,
+            is_chat=True,
+            model=self.parent_window.settings_manager.get_chat_model(),
+            api_url=self.parent_window.settings_manager.get_api_url(),
+            api_key=self.parent_window.settings_manager.get_api_key(),
+            backend=self.parent_window.settings_manager.get_backend(),
+        )
+    
+        self._ai_thread = thread
+        self._ai_worker = worker
+        result_buf = []
+    
+        def on_update(text):
+            # Collect silently — do NOT touch the UI here
+            result_buf.append(text)
+    
+        def on_finished():
+            self._ai_thread = None
+            self._ai_worker = None
+    
+            raw = ''.join(result_buf).strip()
+    
+            # Strip any quotes the AI might have added
+            raw = raw.strip('"\'`')
+    
+            # Take only the first non-empty line
+            lines = [l.strip() for l in raw.split('\n') if l.strip()]
+            message = lines[0] if lines else ""
+    
+            # Trim to 72 chars if needed
+            if len(message) > 72:
+                message = message[:69] + "..."
+    
+            self.commit_input.setText(message)
+            self.commit_input.setPlaceholderText("Message (Enter to commit)")
+            self.ai_msg_btn.setText("✨ AI Message")
+            self.ai_msg_btn.setEnabled(True)
+            self.commit_input.setFocus()
+            self.commit_input.selectAll()
+    
+        # Connect update_ghost to collect tokens silently
+        worker.chat_update.connect(on_update)
+        worker.finished.connect(on_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.started.connect(worker.run)
+        thread.start()
+    
+        if hasattr(self.parent_window, 'active_threads'):
+            self.parent_window.active_threads.append(thread)
+            thread.finished.connect(
+                lambda: self.parent_window.active_threads.remove(thread)
+                if thread in self.parent_window.active_threads else None
+            )
 
     def refresh_status(self):
         self.tree.clear()

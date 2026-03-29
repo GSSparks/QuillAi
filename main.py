@@ -935,7 +935,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         if event.isAccepted():
             registry.deactivate_all_features()
             self._save_current_session()  
-S            # Save dock states
+            # Save dock states
             self.settings_manager.set(
                 'dock_state',
                 self.saveState().toHex().data().decode()
