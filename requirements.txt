@@ -1,0 +1,32 @@
+# ── Core (required) ───────────────────────────────────────────────────────────
+PyQt6>=6.4.0
+requests>=2.28.0
+markdown>=3.4.0
+chardet>=5.0.0
+PyYAML>=6.0
+
+# ── Terminal ──────────────────────────────────────────────────────────────────
+# Full PTY terminal with ANSI support (Linux/macOS only).
+# Falls back to a QProcess-driven shell widget if not installed.
+# Linux:  apt install python3-qtermwidget  OR  pip install pyqtermwidget
+# macOS:  pip install pyqtermwidget
+pyqtermwidget>=0.2.0
+
+# ── LSP (Language Server Protocol) ────────────────────────────────────────────
+# Python language server — provides hover, go-to-def, rename, diagnostics.
+python-lsp-server>=1.9.0
+
+# Optional LSP plugins (uncomment to enable):
+# python-lsp-black          # Black formatter integration
+# python-lsp-ruff           # Ruff linter integration (faster than pylint)
+# pylsp-mypy                # Mypy type checking
+
+# JavaScript / TypeScript LSP (requires Node.js):
+# npm install -g typescript-language-server typescript
+
+# Bash LSP (requires Node.js):
+# npm install -g bash-language-server
+
+# ── Linting (optional but recommended) ────────────────────────────────────────
+# shellcheck must be installed via your system package manager:
+# apt install shellcheck  /  brew install shellcheck
