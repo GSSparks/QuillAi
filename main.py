@@ -35,6 +35,8 @@ from editor.highlighter import registry
 
 from ui.git_panel import GitDockWidget
 
+MAX_FILE_SIZE = 6000  # characters
+
 # ==========================================
 # Main Application
 # ==========================================
@@ -125,7 +127,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(True)
         self.tabs.tabCloseRequested.connect(self.close_tab)
-        self.tabs.currentChanged.connect(lambda _: self._refresh_markdown_preview())  # ADD THIS
+        self.tabs.currentChanged.connect(lambda _: self._refresh_markdown_preview()) 
         self.tabs.setStyleSheet("""
             QTabWidget::pane { border: none; background-color: #1E1E1E; }
             QTabBar::tab {
@@ -306,11 +308,6 @@ class CodeEditor(QMainWindow, ChatRenderer):
         
     def toggle_inline_completion(self, enabled):
         self.inline_completion_enabled = enabled
-        # Optional: Add code to visually indicate the toggle state, e.g., status bar message.
-        if enabled:
-            print("In-line completion enabled")
-        else:
-            print("In-line completion disabled")
              
     def update_status_bar(self):
         editor = self.current_editor()
@@ -837,7 +834,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         if path:
             self.intent_tracker.record_file_edit(path)
 
-        ext = os.path.splitext(name)[1].lower() if path else ".py"
+        ext = os.path.splitext(name)[1].lower() if path else ""
 
         editor.highlighter = registry.get_highlighter(editor.document(), ext)
 
@@ -938,8 +935,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         if event.isAccepted():
             registry.deactivate_all_features()
             self._save_current_session()  
-            self._save_current_session()
-            # Save dock states
+S            # Save dock states
             self.settings_manager.set(
                 'dock_state',
                 self.saveState().toHex().data().decode()
@@ -998,39 +994,6 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.tabs.removeTab(index)
         if self.tabs.count() == 0:
             self.add_new_tab("Untitled", "")
-
-    def open_file_in_tab(self, file_path, line_number=None):
-        if os.path.isdir(file_path):
-            return
-
-        editor_to_focus = None
-
-        for i in range(self.tabs.count()):
-            editor = self.tabs.widget(i)
-            if hasattr(editor, 'file_path') and editor.file_path == file_path:
-                self.tabs.setCurrentIndex(i)
-                editor_to_focus = editor
-                break
-
-        if not editor_to_focus:
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                filename = os.path.basename(file_path)
-                editor_to_focus = self.add_new_tab(filename, content, file_path)
-            except Exception as e:
-                print(f"Could not open file: {e}")
-                return
-
-        if editor_to_focus and line_number is not None:
-            cursor = editor_to_focus.textCursor()
-            cursor.movePosition(QTextCursor.MoveOperation.Start)
-            cursor.movePosition(QTextCursor.MoveOperation.NextBlock, n=line_number - 1)
-
-            editor_to_focus.setTextCursor(cursor)
-            editor_to_focus.ensureCursorVisible()
-            editor_to_focus.setFocus()
-            editor_to_focus.highlight_current_line()
 
     def save_file(self, index=None):
         if index is None or isinstance(index, bool):
@@ -1724,10 +1687,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         cursor = editor.textCursor()
         line_text = cursor.block().text()
     
-        generate_function = False
-        if line_text.strip().startswith("#") and "function" in line_text.lower():
-            generate_function = True
-    
+        # Don't trigger on block endings — ghost_editor handles those
         if line_text.strip().endswith(":") or line_text.strip().endswith(")"):
             return
     
@@ -1736,7 +1696,6 @@ class CodeEditor(QMainWindow, ChatRenderer):
         context = text[max(0, cursor_pos - 1500):cursor_pos]
         cross_file_context = self.resolve_local_imports(text)
     
-        # Detect language for intent context
         lang = "code"
         if editor.file_path:
             ext_map = {
@@ -1749,38 +1708,27 @@ class CodeEditor(QMainWindow, ChatRenderer):
                     lang = name
                     break
     
-        # Record current symbol for intent tracking
         current_symbol = self.intent_tracker.get_current_symbol(text, cursor_pos)
         if current_symbol:
             self.intent_tracker.record_cursor_symbol(current_symbol)
     
-        # Build intent prefix — cached, nearly free on repeated calls
         intent_ctx = self.intent_tracker.build_intent_context(
             current_file_path=editor.file_path or "",
             language=lang,
         )
     
-        if generate_function:
-            prompt = (
-                f"{intent_ctx}\n"
-                f"Generate a {lang} function for this comment:\n"
-                f"{line_text}\n"
-                f"{cross_file_context}\n"
-                f"Return ONLY code. Do not repeat the comment."
-            )
-        else:
-            prompt = (
-                f"{intent_ctx}\n"
-                f"{cross_file_context}\n"
-                f"Complete the following {lang} code:\n\n{context}"
-            )
+        prompt = (
+            f"{intent_ctx}\n"
+            f"{cross_file_context}\n"
+            f"Complete the following {lang} code:\n\n{context}"
+        )
     
         thread = QThread()
         worker = self.create_worker(
             prompt=prompt,
             editor_text=text,
             cursor_pos=cursor_pos,
-            generate_function=generate_function,
+            generate_function=False,
         )
     
         worker.moveToThread(thread)
