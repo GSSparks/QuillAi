@@ -39,6 +39,7 @@
           pkgs.copyDesktopItems # Nix hook to automatically install desktop items
           pkgs.inter
           pkgs.jetbrains-mono
+          pkgs.wget
         ];
 
         propagatedBuildInputs = with pythonPackages; [
@@ -50,6 +51,7 @@
 
         buildInputs = [
           pkgs.qt6.qtwayland
+          pkgs.qt6.qtbase
           pkgs.shellcheck
         ];
 
