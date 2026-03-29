@@ -9,7 +9,9 @@ from PyQt6.QtCore import Qt, pyqtSignal, QDir, QThread
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor
 
 from ui.diff_viewer import DiffViewerDialog
-from ui.theme import get_theme
+from ui.theme import (get_theme, theme_signals,
+                      build_git_panel_stylesheet,
+                      build_git_panel_parts)
 from ai.worker import AIWorker
 
 
@@ -24,25 +26,49 @@ class GitDockWidget(QDockWidget):
         self._ai_thread = None
         self._ai_worker = None
 
-        t = self._get_theme()
-        self.folder_icon = self._create_icon(t['yellow'],  is_folder=True)
-        self.file_icon   = self._create_icon(t['fg4'],     is_folder=False)
-        self.py_icon     = self._create_icon(t['blue'],    is_folder=False)
-        self.html_icon   = self._create_icon(t['orange'],  is_folder=False)
-
-        self.setup_ui()
+        # Build and cache the initial parts dict; rebuilt on theme change
+        self._p = build_git_panel_parts(get_theme())
+        self._rebuild_icons()
+        self._setup_ui()
         self.refresh_status()
 
-    def _get_theme(self) -> dict:
-        """Get current theme — safe to call before parent_window is fully init."""
-        theme_name = None
-        if (self.parent_window and
-                hasattr(self.parent_window, 'settings_manager')):
-            theme_name = self.parent_window.settings_manager.get('theme')
-        return get_theme(theme_name or 'gruvbox_dark')
+        theme_signals.theme_changed.connect(self._on_theme_changed)
 
-    def _create_icon(self, color, is_folder):
-        t = self._get_theme()
+    # ── Theme handling ────────────────────────────────────────────────────
+
+    def _on_theme_changed(self, t: dict):
+        self._p = build_git_panel_parts(t)
+        self.apply_styles(t)
+        self._rebuild_icons()
+        # Re-populate so file-status colors update immediately
+        self.refresh_status()
+
+    def apply_styles(self, t: dict):
+        p = self._p
+        self.setStyleSheet(build_git_panel_stylesheet(t))
+        self.refresh_btn.setStyleSheet(p["action_btn"])
+        self.push_btn.setStyleSheet(p["action_btn"])
+        self.tree.setStyleSheet(p["tree"])
+        self.commit_input.setStyleSheet(p["commit_input"])
+        self.ai_msg_btn.setStyleSheet(p["ai_msg_btn"])
+        self.commit_btn.setStyleSheet(p["commit_btn"])
+
+    def _rebuild_icons(self):
+        """Recreate file/folder icons from the current cached parts palette."""
+        t = get_theme()
+        self.folder_icon = self._create_icon(t['yellow'],  t['bg0_hard'], is_folder=True)
+        self.file_icon   = self._create_icon(t['fg4'],     t['bg0_hard'], is_folder=False)
+        self.py_icon     = self._create_icon(t['blue'],    t['bg0_hard'], is_folder=False)
+        self.html_icon   = self._create_icon(t['orange'],  t['bg0_hard'], is_folder=False)
+
+    # ── Icon builder ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _create_icon(color: str, bg_hard: str, is_folder: bool) -> QIcon:
+        """
+        Pure function: builds a 16×16 icon from explicit color values.
+        No theme lookup — all colors passed in by the caller.
+        """
         pixmap = QPixmap(16, 16)
         pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
@@ -56,60 +82,26 @@ class GitDockWidget(QDockWidget):
             painter.setBrush(QColor(color))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(3, 1, 10, 14, 1, 1)
-            painter.setBrush(QColor(t['bg0_hard']))
+            painter.setBrush(QColor(bg_hard))
             painter.drawRect(5, 5, 6, 1)
             painter.drawRect(5, 8, 6, 1)
             painter.drawRect(5, 11, 4, 1)
         painter.end()
         return QIcon(pixmap)
 
-    def setup_ui(self):
-        t = self._get_theme()
+    # ── UI Setup ──────────────────────────────────────────────────────────
 
-        self.setStyleSheet(f"""
-            QDockWidget {{
-                color: {t['fg2']};
-                font-family: 'Inter', 'SF Pro Text', 'Segoe UI', sans-serif;
-                font-weight: bold;
-                font-size: 10pt;
-            }}
-            QDockWidget::title {{
-                background-color: {t['bg1']};
-                padding: 6px 10px;
-            }}
-        """)
-
+    def _setup_ui(self):
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(5, 5, 5, 5)
 
         # Action bar
         btn_layout = QHBoxLayout()
-
         self.refresh_btn = QPushButton("🔄 Refresh")
-        self.refresh_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {t['bg2']};
-                color: {t['fg1']};
-                border-radius: 4px;
-                padding: 4px 8px;
-            }}
-            QPushButton:hover {{ background-color: {t['bg3']}; }}
-        """)
         self.refresh_btn.clicked.connect(self.refresh_status)
-
         self.push_btn = QPushButton("↑ Push")
-        self.push_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {t['bg2']};
-                color: {t['fg1']};
-                border-radius: 4px;
-                padding: 4px 8px;
-            }}
-            QPushButton:hover {{ background-color: {t['bg3']}; }}
-        """)
         self.push_btn.clicked.connect(self.push_changes)
-
         btn_layout.addWidget(self.refresh_btn)
         btn_layout.addWidget(self.push_btn)
         btn_layout.addStretch()
@@ -118,38 +110,6 @@ class GitDockWidget(QDockWidget):
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(15)
-        self.tree.setStyleSheet(f"""
-            QTreeWidget {{
-                background-color: {t['bg0_hard']};
-                color: {t['fg1']};
-                border: none;
-                font-family: 'Inter', 'SF Pro Text', 'Segoe UI', sans-serif;
-                font-size: 11pt;
-            }}
-            QTreeWidget::item {{ padding: 4px; }}
-            QTreeWidget::item:selected {{
-                background-color: {t['bg2']};
-                color: {t['fg0']};
-                border-radius: 4px;
-            }}
-            QTreeWidget::item:hover:!selected {{
-                background-color: {t['bg1']};
-                border-radius: 4px;
-            }}
-            QTreeWidget::branch {{ background-color: transparent; }}
-            QTreeWidget::indicator:unchecked {{
-                border: 1px solid {t['fg4']};
-                background-color: {t['bg0_hard']};
-                border-radius: 2px;
-                width: 12px; height: 12px;
-            }}
-            QTreeWidget::indicator:checked {{
-                background-color: {t['accent']};
-                border: 1px solid {t['accent']};
-                border-radius: 2px;
-                width: 12px; height: 12px;
-            }}
-        """)
         self.tree.itemDoubleClicked.connect(self.on_item_double_clicked)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.show_context_menu)
@@ -157,17 +117,6 @@ class GitDockWidget(QDockWidget):
         # Commit message input
         self.commit_input = QLineEdit()
         self.commit_input.setPlaceholderText("Message (Enter to commit)")
-        self.commit_input.setStyleSheet(f"""
-            QLineEdit {{
-                background-color: {t['bg1']};
-                color: {t['fg1']};
-                border: 1px solid {t['border']};
-                border-radius: 4px;
-                padding: 6px;
-                font-family: 'Inter', 'SF Pro Text', 'Segoe UI', sans-serif;
-            }}
-            QLineEdit:focus {{ border: 1px solid {t['border_focus']}; }}
-        """)
         self.commit_input.returnPressed.connect(self.commit_changes)
 
         # AI message + commit buttons
@@ -175,34 +124,9 @@ class GitDockWidget(QDockWidget):
         commit_btn_layout.setSpacing(4)
 
         self.ai_msg_btn = QPushButton("✨ AI Message")
-        self.ai_msg_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {t['purple']};
-                color: {t['bg0_hard']};
-                border-radius: 4px;
-                padding: 6px 10px;
-                font-weight: bold;
-                font-size: 9pt;
-            }}
-            QPushButton:hover {{ background-color: {t['purple_dim']}; }}
-            QPushButton:disabled {{
-                background-color: {t['bg2']};
-                color: {t['fg4']};
-            }}
-        """)
         self.ai_msg_btn.clicked.connect(self.generate_ai_commit_message)
 
         self.commit_btn = QPushButton("✓ Commit Selected")
-        self.commit_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {t['accent']};
-                color: {t['bg0_hard']};
-                border-radius: 4px;
-                padding: 6px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: {t['yellow']}; }}
-        """)
         self.commit_btn.clicked.connect(self.commit_changes)
 
         commit_btn_layout.addWidget(self.ai_msg_btn)
@@ -214,7 +138,10 @@ class GitDockWidget(QDockWidget):
         layout.addLayout(commit_btn_layout)
         self.setWidget(container)
 
-    # ── Git operations ────────────────────────────────────────────
+        # Apply all styles once all refs exist
+        self.apply_styles(get_theme())
+
+    # ── Git operations ────────────────────────────────────────────────────
 
     def set_repo_path(self, path):
         self.repo_path = path
@@ -229,7 +156,7 @@ class GitDockWidget(QDockWidget):
                 stderr=subprocess.PIPE,
                 text=True,
                 encoding='utf-8',
-                check=True
+                check=True,
             )
             return True, result.stdout.strip()
         except subprocess.CalledProcessError as e:
@@ -261,10 +188,8 @@ class GitDockWidget(QDockWidget):
 
         if not ok or not diff.strip():
             return ""
-
         if len(diff) > CAP:
             diff = diff[:CAP] + "\n...(diff truncated)..."
-
         return diff
 
     def generate_ai_commit_message(self):
@@ -335,11 +260,9 @@ Respond with ONLY the commit message. Nothing else."""
         def on_finished():
             self._ai_thread = None
             self._ai_worker = None
-
             raw = ''.join(result_buf).strip().strip('"\'`')
             lines = [l.strip() for l in raw.split('\n') if l.strip()]
             message = lines[0] if lines else ""
-
             self.commit_input.setText(message)
             self.commit_input.setPlaceholderText("Message (Enter to commit)")
             self.ai_msg_btn.setText("✨ AI Message")
@@ -363,7 +286,7 @@ Respond with ONLY the commit message. Nothing else."""
             )
 
     def refresh_status(self):
-        t = self._get_theme()
+        p = self._p
         self.tree.clear()
         success, output = self.run_git_command(['git', 'status', '--porcelain', '-u'])
 
@@ -408,14 +331,14 @@ Respond with ONLY the commit message. Nothing else."""
             else:
                 file_item.setIcon(0, self.file_icon)
 
-            # Use theme colors for status indicators
-            color = t['fg1']
             if 'M' in status:
-                color = t['yellow']
+                color = p["status_modified"]
             elif '?' in status or 'A' in status:
-                color = t['green']
+                color = p["status_added"]
             elif 'D' in status:
-                color = t['red']
+                color = p["status_deleted"]
+            else:
+                color = p["status_default"]
 
             file_item.setForeground(0, QColor(color))
             file_item.setData(0, Qt.ItemDataRole.UserRole, file_path)
@@ -426,7 +349,6 @@ Respond with ONLY the commit message. Nothing else."""
         self.tree.expandAll()
 
     def show_context_menu(self, position):
-        t = self._get_theme()
         item = self.tree.itemAt(position)
         if not item:
             return
@@ -435,18 +357,7 @@ Respond with ONLY the commit message. Nothing else."""
             return
 
         menu = QMenu()
-        menu.setStyleSheet(f"""
-            QMenu {{
-                background-color: {t['bg1']};
-                color: {t['fg1']};
-                border: 1px solid {t['border']};
-            }}
-            QMenu::item {{ padding: 6px 20px; }}
-            QMenu::item:selected {{
-                background-color: {t['highlight']};
-                color: {t['fg0']};
-            }}
-        """)
+        menu.setStyleSheet(self._p["context_menu"])
         diff_action    = menu.addAction("🔍 View Diff")
         menu.addSeparator()
         discard_action = menu.addAction("❌ Discard Changes")
@@ -456,12 +367,11 @@ Respond with ONLY the commit message. Nothing else."""
         if action == diff_action:
             dialog = DiffViewerDialog(rel_path, self.repo_path, self)
             dialog.exec()
-
         elif action == discard_action:
             reply = QMessageBox.question(
                 self, "Discard Changes",
                 f"Permanently discard all changes to:\n{rel_path}?\n\nThis cannot be undone.",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply == QMessageBox.StandardButton.Yes:
                 self.run_git_command(['git', 'checkout', '--', rel_path])
@@ -536,3 +446,12 @@ Respond with ONLY the commit message. Nothing else."""
         if rel_path:
             base = self.repo_path if self.repo_path else QDir.currentPath()
             self.file_double_clicked.emit(os.path.join(base, rel_path))
+
+    # ── Cleanup ───────────────────────────────────────────────────────────
+
+    def closeEvent(self, event):
+        try:
+            theme_signals.theme_changed.disconnect(self._on_theme_changed)
+        except RuntimeError:
+            pass
+        super().closeEvent(event)

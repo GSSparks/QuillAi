@@ -1,10 +1,11 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-                              QLabel, QTextEdit, QTextBrowser, QStackedWidget,
-                              QSizePolicy)
+                              QLabel, QTextEdit, QTextBrowser, QStackedWidget)
 from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QRect, pyqtSignal, QTimer
 from PyQt6.QtGui import QKeySequence, QTextCursor, QShortcut, QCursor
 
-from ui.theme import get_theme
+from ui.theme import (get_theme, theme_signals,
+                      build_sliding_panel_stylesheet,
+                      build_sliding_panel_parts)
 
 
 class ResizeGrip(QWidget):
@@ -16,12 +17,12 @@ class ResizeGrip(QWidget):
         self._dragging = False
         self._drag_start_x = 0
         self._drag_start_width = 0
+        # Cache the hover style — updated when parent calls apply_styles
+        self._hover_style = build_sliding_panel_parts(get_theme())["resize_grip_hover"]
 
-    def _get_theme(self) -> dict:
-        p = self.parent()
-        if p and hasattr(p, 'settings_manager') and p.settings_manager:
-            return get_theme(p.settings_manager.get('theme'))
-        return get_theme()
+    def update_hover_style(self, hover_style: str):
+        """Called by SlidingPanel.apply_styles to keep the accent color current."""
+        self._hover_style = hover_style
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -44,8 +45,7 @@ class ResizeGrip(QWidget):
             event.accept()
 
     def enterEvent(self, event):
-        t = self._get_theme()
-        self.setStyleSheet(f"background-color: {t['accent']};")
+        self.setStyleSheet(self._hover_style)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
@@ -57,16 +57,16 @@ class SlidingPanel(QWidget):
     message_sent = pyqtSignal(str)
 
     HANDLE_WIDTH = 18
-    MIN_WIDTH = 300
-    MAX_WIDTH = 900
+    MIN_WIDTH    = 300
+    MAX_WIDTH    = 900
     DEFAULT_WIDTH = 440
 
     def __init__(self, parent=None, settings_manager=None):
         super().__init__(parent)
         self.setObjectName("slidingPanel")
-        self._expanded = False
+        self._expanded  = False
         self._animating = False
-        self._pinned = False
+        self._pinned    = False
         self._hover_enabled = True
         self.settings_manager = settings_manager
 
@@ -87,11 +87,28 @@ class SlidingPanel(QWidget):
         self._setup_ui()
         self._position_collapsed()
 
-    def _get_theme(self) -> dict:
-        theme_name = None
-        if self.settings_manager:
-            theme_name = self.settings_manager.get('theme')
-        return get_theme(theme_name)
+        theme_signals.theme_changed.connect(self._on_theme_changed)
+
+    # ── Theme handling ────────────────────────────────────────────────────
+
+    def _on_theme_changed(self, t: dict):
+        self.apply_styles(t)
+
+    def apply_styles(self, t: dict):
+        p = build_sliding_panel_parts(t)
+        self.setStyleSheet(build_sliding_panel_stylesheet(t))
+        self.arrow_label.setStyleSheet(p["arrow_label"])
+        self.content.setStyleSheet(p["content"])
+        self._tab_bar.setStyleSheet(p["tab_bar"])
+        self.pin_btn.setStyleSheet(p["pin_btn"])
+        self.chat_history.setStyleSheet(p["chat_history"])
+        self.chat_input.setStyleSheet(p["chat_input"])
+        self._send_btn.setStyleSheet(p["send_btn"])
+        self.resize_grip.update_hover_style(p["resize_grip_hover"])
+        for btn in self._tab_buttons.values():
+            btn.setStyleSheet(p["tab_btn"])
+
+    # ── Setup ─────────────────────────────────────────────────────────────
 
     def set_panel_width(self, width: int):
         self.PANEL_WIDTH = width
@@ -105,15 +122,6 @@ class SlidingPanel(QWidget):
             self.settings_manager.set("panel_width", self.PANEL_WIDTH)
 
     def _setup_ui(self):
-        t = self._get_theme()
-
-        self.setStyleSheet(f"""
-            QWidget#slidingPanel {{
-                background-color: {t['bg1']};
-                border-left: 1px solid {t['border']};
-            }}
-        """)
-
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
@@ -129,9 +137,6 @@ class SlidingPanel(QWidget):
         handle_layout.setContentsMargins(0, 0, 0, 0)
         self.arrow_label = QLabel("❯")
         self.arrow_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.arrow_label.setStyleSheet(
-            f"color: {t['fg4']}; font-size: 11pt; background: transparent;"
-        )
         self.arrow_label.setMouseTracking(True)
         handle_layout.addStretch()
         handle_layout.addWidget(self.arrow_label)
@@ -144,20 +149,15 @@ class SlidingPanel(QWidget):
         self.content = QWidget(self)
         self.content.setFixedWidth(self.PANEL_WIDTH - self.HANDLE_WIDTH - 5)
         self.content.setMouseTracking(True)
-        self.content.setStyleSheet(f"background-color: {t['bg1']};")
 
         content_layout = QVBoxLayout(self.content)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
         # Tab bar
-        tab_bar = QWidget(self.content)
-        tab_bar.setFixedHeight(38)
-        tab_bar.setStyleSheet(
-            f"background-color: {t['bg0_hard']}; "
-            f"border-bottom: 1px solid {t['border']};"
-        )
-        tab_bar_layout = QHBoxLayout(tab_bar)
+        self._tab_bar = QWidget(self.content)
+        self._tab_bar.setFixedHeight(38)
+        tab_bar_layout = QHBoxLayout(self._tab_bar)
         tab_bar_layout.setContentsMargins(8, 0, 8, 0)
         tab_bar_layout.setSpacing(4)
 
@@ -171,23 +171,6 @@ class SlidingPanel(QWidget):
         ]):
             btn = QPushButton(f"{icon}  {name}")
             btn.setCheckable(True)
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background: transparent;
-                    color: {t['fg4']};
-                    border: none;
-                    border-bottom: 2px solid transparent;
-                    padding: 6px 12px;
-                    font-family: Inter, sans-serif;
-                    font-size: 9pt;
-                    font-weight: bold;
-                }}
-                QPushButton:checked {{
-                    color: {t['fg0']};
-                    border-bottom: 2px solid {t['tab_active_bar']};
-                }}
-                QPushButton:hover:!checked {{ color: {t['fg2']}; }}
-            """)
             btn.clicked.connect(lambda checked, idx=i: self._switch_tab(idx))
             tab_bar_layout.addWidget(btn)
             self._tab_buttons[i] = btn
@@ -198,21 +181,10 @@ class SlidingPanel(QWidget):
         self.pin_btn.setFixedSize(24, 24)
         self.pin_btn.setCheckable(True)
         self.pin_btn.setToolTip("Pin open")
-        self.pin_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent;
-                color: {t['fg4']};
-                border: none;
-                font-size: 12pt;
-                padding: 0;
-            }}
-            QPushButton:checked {{ color: {t['accent']}; }}
-            QPushButton:hover {{ color: {t['fg2']}; }}
-        """)
         self.pin_btn.toggled.connect(self._on_pin_toggled)
         tab_bar_layout.addWidget(self.pin_btn)
 
-        content_layout.addWidget(tab_bar)
+        content_layout.addWidget(self._tab_bar)
         content_layout.addWidget(self._stack)
 
         self._build_chat_panel()
@@ -223,11 +195,12 @@ class SlidingPanel(QWidget):
         main_layout.addWidget(self.resize_grip)
         main_layout.addWidget(self.content)
 
-    # ── Chat panel ────────────────────────────────────────────────
+        # Apply initial styles now that all widget refs exist
+        self.apply_styles(get_theme())
+
+    # ── Chat panel ────────────────────────────────────────────────────────
 
     def _build_chat_panel(self):
-        t = self._get_theme()
-
         panel = QWidget(self.content)
         panel.setMouseTracking(True)
         layout = QVBoxLayout(panel)
@@ -237,48 +210,18 @@ class SlidingPanel(QWidget):
         self.chat_history = QTextBrowser(panel)
         self.chat_history.setOpenLinks(False)
         self.chat_history.setMouseTracking(True)
-        self.chat_history.setStyleSheet(f"""
-            QTextBrowser {{
-                background-color: {t['bg0_hard']};
-                color: {t['fg1']};
-                border: 1px solid {t['border']};
-                border-radius: 6px;
-                padding: 8px;
-            }}
-        """)
         layout.addWidget(self.chat_history)
 
         input_row = QHBoxLayout()
+
         self.chat_input = QTextEdit(panel)
         self.chat_input.setFixedHeight(70)
         self.chat_input.setPlaceholderText("Ask QuillAI... (Ctrl+Enter)")
         self.chat_input.setMouseTracking(True)
-        self.chat_input.setStyleSheet(f"""
-            QTextEdit {{
-                background-color: {t['bg1']};
-                color: {t['fg0']};
-                border: 1px solid {t['border']};
-                border-radius: 6px;
-                padding: 8px;
-                font-family: Inter, sans-serif;
-                font-size: 10pt;
-            }}
-            QTextEdit:focus {{ border: 1px solid {t['border_focus']}; }}
-        """)
 
-        send_btn = QPushButton("➤", panel)
-        send_btn.setFixedSize(36, 70)
-        send_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {t['accent']};
-                color: {t['bg0_hard']};
-                border: none;
-                border-radius: 6px;
-                font-size: 14pt;
-            }}
-            QPushButton:hover {{ background-color: {t['yellow']}; }}
-        """)
-        send_btn.clicked.connect(self._send)
+        self._send_btn = QPushButton("➤", panel)
+        self._send_btn.setFixedSize(36, 70)
+        self._send_btn.clicked.connect(self._send)
 
         self._send_shortcut = QShortcut(
             QKeySequence("Ctrl+Return"), self.chat_input
@@ -286,12 +229,12 @@ class SlidingPanel(QWidget):
         self._send_shortcut.activated.connect(self._send)
 
         input_row.addWidget(self.chat_input)
-        input_row.addWidget(send_btn)
+        input_row.addWidget(self._send_btn)
         layout.addLayout(input_row)
 
         self._stack.addWidget(panel)
 
-    # ── Memory panel ──────────────────────────────────────────────
+    # ── Memory panel ──────────────────────────────────────────────────────
 
     def _build_memory_panel(self):
         panel = QWidget(self.content)
@@ -311,7 +254,7 @@ class SlidingPanel(QWidget):
         layout.addWidget(widget)
         widget.show()
 
-    # ── Tab switching ─────────────────────────────────────────────
+    # ── Tab switching ─────────────────────────────────────────────────────
 
     def _switch_tab(self, index: int):
         self._stack.setCurrentIndex(index)
@@ -327,7 +270,7 @@ class SlidingPanel(QWidget):
         self._switch_tab(1)
         self.expand()
 
-    # ── Pin ───────────────────────────────────────────────────────
+    # ── Pin ───────────────────────────────────────────────────────────────
 
     def _on_pin_toggled(self, pinned: bool):
         self._pinned = pinned
@@ -338,7 +281,7 @@ class SlidingPanel(QWidget):
         else:
             self._hover_timer.start()
 
-    # ── Positioning ───────────────────────────────────────────────
+    # ── Positioning ───────────────────────────────────────────────────────
 
     def _position_collapsed(self):
         if not self.parent():
@@ -357,7 +300,7 @@ class SlidingPanel(QWidget):
         else:
             self.move(parent.width() - self.HANDLE_WIDTH, self.y())
 
-    # ── Animation ─────────────────────────────────────────────────
+    # ── Animation ─────────────────────────────────────────────────────────
 
     def expand(self):
         if self._animating:
@@ -374,8 +317,8 @@ class SlidingPanel(QWidget):
         h = parent.height()
         start = QRect(parent.width() - self.HANDLE_WIDTH, self.y(),
                       self.PANEL_WIDTH, h)
-        end = QRect(parent.width() - self.PANEL_WIDTH, self.y(),
-                    self.PANEL_WIDTH, h)
+        end   = QRect(parent.width() - self.PANEL_WIDTH, self.y(),
+                      self.PANEL_WIDTH, h)
 
         self._anim = QPropertyAnimation(self, b"geometry")
         self._anim.setDuration(180)
@@ -396,8 +339,8 @@ class SlidingPanel(QWidget):
         h = parent.height()
         start = QRect(parent.width() - self.PANEL_WIDTH, 0,
                       self.PANEL_WIDTH, h)
-        end = QRect(parent.width() - self.HANDLE_WIDTH, 0,
-                    self.PANEL_WIDTH, h)
+        end   = QRect(parent.width() - self.HANDLE_WIDTH, 0,
+                      self.PANEL_WIDTH, h)
 
         self._anim = QPropertyAnimation(self, b"geometry")
         self._anim.setDuration(180)
@@ -413,7 +356,7 @@ class SlidingPanel(QWidget):
         else:
             self.expand()
 
-    # ── Mouse ─────────────────────────────────────────────────────
+    # ── Mouse ─────────────────────────────────────────────────────────────
 
     def enterEvent(self, event):
         if not self._hover_enabled:
@@ -436,7 +379,7 @@ class SlidingPanel(QWidget):
         if not self.rect().contains(pos):
             self.collapse()
 
-    # ── Send ──────────────────────────────────────────────────────
+    # ── Send ──────────────────────────────────────────────────────────────
 
     def _send(self):
         text = self.chat_input.toPlainText().strip()
@@ -444,3 +387,12 @@ class SlidingPanel(QWidget):
             return
         self.chat_input.clear()
         self.message_sent.emit(text)
+
+    # ── Cleanup ───────────────────────────────────────────────────────────
+
+    def closeEvent(self, event):
+        try:
+            theme_signals.theme_changed.disconnect(self._on_theme_changed)
+        except RuntimeError:
+            pass
+        super().closeEvent(event)

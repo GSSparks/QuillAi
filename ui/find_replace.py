@@ -3,74 +3,34 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLineEdit,
 from PyQt6.QtGui import QTextDocument, QTextCursor
 from PyQt6.QtCore import Qt
 
-from ui.theme import get_theme
+from ui.theme import (get_theme, theme_signals,
+                      build_find_replace_stylesheet,
+                      build_match_label_stylesheet)
 
 
 class FindReplaceWidget(QWidget):
     def __init__(self, main_window):
         super().__init__()
         self.main_window = main_window
-        self.setup_ui()
+        self._t = get_theme()
+        self._setup_ui()
+        self.apply_styles(self._t)
+        theme_signals.theme_changed.connect(self._on_theme_changed)
 
-    def _get_theme(self) -> dict:
-        theme_name = None
-        if (self.main_window and
-                hasattr(self.main_window, 'settings_manager')):
-            theme_name = self.main_window.settings_manager.get('theme')
-        return get_theme(theme_name or 'gruvbox_dark')
+    # ── Theme handling ────────────────────────────────────────────────────
 
-    def setup_ui(self):
-        t = self._get_theme()
+    def _on_theme_changed(self, t: dict):
+        self._t = t
+        self.apply_styles(t)
 
-        self.setStyleSheet(f"""
-            QWidget {{
-                background-color: {t['bg1']};
-                color: {t['fg1']};
-                font-family: 'Inter', 'SF Pro Text', 'Segoe UI', sans-serif;
-                font-size: 10pt;
-            }}
-            QLineEdit {{
-                background-color: {t['bg0_hard']};
-                color: {t['fg0']};
-                border: 1px solid {t['border']};
-                border-radius: 4px;
-                padding: 4px 8px;
-            }}
-            QLineEdit:focus {{ border: 1px solid {t['border_focus']}; }}
-            QLineEdit[state="match"] {{
-                background-color: {t['bg0_hard']};
-                border: 1px solid {t['green']};
-                color: {t['fg0']};
-            }}
-            QLineEdit[state="no_match"] {{
-                background-color: {t['bg0_hard']};
-                border: 1px solid {t['red']};
-                color: {t['fg0']};
-            }}
-            QPushButton {{
-                background-color: {t['bg2']};
-                color: {t['fg1']};
-                border-radius: 4px;
-                padding: 4px 12px;
-                border: none;
-            }}
-            QPushButton:hover {{ background-color: {t['bg3']}; }}
-            QPushButton:pressed {{ background-color: {t['accent']}; color: {t['bg0_hard']}; }}
-            QPushButton#closeBtn {{
-                background-color: transparent;
-                font-weight: bold;
-                padding: 4px 8px;
-            }}
-            QPushButton#closeBtn:hover {{
-                background-color: {t['red']};
-                color: {t['bg0_hard']};
-            }}
-            QCheckBox {{
-                color: {t['fg2']};
-                spacing: 4px;
-            }}
-        """)
+    def apply_styles(self, t: dict):
+        self.setStyleSheet(build_find_replace_stylesheet(t))
+        # Reset match label to neutral — state will re-apply on next search
+        self.match_label.setStyleSheet(build_match_label_stylesheet(t, ''))
 
+    # ── UI Setup ──────────────────────────────────────────────────────────
+
+    def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(6)
@@ -94,10 +54,6 @@ class FindReplaceWidget(QWidget):
         self.match_label = QPushButton("")
         self.match_label.setFlat(True)
         self.match_label.setEnabled(False)
-        self.match_label.setStyleSheet(
-            f"QPushButton {{ color: {t['fg4']}; background: transparent; "
-            f"border: none; padding: 0 4px; min-width: 60px; }}"
-        )
 
         self.prev_btn = QPushButton("↑")
         self.prev_btn.setToolTip("Previous Match")
@@ -140,13 +96,16 @@ class FindReplaceWidget(QWidget):
         layout.addLayout(find_layout)
         layout.addLayout(replace_layout)
 
-    def set_find_state(self, state):
-        """Sets the visual state of the find input: 'match', 'no_match', or ''."""
+    # ── Search state ──────────────────────────────────────────────────────
+
+    def set_find_state(self, state: str):
+        """Update find input border and match label color. state: 'match' | 'no_match' | ''"""
         self.find_input.setProperty("state", state)
         self.find_input.style().unpolish(self.find_input)
         self.find_input.style().polish(self.find_input)
+        self.match_label.setStyleSheet(build_match_label_stylesheet(self._t, state))
 
-    def count_matches(self, query):
+    def count_matches(self, query: str) -> int:
         editor = self.main_window.current_editor()
         if not editor or not query:
             return 0
@@ -163,7 +122,6 @@ class FindReplaceWidget(QWidget):
         return count
 
     def on_search_text_changed(self):
-        t = self._get_theme()
         query = self.find_input.text()
         editor = self.main_window.current_editor()
         if not editor:
@@ -186,23 +144,17 @@ class FindReplaceWidget(QWidget):
         if not first_match.isNull():
             total = self.count_matches(query)
             self.match_label.setText(f"{total} found")
-            self.match_label.setStyleSheet(
-                f"QPushButton {{ color: {t['green']}; background: transparent; "
-                f"border: none; padding: 0 4px; min-width: 60px; }}"
-            )
             self.set_find_state("match")
             editor.setTextCursor(first_match)
             editor.ensureCursorVisible()
         else:
             self.match_label.setText("no match")
-            self.match_label.setStyleSheet(
-                f"QPushButton {{ color: {t['red']}; background: transparent; "
-                f"border: none; padding: 0 4px; min-width: 60px; }}"
-            )
             self.set_find_state("no_match")
             cursor = editor.textCursor()
             cursor.clearSelection()
             editor.setTextCursor(cursor)
+
+    # ── Search options ────────────────────────────────────────────────────
 
     def get_search_options(self, backward=False):
         options = None
@@ -216,7 +168,9 @@ class FindReplaceWidget(QWidget):
                        if options else QTextDocument.FindFlag.FindBackward)
         return options
 
-    def do_find(self, backward=False):
+    # ── Find / replace actions ────────────────────────────────────────────
+
+    def do_find(self, backward=False) -> bool:
         editor = self.main_window.current_editor()
         if not editor:
             return False
@@ -289,3 +243,12 @@ class FindReplaceWidget(QWidget):
     def focus_find(self):
         self.find_input.selectAll()
         self.find_input.setFocus()
+
+    # ── Cleanup ───────────────────────────────────────────────────────────
+
+    def closeEvent(self, event):
+        try:
+            theme_signals.theme_changed.disconnect(self._on_theme_changed)
+        except RuntimeError:
+            pass
+        super().closeEvent(event)

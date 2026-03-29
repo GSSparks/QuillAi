@@ -3,7 +3,7 @@ from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton, QHBoxL
 from PyQt6.QtGui import QFont, QColor, QTextCharFormat, QTextCursor
 from PyQt6.QtCore import Qt, QDir
 
-from ui.theme import get_theme
+from ui.theme import get_theme, build_dialog_stylesheet, theme_signals
 
 
 class DiffViewerDialog(QDialog):
@@ -14,50 +14,33 @@ class DiffViewerDialog(QDialog):
         self.setWindowTitle(f"Git Diff: {file_path}")
         self.resize(800, 600)
 
-        # Get theme from parent window if available
-        theme_name = None
-        if parent and hasattr(parent, 'settings_manager'):
-            theme_name = parent.settings_manager.get('theme')
-        elif (parent and hasattr(parent, 'parent_window') and
-              hasattr(parent.parent_window, 'settings_manager')):
-            theme_name = parent.parent_window.settings_manager.get('theme')
-        self._t = get_theme(theme_name)
-
+        self._t = get_theme()
         self.setup_ui()
         self.load_diff()
 
+        # Stay in sync if the user switches themes while this dialog is open
+        theme_signals.theme_changed.connect(self._on_theme_changed)
+
+    # ── Theme handling ────────────────────────────────────────────────────────
+
+    def _on_theme_changed(self, t: dict):
+        self._t = t
+        self.apply_styles(t)
+        self.load_diff()   # re-render diff text with updated palette colors
+
+    def apply_styles(self, t: dict):
+        self.setStyleSheet(build_dialog_stylesheet(t))
+
+    # ── UI Setup ──────────────────────────────────────────────────────────────
+
     def setup_ui(self):
-        t = self._t
-        self.setStyleSheet(f"""
-            QDialog {{
-                background-color: {t['bg1']};
-                color: {t['fg1']};
-            }}
-            QPushButton {{
-                background-color: {t['bg2']};
-                color: {t['fg1']};
-                border-radius: 4px;
-                padding: 6px 16px;
-                font-family: 'Inter', sans-serif;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: {t['bg3']}; }}
-        """)
+        self.apply_styles(self._t)
 
         layout = QVBoxLayout(self)
 
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
         self.text_edit.setFont(QFont("JetBrains Mono, monospace", 10))
-        self.text_edit.setStyleSheet(f"""
-            QTextEdit {{
-                background-color: {t['bg0_hard']};
-                color: {t['fg1']};
-                border: 1px solid {t['border']};
-                border-radius: 4px;
-                padding: 5px;
-            }}
-        """)
         self.text_edit.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
 
         btn_layout = QHBoxLayout()
@@ -69,6 +52,8 @@ class DiffViewerDialog(QDialog):
         layout.addWidget(self.text_edit)
         layout.addLayout(btn_layout)
 
+    # ── Diff Loading ──────────────────────────────────────────────────────────
+
     def load_diff(self):
         try:
             result = subprocess.run(
@@ -78,7 +63,7 @@ class DiffViewerDialog(QDialog):
                 stderr=subprocess.PIPE,
                 text=True,
                 encoding='utf-8',
-                check=True
+                check=True,
             )
             diff_text = result.stdout
 
@@ -96,40 +81,48 @@ class DiffViewerDialog(QDialog):
         except FileNotFoundError:
             self.text_edit.setPlainText("Git is not installed or found in PATH.")
 
-    def format_diff(self, diff_text):
+    def format_diff(self, diff_text: str):
         t = self._t
         self.text_edit.clear()
         cursor = self.text_edit.textCursor()
 
-        # --- TEXT-ONLY coloring (no background) ---
-        format_add = QTextCharFormat()
-        format_add.setForeground(QColor(t['green']))
-
-        format_rem = QTextCharFormat()
-        format_rem.setForeground(QColor(t['red']))
-
-        format_hunk = QTextCharFormat()
-        format_hunk.setForeground(QColor(t['blue']))
-
-        format_header = QTextCharFormat()
-        format_header.setForeground(QColor(t['yellow']))
-
-        format_normal = QTextCharFormat()
-        format_normal.setForeground(QColor(t['fg1']))
+        fmt_add    = self._fmt(t['green'])
+        fmt_rem    = self._fmt(t['red'])
+        fmt_hunk   = self._fmt(t['blue'])
+        fmt_header = self._fmt(t['yellow'])
+        fmt_normal = self._fmt(t['fg1'])
 
         for line in diff_text.split('\n'):
             if line.startswith('+') and not line.startswith('+++'):
-                cursor.setCharFormat(format_add)
+                fmt = fmt_add
             elif line.startswith('-') and not line.startswith('---'):
-                cursor.setCharFormat(format_rem)
+                fmt = fmt_rem
             elif line.startswith('@@'):
-                cursor.setCharFormat(format_hunk)
+                fmt = fmt_hunk
             elif line.startswith(('---', '+++', 'diff', 'index')):
-                cursor.setCharFormat(format_header)
+                fmt = fmt_header
             else:
-                cursor.setCharFormat(format_normal)
+                fmt = fmt_normal
 
+            cursor.setCharFormat(fmt)
             cursor.insertText(line + '\n')
 
         cursor.movePosition(QTextCursor.MoveOperation.Start)
         self.text_edit.setTextCursor(cursor)
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _fmt(color: str) -> QTextCharFormat:
+        """Return a QTextCharFormat with the given foreground color."""
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(color))
+        return fmt
+
+    def closeEvent(self, event):
+        # Disconnect so the signal doesn't fire after the dialog is gone
+        try:
+            theme_signals.theme_changed.disconnect(self._on_theme_changed)
+        except RuntimeError:
+            pass
+        super().closeEvent(event)

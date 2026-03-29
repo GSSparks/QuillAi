@@ -1,7 +1,9 @@
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QLineEdit, QPushButton, QFormLayout,
                              QGroupBox, QComboBox, QApplication)
-from ui.theme import theme_names, get_theme, apply_theme
+from ui.theme import (theme_names, get_theme, apply_theme, theme_signals,
+                      build_settings_dialog_stylesheet,
+                      build_hint_label_stylesheet)
 
 
 class SettingsDialog(QDialog):
@@ -11,14 +13,33 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("QuillAI Settings")
         self.setFixedWidth(500)
 
-        # Build styles from current theme
-        t = get_theme(self.sm.get('theme') or 'gruvbox_dark')
-        self._apply_dialog_style(t)
+        # Capture original theme so cancel can revert
+        self._original_theme = self.sm.get('theme') or 'gruvbox_dark'
 
+        self._setup_ui()
+        self.apply_styles(get_theme())
+
+        # Stay in sync when _preview_theme fires apply_theme (which emits the signal)
+        theme_signals.theme_changed.connect(self._on_theme_changed)
+
+    # ── Theme handling ────────────────────────────────────────────────────
+
+    def _on_theme_changed(self, t: dict):
+        self.apply_styles(t)
+
+    def apply_styles(self, t: dict):
+        self.setStyleSheet(build_settings_dialog_stylesheet(t))
+        hint_style = build_hint_label_stylesheet(t)
+        self._key_hint.setStyleSheet(hint_style)
+        self._theme_hint.setStyleSheet(hint_style)
+
+    # ── UI Setup ──────────────────────────────────────────────────────────
+
+    def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
 
-        # ── Local LLM ──────────────────────────────────────────
+        # ── Local LLM ────────────────────────────────────────────
         local_group = QGroupBox("Local LLM  (llama.cpp)")
         local_form = QFormLayout(local_group)
         local_form.setSpacing(8)
@@ -32,7 +53,7 @@ class SettingsDialog(QDialog):
         local_form.addRow("Server URL:", self.local_url)
         local_form.addRow("Model name:", self.local_model)
 
-        # ── OpenAI ─────────────────────────────────────────────
+        # ── OpenAI ───────────────────────────────────────────────
         openai_group = QGroupBox("OpenAI  (or compatible)")
         openai_form = QFormLayout(openai_group)
         openai_form.setSpacing(8)
@@ -51,7 +72,7 @@ class SettingsDialog(QDialog):
         openai_form.addRow("API Key:", self.openai_key)
         openai_form.addRow("Chat model:", self.openai_model)
 
-        # ── Anthropic / Claude ──────────────────────────────────
+        # ── Anthropic / Claude ────────────────────────────────────
         claude_group = QGroupBox("Anthropic  (Claude)")
         claude_form = QFormLayout(claude_group)
         claude_form.setSpacing(8)
@@ -72,15 +93,14 @@ class SettingsDialog(QDialog):
         )
         self.claude_inline_model.setPlaceholderText("claude-haiku-4-5-20251001")
 
-        key_hint = QLabel("Get your key at console.anthropic.com")
-        key_hint.setStyleSheet(f"color: {t['fg4']}; font-size: 9pt;")
+        self._key_hint = QLabel("Get your key at console.anthropic.com")
 
         claude_form.addRow("API Key:", self.anthropic_key)
         claude_form.addRow("Chat model:", self.claude_chat_model)
         claude_form.addRow("Inline model:", self.claude_inline_model)
-        claude_form.addRow("", key_hint)
+        claude_form.addRow("", self._key_hint)
 
-        # ── Theme ───────────────────────────────────────────────
+        # ── Appearance ────────────────────────────────────────────
         theme_group = QGroupBox("Appearance")
         theme_form = QFormLayout(theme_group)
         theme_form.setSpacing(8)
@@ -92,15 +112,16 @@ class SettingsDialog(QDialog):
             if key == current_theme:
                 self.theme_combo.setCurrentText(name)
 
-        # Live preview — apply theme immediately on change
+        # Live preview — fires apply_theme which emits theme_signals.theme_changed,
+        # which then calls _on_theme_changed on this dialog automatically.
         self.theme_combo.currentIndexChanged.connect(self._preview_theme)
 
-        theme_hint.setStyleSheet(f"color: {t['fg4']}; font-size: 9pt;")
+        self._theme_hint = QLabel("Theme change previews live; Cancel reverts.")
 
         theme_form.addRow("Theme:", self.theme_combo)
-        theme_form.addRow("", theme_hint)
+        theme_form.addRow("", self._theme_hint)
 
-        # ── Buttons ─────────────────────────────────────────────
+        # ── Buttons ───────────────────────────────────────────────
         btns = QHBoxLayout()
         save_btn = QPushButton("Save")
         save_btn.clicked.connect(self.save_and_close)
@@ -119,88 +140,15 @@ class SettingsDialog(QDialog):
         layout.addWidget(theme_group)
         layout.addLayout(btns)
 
-        # Store the original theme so we can revert on cancel
-        self._original_theme = current_theme
-
-    def _apply_dialog_style(self, t: dict):
-        self.setStyleSheet(f"""
-            QDialog {{
-                background-color: {t['bg1']};
-                color: {t['fg1']};
-            }}
-            QLabel {{
-                color: {t['fg1']};
-                font-size: 10pt;
-            }}
-            QLineEdit {{
-                background-color: {t['bg0_hard']};
-                color: {t['fg1']};
-                border: 1px solid {t['border']};
-                border-radius: 4px;
-                padding: 5px 8px;
-                font-family: 'JetBrains Mono', monospace;
-                font-size: 10pt;
-            }}
-            QLineEdit:focus {{
-                border: 1px solid {t['border_focus']};
-            }}
-            QGroupBox {{
-                color: {t['fg4']};
-                font-weight: bold;
-                font-size: 9pt;
-                border: 1px solid {t['border']};
-                border-radius: 6px;
-                margin-top: 10px;
-                padding-top: 8px;
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 4px;
-            }}
-            QComboBox {{
-                background-color: {t['bg0_hard']};
-                color: {t['fg1']};
-                border: 1px solid {t['border']};
-                border-radius: 4px;
-                padding: 5px 8px;
-                font-size: 10pt;
-            }}
-            QComboBox:focus {{
-                border: 1px solid {t['border_focus']};
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {t['bg1']};
-                color: {t['fg1']};
-                selection-background-color: {t['highlight']};
-                border: 1px solid {t['border']};
-            }}
-            QPushButton {{
-                background-color: {t['accent']};
-                color: {t['bg0_hard']};
-                border: none; border-radius: 4px;
-                padding: 6px 16px; font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: {t['yellow']}; }}
-            QPushButton#cancelBtn {{
-                background-color: {t['bg2']};
-                color: {t['fg1']};
-            }}
-            QPushButton#cancelBtn:hover {{
-                background-color: {t['bg3']};
-            }}
-        """)
+    # ── Actions ───────────────────────────────────────────────────────────
 
     def _preview_theme(self):
-        """Apply theme live as user changes the combo box."""
+        """Apply the selected theme live. The signal will update this dialog too."""
         selected = self.theme_combo.currentData()
-        t = get_theme(selected)
         apply_theme(QApplication.instance(), selected)
-        # Re-style the dialog itself to match
-        self._apply_dialog_style(t)
 
     def _on_cancel(self):
-        """Revert to the original theme if the user cancels."""
+        """Revert to the original theme if the user previewed a different one."""
         if self.theme_combo.currentData() != self._original_theme:
             apply_theme(QApplication.instance(), self._original_theme)
         self.reject()
@@ -217,9 +165,17 @@ class SettingsDialog(QDialog):
             self.sm.set("active_model", self.claude_inline_model.text().strip())
             self.sm.set("chat_model",   self.claude_chat_model.text().strip())
 
-        # Save the selected theme
         selected_theme = self.theme_combo.currentData()
         self.sm.set('theme', selected_theme)
         apply_theme(QApplication.instance(), selected_theme)
 
         self.accept()
+
+    # ── Cleanup ───────────────────────────────────────────────────────────
+
+    def closeEvent(self, event):
+        try:
+            theme_signals.theme_changed.disconnect(self._on_theme_changed)
+        except RuntimeError:
+            pass
+        super().closeEvent(event)

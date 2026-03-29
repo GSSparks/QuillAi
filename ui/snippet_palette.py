@@ -6,7 +6,9 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLineEdit,
 from PyQt6.QtCore import Qt, pyqtSignal, QEvent
 from PyQt6.QtGui import QColor, QKeySequence, QShortcut
 
-from ui.theme import get_theme
+from ui.theme import (get_theme, theme_signals,
+                      build_snippet_palette_stylesheet,
+                      build_snippet_palette_parts)
 
 
 CATEGORY_COLORS = {
@@ -63,21 +65,103 @@ class SnippetPalette(QDialog):
         self.snippets = self._load_snippets()
         self.filtered = list(self.snippets)
 
-        # Get theme from parent chain
-        theme_name = None
-        p = parent
-        while p:
-            if hasattr(p, 'settings_manager'):
-                theme_name = p.settings_manager.get('theme')
-                break
-            p = p.parent() if hasattr(p, 'parent') else None
-        self._t = get_theme(theme_name)
-
-        self.setup_ui()
+        self._t = get_theme()
+        self._setup_ui()
         self._populate(self.filtered)
+
         if self.list_widget.count() > 0:
             self.list_widget.setCurrentRow(0)
             self._update_preview(0)
+
+        theme_signals.theme_changed.connect(self._on_theme_changed)
+
+    # ── Theme handling ────────────────────────────────────────────────────
+
+    def _on_theme_changed(self, t: dict):
+        self._t = t
+        self._apply_styles(t)
+        # Re-populate so list item foreground colors update
+        self._populate(self.filtered)
+
+    def _apply_styles(self, t: dict):
+        p = build_snippet_palette_parts(t)
+        self.setStyleSheet(build_snippet_palette_stylesheet(t))
+        self._splitter.setStyleSheet(p["splitter_handle"])
+        self._preview_container.setStyleSheet(p["preview_container"])
+        self.preview_header.setStyleSheet(p["preview_header"])
+        self._footer.setStyleSheet(p["footer"])
+        self._hint.setStyleSheet(p["hint"])
+        self._cancel_btn.setStyleSheet(p["cancel_btn"])
+        self.insert_btn.setStyleSheet(p["insert_btn"])
+
+    # ── UI Setup ──────────────────────────────────────────────────────────
+
+    def _setup_ui(self):
+        t = self._t
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Search bar
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search snippets...")
+        self.search_input.textChanged.connect(self._on_search)
+        self.search_input.installEventFilter(self)
+        layout.addWidget(self.search_input)
+
+        # Splitter: list + preview
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter.setHandleWidth(1)
+
+        self.list_widget = QListWidget()
+        self.list_widget.currentRowChanged.connect(self._update_preview)
+        self.list_widget.itemDoubleClicked.connect(self._insert)
+        self._splitter.addWidget(self.list_widget)
+
+        self._preview_container = QWidget()
+        preview_layout = QVBoxLayout(self._preview_container)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.setSpacing(0)
+
+        self.preview_header = QLabel("Select a snippet")
+        self.preview_edit = QPlainTextEdit()
+        self.preview_edit.setReadOnly(True)
+        self.preview_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+
+        preview_layout.addWidget(self.preview_header)
+        preview_layout.addWidget(self.preview_edit)
+        self._splitter.addWidget(self._preview_container)
+        self._splitter.setSizes([220, 420])
+
+        layout.addWidget(self._splitter)
+
+        # Footer
+        self._footer = QWidget()
+        footer_layout = QHBoxLayout(self._footer)
+        footer_layout.setContentsMargins(10, 6, 10, 6)
+
+        self._hint = QLabel("↑↓ navigate · Enter insert · Esc close")
+
+        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn.clicked.connect(self.reject)
+
+        self.insert_btn = QPushButton("Insert")
+        self.insert_btn.clicked.connect(self._insert)
+
+        footer_layout.addWidget(self._hint)
+        footer_layout.addStretch()
+        footer_layout.addWidget(self._cancel_btn)
+        footer_layout.addWidget(self.insert_btn)
+
+        layout.addWidget(self._footer)
+
+        QShortcut(QKeySequence("Return"), self, activated=self._insert)
+        QShortcut(QKeySequence("Escape"), self, activated=self.reject)
+
+        # Apply all styles now that every widget reference exists
+        self._apply_styles(t)
+
+    # ── Snippet data ──────────────────────────────────────────────────────
 
     def _load_snippets(self):
         if os.path.exists(SNIPPETS_FILE):
@@ -93,157 +177,7 @@ class SnippetPalette(QDialog):
         with open(SNIPPETS_FILE, 'w', encoding='utf-8') as f:
             json.dump(self.snippets, f, indent=2)
 
-    def setup_ui(self):
-        t = self._t
-
-        self.setStyleSheet(f"""
-            QDialog {{
-                background-color: {t['bg1']};
-                border: 1px solid {t['border']};
-                border-radius: 8px;
-            }}
-            QLineEdit {{
-                background-color: {t['bg0_hard']};
-                color: {t['fg0']};
-                border: none;
-                border-bottom: 1px solid {t['border']};
-                border-radius: 0;
-                padding: 10px 14px;
-                font-family: 'Inter', 'Segoe UI', sans-serif;
-                font-size: 13pt;
-            }}
-            QListWidget {{
-                background-color: {t['bg1']};
-                color: {t['fg1']};
-                border: none;
-                outline: none;
-                font-family: 'Inter', 'Segoe UI', sans-serif;
-                font-size: 10pt;
-            }}
-            QListWidget::item {{
-                padding: 6px 12px;
-                border-radius: 0;
-            }}
-            QListWidget::item:selected {{
-                background-color: {t['bg2']};
-                color: {t['fg0']};
-            }}
-            QListWidget::item:hover:!selected {{
-                background-color: {t['bg1']};
-            }}
-            QPlainTextEdit {{
-                background-color: {t['bg0_hard']};
-                color: {t['fg1']};
-                border: none;
-                font-family: 'JetBrains Mono', 'Hack', monospace;
-                font-size: 10pt;
-                padding: 10px;
-            }}
-            QPushButton {{
-                border-radius: 4px;
-                padding: 5px 16px;
-                font-family: 'Inter', 'Segoe UI', sans-serif;
-                font-weight: bold;
-                font-size: 10pt;
-                border: none;
-            }}
-            QLabel {{
-                color: {t['fg4']};
-                font-family: 'Inter', 'Segoe UI', sans-serif;
-                font-size: 9pt;
-                padding: 4px 12px;
-            }}
-        """)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # Search bar
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search snippets...")
-        self.search_input.textChanged.connect(self._on_search)
-        self.search_input.installEventFilter(self)
-        layout.addWidget(self.search_input)
-
-        # Splitter: list + preview
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setHandleWidth(1)
-        splitter.setStyleSheet(
-            f"QSplitter::handle {{ background-color: {t['border']}; }}"
-        )
-
-        self.list_widget = QListWidget()
-        self.list_widget.currentRowChanged.connect(self._update_preview)
-        self.list_widget.itemDoubleClicked.connect(self._insert)
-        splitter.addWidget(self.list_widget)
-
-        preview_container = QWidget()
-        preview_container.setStyleSheet(
-            f"background-color: {t['bg0_hard']};"
-        )
-        preview_layout = QVBoxLayout(preview_container)
-        preview_layout.setContentsMargins(0, 0, 0, 0)
-        preview_layout.setSpacing(0)
-
-        self.preview_header = QLabel("Select a snippet")
-        self.preview_header.setStyleSheet(f"""
-            QLabel {{
-                color: {t['fg1']};
-                background-color: {t['bg1']};
-                border-bottom: 1px solid {t['border']};
-                font-weight: bold;
-                font-size: 10pt;
-                padding: 6px 12px;
-            }}
-        """)
-
-        self.preview_edit = QPlainTextEdit()
-        self.preview_edit.setReadOnly(True)
-        self.preview_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-
-        preview_layout.addWidget(self.preview_header)
-        preview_layout.addWidget(self.preview_edit)
-        splitter.addWidget(preview_container)
-        splitter.setSizes([220, 420])
-
-        layout.addWidget(splitter)
-
-        # Footer
-        footer = QWidget()
-        footer.setStyleSheet(
-            f"background-color: {t['bg1']}; "
-            f"border-top: 1px solid {t['border']};"
-        )
-        footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(10, 6, 10, 6)
-
-        hint = QLabel("↑↓ navigate · Enter insert · Esc close")
-        hint.setStyleSheet(f"color: {t['fg4']}; font-size: 9pt; padding: 0;")
-
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.setStyleSheet(f"""
-            QPushButton {{ background-color: {t['bg2']}; color: {t['fg1']}; }}
-            QPushButton:hover {{ background-color: {t['bg3']}; }}
-        """)
-        cancel_btn.clicked.connect(self.reject)
-
-        self.insert_btn = QPushButton("Insert")
-        self.insert_btn.setStyleSheet(f"""
-            QPushButton {{ background-color: {t['accent']}; color: {t['bg0_hard']}; }}
-            QPushButton:hover {{ background-color: {t['yellow']}; }}
-        """)
-        self.insert_btn.clicked.connect(self._insert)
-
-        footer_layout.addWidget(hint)
-        footer_layout.addStretch()
-        footer_layout.addWidget(cancel_btn)
-        footer_layout.addWidget(self.insert_btn)
-
-        layout.addWidget(footer)
-
-        QShortcut(QKeySequence("Return"), self, activated=self._insert)
-        QShortcut(QKeySequence("Escape"), self, activated=self.reject)
+    # ── List population & filtering ───────────────────────────────────────
 
     def _populate(self, snippets):
         t = self._t
@@ -269,6 +203,8 @@ class SnippetPalette(QDialog):
             self.preview_header.setText("No matches")
             self.preview_edit.clear()
 
+    # ── Preview ───────────────────────────────────────────────────────────
+
     def _update_preview(self, row):
         if row < 0 or row >= self.list_widget.count():
             return
@@ -284,6 +220,8 @@ class SnippetPalette(QDialog):
         self.preview_header.setTextFormat(Qt.TextFormat.RichText)
         self.preview_edit.setPlainText(data["code"])
 
+    # ── Insert ────────────────────────────────────────────────────────────
+
     def _insert(self):
         row = self.list_widget.currentRow()
         if row < 0:
@@ -293,6 +231,8 @@ class SnippetPalette(QDialog):
             data = item.data(Qt.ItemDataRole.UserRole)
             self.snippet_selected.emit(data["code"])
             self.accept()
+
+    # ── Events ────────────────────────────────────────────────────────────
 
     def eventFilter(self, obj, event):
         if obj == self.search_input and event.type() == QEvent.Type.KeyPress:
@@ -307,3 +247,10 @@ class SnippetPalette(QDialog):
                 self.list_widget.setCurrentRow(row)
                 return True
         return super().eventFilter(obj, event)
+
+    def closeEvent(self, event):
+        try:
+            theme_signals.theme_changed.disconnect(self._on_theme_changed)
+        except RuntimeError:
+            pass
+        super().closeEvent(event)
