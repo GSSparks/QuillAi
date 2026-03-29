@@ -48,7 +48,7 @@ class DiffViewerDialog(QDialog):
 
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
-        self.text_edit.setFont(QFont("Fira Code, monospace", 10))
+        self.text_edit.setFont(QFont("JetBrains Mono, monospace", 10))
         self.text_edit.setStyleSheet(f"""
             QTextEdit {{
                 background-color: {t['bg0_hard']};

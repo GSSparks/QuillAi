@@ -206,7 +206,7 @@ class FindInFilesWidget(QWidget):
             display_text = text if len(text) < 150 else text[:150] + "..."
             line_node = QTreeWidgetItem([f"{line_num}: {display_text}"])
             line_node.setForeground(0, QColor(t['fg1']))
-            line_node.setFont(0, QFont("Fira Code, monospace", 9))
+            line_node.setFont(0, QFont("JetBrains Mono, monospace", 9))
             line_node.setData(0, Qt.ItemDataRole.UserRole, file_path)
             line_node.setData(0, Qt.ItemDataRole.UserRole + 1, line_num)
             file_node.addChild(line_node)

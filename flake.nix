@@ -38,7 +38,7 @@
           pkgs.makeWrapper
           pkgs.copyDesktopItems # Nix hook to automatically install desktop items
           pkgs.inter
-          pkgs.fira-code
+          pkgs.jetbrains-mono
         ];
 
         propagatedBuildInputs = with pythonPackages; [

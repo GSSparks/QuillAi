@@ -58,7 +58,7 @@ class MinimapArea(QPlainTextEdit):
         self._apply_style()
         self.editor.verticalScrollBar().valueChanged.connect(self.sync_scroll)
 
-        font = QFont("Fira Code, monospace", 4)
+        font = QFont("JetBrains Mono, monospace", 4)
         font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         self.setFont(font)
 

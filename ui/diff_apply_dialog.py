@@ -144,7 +144,7 @@ class DiffApplyDialog(QDialog):
         t = self._t
         view = QTextEdit()
         view.setReadOnly(True)
-        view.setFont(QFont("Fira Code, monospace", 10))
+        view.setFont(QFont("JetBrains Mono, monospace", 10))
         view.setStyleSheet(f"""
             QTextEdit {{
                 background-color: {t['bg0_hard']};
