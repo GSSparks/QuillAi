@@ -104,19 +104,33 @@ DOCK_STYLE = """
 class CodeEditor(QMainWindow, ChatRenderer):
     def __init__(self):
         super().__init__()
+
         # 1. Load settings FIRST
         self.settings_manager = SettingsManager()
-        
+
         # 2. Load memory
         self.memory_manager = MemoryManager()
         self.intent_tracker = init_tracker(self.memory_manager)
 
         # 3. Basic App State
         self.setWindowTitle("QuillAI")
+        try:
+            icon_path = os.path.join(
+                os.path.dirname(__file__), 'images', 'quillai_logo_min.svg'
+            )
+            if os.path.exists(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
+        except Exception:
+            pass
+
         self._is_loading = False
         self.inline_completion_enabled = True
         self.current_error_text = ""
         self.current_ai_raw_text = ""
+        self._stream_start_pos = 0
+        self._stream_buffer = ""
+        self._ai_response_buffer = ""
+        self._last_user_message = ""
         self.last_worker = None
         self.chat_worker = None
         self.active_threads = []
@@ -1748,8 +1762,18 @@ class CodeEditor(QMainWindow, ChatRenderer):
         thread.start()
         
 if __name__ == "__main__":
+    QApplication.setApplicationName("QuillAI")
+    QApplication.setApplicationDisplayName("QuillAI")
+    QApplication.setOrganizationName("GSSparks")
+
     app = QApplication(sys.argv)
 
+    icon_path = os.path.join(
+        os.path.dirname(__file__), 'images', 'quillai_logo_min.svg'
+    )
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
+        
     # ==========================================
     # Global Modern IDE Stylesheet
     # ==========================================
