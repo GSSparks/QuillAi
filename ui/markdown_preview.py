@@ -119,7 +119,7 @@ class MarkdownPreviewDock(QDockWidget):
   code {{
     background-color: {t['bg2']};
     color: {t['orange']};
-    font-family: 'Hack', 'JetBrains Mono', 'Fira Code', monospace;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 0.9em;
     padding: 2px 6px;
     border-radius: 4px;

@@ -138,7 +138,7 @@ class ChatRenderer:
             r'`([^`]+)`',
             r'<code style="background:#2A2A2D;color:#CE9178;'
             r'padding:1px 5px;border-radius:3px;'
-            r'font-family:Hack,JetBrains Mono,monospace;font-size:9pt;">'
+            r'font-family:JetBrains Mono,monospace;font-size:9pt;">'
             r'\1</code>',
             text
         )
@@ -178,7 +178,7 @@ class ChatRenderer:
                     in_ul = True
                 content = re.sub(r'^[-*+]\s+', '', stripped)
                 html_lines.append(
-                    f'<li style="color:{fg1}; font-family:Hack,JetBrains Mono,'
+                    f'<li style="color:{fg1}; font-family:JetBrains Mono,'
                     f'monospace; font-size:10pt; line-height:1.8; '
                     f'margin:2px 0;">{self._apply_inline_markdown(content)}</li>'
                 )
@@ -193,7 +193,7 @@ class ChatRenderer:
                     in_ol = True
                 content = re.sub(r'^\d+\.\s+', '', stripped)
                 html_lines.append(
-                    f'<li style="color:{fg1}; font-family:Hack,JetBrains Mono,'
+                    f'<li style="color:{fg1}; font-family:JetBrains Mono,'
                     f'monospace; font-size:10pt; line-height:1.8; '
                     f'margin:2px 0;">{self._apply_inline_markdown(content)}</li>'
                 )
@@ -212,7 +212,7 @@ class ChatRenderer:
                 sizes = {1: '14pt', 2: '12pt', 3: '11pt'}
                 html_lines.append(
                     f'<p style="margin:10px 0 4px 0; color:{blue}; '
-                    f'font-weight:bold; font-family:Hack,JetBrains Mono,monospace; '
+                    f'font-weight:bold; font-family:JetBrains Mono,monospace; '
                     f'font-size:{sizes.get(level, "11pt")};">'
                     f'{self._apply_inline_markdown(content)}</p>'
                 )
@@ -231,7 +231,7 @@ class ChatRenderer:
 
             html_lines.append(
                 f'<p style="margin:2px 0; color:{fg1}; '
-                f'font-family:Hack,JetBrains Mono,monospace; '
+                f'font-family:JetBrains Mono,monospace; '
                 f'font-size:10pt; line-height:1.8;">'
                 f'{self._apply_inline_markdown(stripped)}</p>'
             )
@@ -276,7 +276,7 @@ class ChatRenderer:
                     f'style="margin:8px 0;">'
                     f'<tr><td width="100%" style="background-color:{code_header_bg}; '
                     f'border-radius:12px 12px 0 0; padding:4px 12px;">'
-                    f'<span style="color:{fg4}; font-family:Hack,monospace; '
+                    f'<span style="color:{fg4}; font-family:JetBrains Mono,monospace; '
                     f'font-size:8pt;">{lang_label}</span>'
                     f'&nbsp;&nbsp;'
                     f'<a href="copy:{encoded}" style="color:{blue}; '
@@ -287,7 +287,7 @@ class ChatRenderer:
                     f'border:1px solid {border}; border-radius:0 0 12px 12px; '
                     f'padding:12px 16px;">'
                     f'<pre style="margin:0; '
-                    f'font-family:Hack,JetBrains Mono,Courier New,monospace; '
+                    f'font-family:JetBrains Mono,Courier New,monospace; '
                     f'font-size:10pt; line-height:1.8; white-space:pre; '
                     f'color:{fg1};">{highlighted}</pre>'
                     f'</td></tr></table>'
