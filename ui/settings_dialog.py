@@ -95,7 +95,6 @@ class SettingsDialog(QDialog):
         # Live preview — apply theme immediately on change
         self.theme_combo.currentIndexChanged.connect(self._preview_theme)
 
-        theme_hint = QLabel("Theme takes effect immediately.")
         theme_hint.setStyleSheet(f"color: {t['fg4']}; font-size: 9pt;")
 
         theme_form.addRow("Theme:", self.theme_combo)
