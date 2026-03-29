@@ -58,7 +58,7 @@ class MinimapArea(QPlainTextEdit):
         self._apply_style()
         self.editor.verticalScrollBar().valueChanged.connect(self.sync_scroll)
 
-        font = QFont("Hack", 4)
+        font = QFont("Fira Code, monospace", 4)
         font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         self.setFont(font)
 
@@ -177,7 +177,7 @@ class GhostEditor(QPlainTextEdit):
         self.function_active = False
         self.function_output = ""
 
-        font = QFont("Hack")
+        font = QFont("Fira Code, monospace")
         font.setPointSize(10)
         font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         self.setFont(font)

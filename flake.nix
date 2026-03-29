@@ -36,7 +36,9 @@
         nativeBuildInputs = [
           pkgs.qt6.wrapQtAppsHook
           pkgs.makeWrapper
-          pkgs.copyDesktopItems # [NEW] Nix hook to automatically install desktop items
+          pkgs.copyDesktopItems # Nix hook to automatically install desktop items
+          pkgs.inter
+          pkgs.fira-code
         ];
 
         propagatedBuildInputs = with pythonPackages; [
@@ -51,7 +53,7 @@
           pkgs.shellcheck
         ];
 
-        # [NEW] Tell the hook which desktop item to build and place in /share/applications/
+        # Tell the hook which desktop item to build and place in /share/applications/
         desktopItems = [ quillaiDesktop ];
 
         installPhase = ''

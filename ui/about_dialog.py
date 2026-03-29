@@ -109,7 +109,7 @@ class AboutDialog(QDialog):
 
         name_label = QLabel("QuillAI")
         name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        name_label.setFont(QFont("Inter", 20, QFont.Weight.Bold))
+        name_label.setFont(QFont("Inter, sans-serif", 20, QFont.Weight.Bold))
         name_label.setStyleSheet(f"color: {t['fg0']}; font-size: 20pt;")
         header_layout.addWidget(name_label)
 

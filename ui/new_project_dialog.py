@@ -183,7 +183,7 @@ class NewProjectDialog(QDialog):
 
         # Title
         title = QLabel("New Project")
-        title.setFont(QFont("Inter", 14, QFont.Weight.Bold))
+        title.setFont(QFont("Inter, sans-serif", 14, QFont.Weight.Bold))
         title.setStyleSheet(f"color: {t['fg0']}; font-size: 14pt;")
         layout.addWidget(title)
 
