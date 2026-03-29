@@ -177,7 +177,7 @@ class GhostEditor(QPlainTextEdit):
         self.function_active = False
         self.function_output = ""
 
-        font = QFont("Fira Code, monospace")
+        font = QFont("JetBrains Mono, monospace")
         font.setPointSize(10)
         font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         self.setFont(font)
