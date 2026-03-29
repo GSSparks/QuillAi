@@ -14,6 +14,7 @@ except ImportError:
     HAS_YAML = False
 
 from ai.worker import AIWorker
+from ui.theme import get_theme
 
 # ==========================================
 # Professional Snippet Manager
@@ -54,22 +55,34 @@ class MinimapArea(QPlainTextEdit):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-        self.setStyleSheet("""
-            QPlainTextEdit {
-                background-color: #1E1E1E;
-                color: #888888;
-                border-left: 1px solid #333333;
-                border-right: none;
-                border-top: none;
-                border-bottom: none;
-            }
-        """)
+        self._apply_style()
+        self.editor.verticalScrollBar().valueChanged.connect(self.sync_scroll)
 
         font = QFont("Hack", 4)
         font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         self.setFont(font)
 
-        self.editor.verticalScrollBar().valueChanged.connect(self.sync_scroll)
+    def _get_theme(self) -> dict:
+        # Walk up to find settings_manager
+        p = self.editor
+        while p:
+            if hasattr(p, 'settings_manager') and p.settings_manager:
+                return get_theme(p.settings_manager.get('theme'))
+            p = p.parent() if hasattr(p, 'parent') else None
+        return get_theme()
+
+    def _apply_style(self):
+        t = self._get_theme()
+        self.setStyleSheet(f"""
+            QPlainTextEdit {{
+                background-color: {t['bg0_hard']};
+                color: {t['fg4']};
+                border-left: 1px solid {t['border']};
+                border-right: none;
+                border-top: none;
+                border-bottom: none;
+            }}
+        """)
 
     def sync_scroll(self, value):
         e_max = self.editor.verticalScrollBar().maximum()
@@ -90,7 +103,9 @@ class MinimapArea(QPlainTextEdit):
     def jump_to_click(self, pos):
         cursor = self.cursorForPosition(pos)
         block_number = cursor.blockNumber()
-        editor_cursor = QTextCursor(self.editor.document().findBlockByNumber(block_number))
+        editor_cursor = QTextCursor(
+            self.editor.document().findBlockByNumber(block_number)
+        )
         self.editor.setTextCursor(editor_cursor)
         self.editor.centerCursor()
 
@@ -100,19 +115,30 @@ class MinimapArea(QPlainTextEdit):
     def paintEvent(self, event):
         super().paintEvent(event)
 
+        t = self._get_theme()
+
         painter = QPainter(self.viewport())
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(255, 255, 255, 12))
+
+        # Use a subtle highlight color from the theme
+        from PyQt6.QtGui import QColor
+        highlight = QColor(t['accent'])
+        highlight.setAlpha(20)
+        painter.setBrush(highlight)
 
         fm_editor = QFontMetrics(self.editor.font())
-        visible_lines_editor = self.editor.viewport().height() / (fm_editor.height() * 1.5)
+        visible_lines_editor = (
+            self.editor.viewport().height() / (fm_editor.height() * 1.5)
+        )
 
         fm_minimap = QFontMetrics(self.font())
         top_block = self.editor.firstVisibleBlock()
 
         minimap_block = self.document().findBlockByNumber(top_block.blockNumber())
         if minimap_block.isValid():
-            geom = self.blockBoundingGeometry(minimap_block).translated(self.contentOffset())
+            geom = self.blockBoundingGeometry(minimap_block).translated(
+                self.contentOffset()
+            )
             rect_y = geom.top()
             rect_height = visible_lines_editor * (fm_minimap.height() * 1.5)
             painter.drawRect(0, int(rect_y), self.width(), int(rect_height))
@@ -130,49 +156,17 @@ class GhostEditor(QPlainTextEdit):
     def __init__(self, settings_manager=None, intent_tracker=None):
         super().__init__()
         self.settings_manager = settings_manager
+        self._t = get_theme(
+            settings_manager.get('theme') if settings_manager else None
+        )
         self.intent_tracker = intent_tracker
         self._setup_jump_bar()
         self._setup_inline_chat()
 
-        self.setStyleSheet("""
-            QPlainTextEdit {
-                background-color: #1E1E1E;
-                color: #D4D4D4;
-                border: none;
-                selection-background-color: #264F78;
-                selection-color: #FFFFFF;
-            }
-            QScrollBar:vertical {
-                border: none;
-                background: #1E1E1E;
-                width: 14px;
-                margin: 0px;
-            }
-            QScrollBar::handle:vertical {
-                background: #424242;
-                min-height: 30px;
-                border-radius: 7px;
-                margin: 2px 3px 2px 3px;
-            }
-            QScrollBar::handle:vertical:hover { background: #4F4F4F; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
-            QScrollBar:horizontal {
-                border: none;
-                background: #1E1E1E;
-                height: 14px;
-                margin: 0px;
-            }
-            QScrollBar::handle:horizontal {
-                background: #424242;
-                min-width: 30px;
-                border-radius: 7px;
-                margin: 3px 2px 3px 2px;
-            }
-            QScrollBar::handle:horizontal:hover { background: #4F4F4F; }
-            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
-            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: none; }
-        """)
+        self.setStyleSheet(
+            __import__('ui.theme', fromlist=['build_editor_stylesheet'])
+            .build_editor_stylesheet(self._t)
+        )
 
         self.file_path = None
         self.ghost_text = ""
@@ -233,7 +227,18 @@ class GhostEditor(QPlainTextEdit):
             ) if self._get_hex_color_at_cursor() else None
         )
         self.cursorPositionChanged.connect(self._update_color_swatch)
-        
+ 
+    def _apply_style(self):
+        from ui.theme import get_theme, build_editor_stylesheet
+        theme_name = None
+        if self.settings_manager:
+            theme_name = self.settings_manager.get('theme')
+        t = get_theme(theme_name)
+        self.setStyleSheet(build_editor_stylesheet(t))
+    
+        # Update ghost text color
+        self._t = t
+                   
     def focusOutEvent(self, event):
         super().focusOutEvent(event)
         if hasattr(self, '_swatch'):
@@ -770,7 +775,7 @@ Answer concisely. If you include code, use a single fenced code block."""
         self.current_line_selection = []
         if not self.isReadOnly():
             selection = QTextEdit.ExtraSelection()
-            selection.format.setBackground(QColor("#2A2D2E"))
+            selection.format.setBackground(QColor(self._t['bg1']))
             selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
             selection.cursor = self.textCursor()
             selection.cursor.clearSelection()
@@ -1014,8 +1019,8 @@ Answer concisely. If you include code, use a single fenced code block."""
 
     def line_number_area_paint_event(self, event):
         painter = QPainter(self.line_number_area)
-        painter.fillRect(event.rect(), QColor("#1E1E1E"))
-        painter.setPen(QColor("#333333"))
+        painter.fillRect(event.rect(), QColor(self._t['bg0_hard']))
+        painter.setPen(QColor(self._t['border']))
         painter.drawLine(self.line_number_area.width() - 1, event.rect().top(),
                          self.line_number_area.width() - 1, event.rect().bottom())
         block = self.firstVisibleBlock()
@@ -1024,13 +1029,13 @@ Answer concisely. If you include code, use a single fenced code block."""
         bottom = top + round(self.blockBoundingRect(block).height())
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
-                painter.setPen(QColor(120, 120, 120))
+                painter.setPen(QColor(self._t['fg4']))
                 painter.drawText(0, top, self.line_number_area.width() - 8, self.fontMetrics().height(),
                                  Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                                  str(block_number + 1))
                 status = self.line_changes.get(block_number)
                 if status:
-                    color = QColor("#4CAF50") if status == 'added' else QColor("#F0A30A")
+                    color = QColor(self._t['added_line']) if status == 'added' else QColor(self._t['modified_line'])
                     painter.fillRect(self.line_number_area.width() - 4, top, 4, self.fontMetrics().height(), color)
             block = block.next()
             top = bottom
@@ -1441,7 +1446,7 @@ Answer concisely. If you include code, use a single fenced code block."""
         fm = QFontMetrics(self.font())
         indent_width = fm.horizontalAdvance(' ') * 4
         offset_x = self.contentOffset().x() + self.document().documentMargin()
-        painter.setPen(QColor(80, 80, 80, 80))
+        painter.setPen(QColor(self._t['border']))
         block = self.firstVisibleBlock()
         top = round(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
         bottom = top + round(self.blockBoundingRect(block).height())
@@ -1462,7 +1467,7 @@ Answer concisely. If you include code, use a single fenced code block."""
             bottom = top + round(self.blockBoundingRect(block).height())
 
         if self.ghost_text:
-            painter.setPen(QColor(120, 120, 120, 160))
+            painter.setPen(QColor(self._t['ghost_text']))
             painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
             cursor = self.textCursor()
             rect = self.cursorRect(cursor)

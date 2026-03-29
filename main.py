@@ -17,6 +17,9 @@ from PyQt6.QtGui import (QFileSystemModel, QAction, QKeySequence, QTextCursor,
 
 from editor.ghost_editor import GhostEditor
 from ai.worker import AIWorker
+
+from ui.theme import apply_theme, get_theme, build_status_bar_stylesheet, theme_signals, build_editor_stylesheet
+
 from ui.menu import setup_file_menu
 from ui.about_dialog import AboutDialog
 from ui.find_replace import FindReplaceWidget
@@ -40,15 +43,38 @@ MAX_FILE_SIZE = 6000  # characters
 # ==========================================
 # Main Application
 # ==========================================
+from ui.theme import get_theme, build_app_stylesheet
+
+
+def build_dock_style(t: dict) -> str:
+    return f"""
+        QDockWidget {{
+            color: {t['fg2']};
+            font-family: 'Inter', 'SF Pro Text', 'Segoe UI', sans-serif;
+            font-weight: bold;
+            font-size: 10pt;
+        }}
+        QDockWidget::title {{
+            background-color: {t['bg1']};
+            text-align: left;
+            padding-left: 10px;
+            padding-top: 6px;
+            padding-bottom: 6px;
+        }}
+    """
+
+
 class CustomFileSystemModel(QFileSystemModel):
-    def __init__(self):
+    def __init__(self, theme_name: str = None):
         super().__init__()
-        self.folder_icon = self._create_icon("#D4A373", is_folder=True)
-        self.file_icon = self._create_icon("#A9A9A9", is_folder=False)
-        self.py_icon = self._create_icon("#4B8BBE", is_folder=False)
-        self.html_icon = self._create_icon("#E34F26", is_folder=False)
+        t = get_theme(theme_name)
+        self.folder_icon = self._create_icon(t['yellow'],   is_folder=True)
+        self.file_icon   = self._create_icon(t['fg4'],      is_folder=False)
+        self.py_icon     = self._create_icon(t['blue'],     is_folder=False)
+        self.html_icon   = self._create_icon(t['orange'],   is_folder=False)
 
     def _create_icon(self, color, is_folder):
+        t = get_theme()
         pixmap = QPixmap(16, 16)
         pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
@@ -63,7 +89,8 @@ class CustomFileSystemModel(QFileSystemModel):
             painter.setBrush(QColor(color))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(3, 1, 10, 14, 1, 1)
-            painter.setBrush(QColor("#1E1E1E"))
+            # File lines — use editor bg so they contrast against the icon
+            painter.setBrush(QColor(t['bg0_hard']))
             painter.drawRect(5, 5, 6, 1)
             painter.drawRect(5, 8, 6, 1)
             painter.drawRect(5, 11, 4, 1)
@@ -85,28 +112,15 @@ class CustomFileSystemModel(QFileSystemModel):
                     return self.file_icon
         return super().data(index, role)
 
-DOCK_STYLE = """
-    QDockWidget {
-        color: #CCCCCC;
-        font-family: 'Inter', 'SF Pro Text', 'Segoe UI', sans-serif;
-        font-weight: bold;
-        font-size: 10pt;
-    }
-    QDockWidget::title {
-        background-color: #252526;
-        text-align: left;
-        padding-left: 10px;
-        padding-top: 6px;
-        padding-bottom: 6px;
-    }
-"""
-
 class CodeEditor(QMainWindow, ChatRenderer):
     def __init__(self):
         super().__init__()
 
         # 1. Load settings FIRST
         self.settings_manager = SettingsManager()
+        self._dock_style = build_dock_style(get_theme(
+            self.settings_manager.get('theme') or 'gruvbox_dark'
+        ))
 
         # 2. Load memory
         self.memory_manager = MemoryManager()
@@ -138,25 +152,34 @@ class CodeEditor(QMainWindow, ChatRenderer):
         # --------------------------
         # Tab System Setup
         # --------------------------
+        t = get_theme(self.settings_manager.get('theme') or 'gruvbox_dark')
+        
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(True)
         self.tabs.tabCloseRequested.connect(self.close_tab)
-        self.tabs.currentChanged.connect(lambda _: self._refresh_markdown_preview()) 
-        self.tabs.setStyleSheet("""
-            QTabWidget::pane { border: none; background-color: #1E1E1E; }
-            QTabBar::tab {
-                background-color: #2D2D30;
-                color: #888888;
+        self.tabs.currentChanged.connect(lambda _: self._refresh_markdown_preview())
+        self.tabs.setStyleSheet(f"""
+            QTabWidget::pane {{
+                border: none;
+                background-color: {t['bg0_hard']};
+            }}
+            QTabBar::tab {{
+                background-color: {t['bg1']};
+                color: {t['fg4']};
                 padding: 8px 15px;
-                border-right: 1px solid #1E1E1E;
+                border-right: 1px solid {t['bg0_hard']};
                 font-family: 'Inter', 'SF Pro Text', 'Segoe UI', sans-serif;
                 font-size: 10pt;
-            }
-            QTabBar::tab:selected {
-                background-color: #1E1E1E;
-                color: #FFFFFF;
-                border-top: 2px solid #0E639C;
-            }
+            }}
+            QTabBar::tab:selected {{
+                background-color: {t['bg0_hard']};
+                color: {t['fg0']};
+                border-top: 2px solid {t['tab_active_bar']};
+            }}
+            QTabBar::tab:hover:!selected {{
+                background-color: {t['bg2']};
+                color: {t['fg1']};
+            }}
         """)
         
         self.tabs.currentChanged.connect(lambda _: self.update_status_bar())
@@ -204,56 +227,11 @@ class CodeEditor(QMainWindow, ChatRenderer):
         # UI Status Bar
         self.status_bar = self.statusBar()
         self.status_bar.setSizeGripEnabled(False)
-        self.status_bar.setStyleSheet("""
-            QStatusBar {
-                background-color: #007ACC;
-                color: #FFFFFF;
-                font-family: 'Inter', 'Segoe UI', sans-serif;
-                font-size: 9pt;
-            }
-            QStatusBar::item {
-                border: none;
-                background: transparent;
-            }
-            QStatusBar QLabel {
-                color: #FFFFFF;
-                background: transparent;
-                padding: 0 8px;
-                font-size: 9pt;
-            }
-            QStatusBar QPushButton {
-                color: #FFFFFF;
-                background: transparent;
-                border: none;
-                padding: 0 8px;
-                font-size: 9pt;
-                font-weight: bold;
-            }
-            QStatusBar QPushButton:hover {
-                background-color: rgba(255,255,255,0.15);
-            }
-            QStatusBar QProgressBar {
-                background-color: rgba(255,255,255,0.2);
-                border: none;
-                border-radius: 6px;
-                max-width: 100px;
-                min-height: 8px;
-                max-height: 8px;
-            }
-            QStatusBar QProgressBar::chunk {
-                background-color: #FFFFFF;
-                border-radius: 6px;
-            }
-            QPushButton {
-                color: #FFFFFF;
-                background: transparent;
-                border: none;
-                padding: 0 8px;
-                font-size: 9pt;
-                font-weight: bold;
-            }
-            QPushButton:hover { background-color: rgba(255,255,255,0.15); }
-        """)
+        theme_name = self.settings_manager.get('theme') or 'gruvbox_dark'
+        self._theme = get_theme(theme_name)
+        self.status_bar.setStyleSheet(
+            build_status_bar_stylesheet(self._theme)
+        )
         
         # Left side — git branch
         self.branch_label = QLabel("")
@@ -302,6 +280,9 @@ class CodeEditor(QMainWindow, ChatRenderer):
         registry.auto_register_languages(
             os.path.join(_plugins_dir, 'languages')
         )
+
+        theme_signals.theme_changed.connect(self._apply_theme_to_widgets)
+        
         self.process = QProcess(self)
         self.process.readyReadStandardOutput.connect(self.handle_stdout)
         self.process.readyReadStandardError.connect(self.handle_stderr)
@@ -319,7 +300,120 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self._lang_detect_timer.setSingleShot(True)
         self._lang_detect_timer.timeout.connect(self._fire_ai_lang_detect)
         self._lang_detect_running = False
-        
+     
+    def _apply_theme_to_widgets(self, t: dict):
+        """
+        Re-applies inline stylesheets to all widgets that override
+        the global QApplication stylesheet. Called whenever the theme changes.
+        """
+   
+        # Status bar
+        self.status_bar.setStyleSheet(build_status_bar_stylesheet(t))
+    
+        # Dock style
+        dock_style = build_dock_style(t)
+        self._dock_style = dock_style
+        for dock in (self.sidebar_dock, self.output_dock, self.search_dock,
+                     self.md_preview_dock):
+            if hasattr(self, dock.objectName().replace('_dock', '_dock')):
+                dock.setStyleSheet(dock_style)
+    
+        # Tabs
+        self.tabs.setStyleSheet(f"""
+            QTabWidget::pane {{
+                border: none;
+                background-color: {t['bg0_hard']};
+            }}
+            QTabBar::tab {{
+                background-color: {t['bg1']};
+                color: {t['fg4']};
+                padding: 8px 15px;
+                border-right: 1px solid {t['bg0_hard']};
+                font-family: 'Inter', 'SF Pro Text', 'Segoe UI', sans-serif;
+                font-size: 10pt;
+            }}
+            QTabBar::tab:selected {{
+                background-color: {t['bg0_hard']};
+                color: {t['fg0']};
+                border-top: 2px solid {t['tab_active_bar']};
+            }}
+            QTabBar::tab:hover:!selected {{
+                background-color: {t['bg2']};
+                color: {t['fg1']};
+            }}
+        """)
+    
+        # Output panel
+        self.output_editor.setStyleSheet(f"""
+            QPlainTextEdit {{
+                background-color: {t['bg0_hard']};
+                color: {t['fg1']};
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 10pt;
+                border: none;
+            }}
+        """)
+    
+        self.explain_error_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t['purple']};
+                color: {t['bg0_hard']};
+                border: none;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-family: 'Inter', 'SF Pro Text', 'Segoe UI', sans-serif;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: {t['purple_dim']}; }}
+        """)
+    
+        # Tree view
+        self.tree_view.setStyleSheet(f"""
+            QTreeView {{
+                background-color: {t['bg0_hard']};
+                color: {t['fg1']};
+                border: none;
+                font-family: 'Inter', 'SF Pro Text', 'Segoe UI', sans-serif;
+                font-size: 11pt;
+            }}
+            QTreeView::item {{ padding: 4px; }}
+            QTreeView::item:selected {{
+                background-color: {t['bg2']};
+                color: {t['fg0']};
+                border-radius: 4px;
+            }}
+            QTreeView::item:hover:!selected {{
+                background-color: {t['bg1']};
+                border-radius: 4px;
+            }}
+            QTreeView::branch {{ background-color: transparent; }}
+        """)
+    
+        # Rebuild file model icons with new theme colors
+        self.file_model = CustomFileSystemModel(theme_name=self.settings_manager.get('theme'))
+        self.tree_view.setModel(self.file_model)
+    
+        # Sliding panel
+        if hasattr(self, 'chat_panel'):
+            self.chat_panel._setup_ui()
+    
+        # Git panel
+        if hasattr(self, 'git_dock'):
+            self.git_dock.setup_ui()
+    
+        # Re-apply syntax highlighting to all open editors
+        for i in range(self.tabs.count()):
+            editor = self.tabs.widget(i)
+            if editor and hasattr(editor, 'file_path') and editor.file_path:
+                ext = os.path.splitext(editor.file_path)[1].lower()
+                editor.highlighter = registry.get_highlighter(editor.document(), ext)
+            # Update editor stylesheet
+            if editor and hasattr(editor, '_apply_style'):
+                editor._apply_style()
+            elif editor:
+                from ui.theme import build_editor_stylesheet
+                editor.setStyleSheet(build_editor_stylesheet(t))
+               
     def toggle_inline_completion(self, enabled):
         self.inline_completion_enabled = enabled
              
@@ -799,7 +893,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
 
     def setup_find_in_files_panel(self):
         self.search_dock = QDockWidget("Find in Files", self)
-        self.search_dock.setStyleSheet(DOCK_STYLE)
+        self.search_dock.setStyleSheet(self._dock_style)
 
         self.find_in_files_widget = FindInFilesWidget(self)
         self.find_in_files_widget.open_file_request.connect(self.open_file_in_tab)
@@ -1435,42 +1529,55 @@ class CodeEditor(QMainWindow, ChatRenderer):
         dialog.exec()
 
     def setup_output_panel(self):
+        t = get_theme(self.settings_manager.get('theme') or 'gruvbox_dark')
+    
         output_container = QWidget()
         layout = QVBoxLayout(output_container)
         layout.setContentsMargins(0, 0, 0, 0)
-
+    
         self.output_editor = QPlainTextEdit()
         self.output_editor.setReadOnly(True)
-        self.output_editor.setStyleSheet("QPlainTextEdit { background-color: #1E1E1E; color: #CCCCCC; font-family: 'JetBrains Mono', monospace; font-size: 10pt; border: none; }")
-
+        self.output_editor.setStyleSheet(f"""
+            QPlainTextEdit {{
+                background-color: {t['bg0_hard']};
+                color: {t['fg1']};
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 10pt;
+                border: none;
+            }}
+        """)
+    
         self.explain_error_btn = QPushButton("💡 Explain Error")
-        self.explain_error_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #8A2BE2;
-                color: white;
+        self.explain_error_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t['purple']};
+                color: {t['bg0_hard']};
                 border: none;
                 padding: 6px 12px;
                 border-radius: 4px;
                 font-family: 'Inter', 'SF Pro Text', 'Segoe UI', sans-serif;
                 font-weight: bold;
-            }
-            QPushButton:hover { background-color: #9B30FF; }
+            }}
+            QPushButton:hover {{ background-color: {t['purple_dim']}; }}
         """)
         self.explain_error_btn.hide()
         self.explain_error_btn.clicked.connect(self.explain_error)
-
+    
         btn_layout = QHBoxLayout()
         btn_layout.setContentsMargins(5, 5, 5, 5)
         btn_layout.addStretch()
         btn_layout.addWidget(self.explain_error_btn)
-
+    
         layout.addWidget(self.output_editor)
         layout.addLayout(btn_layout)
-
+    
         self.output_dock = QDockWidget("Output", self)
-        self.output_dock.setStyleSheet(DOCK_STYLE)
+        self.output_dock.setStyleSheet(self._dock_style)
         self.output_dock.setWidget(output_container)
-        self.output_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
+        self.output_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetClosable |
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+        )
         self.output_dock.setObjectName("output_dock")
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.output_dock)
         self.output_dock.hide()
@@ -1584,35 +1691,50 @@ class CodeEditor(QMainWindow, ChatRenderer):
     # Sidebar Methods
     # -----------------------------
     def setup_sidebar(self):
-        self.file_model = CustomFileSystemModel()
+        theme_name = self.settings_manager.get('theme') or 'gruvbox_dark'
+        t = get_theme(theme_name)
+    
+        self.file_model = CustomFileSystemModel(theme_name=theme_name)
         self.file_model.setRootPath(QDir.currentPath())
-
+    
         self.tree_view = QTreeView()
         self.tree_view.setModel(self.file_model)
         self.tree_view.setRootIndex(self.file_model.index(QDir.currentPath()))
         self.tree_view.setHeaderHidden(True)
-        for i in range(1, 4): self.tree_view.hideColumn(i)
+        for i in range(1, 4):
+            self.tree_view.hideColumn(i)
         self.tree_view.setIndentation(15)
-
-        self.tree_view.setStyleSheet("""
-            QTreeView {
-                background-color: #1E1E1E;
-                color: #CCCCCC;
+    
+        self.tree_view.setStyleSheet(f"""
+            QTreeView {{
+                background-color: {t['bg0_hard']};
+                color: {t['fg1']};
                 border: none;
                 font-family: 'Inter', 'SF Pro Text', 'Segoe UI', sans-serif;
                 font-size: 11pt;
-            }
-            QTreeView::item { padding: 4px; }
-            QTreeView::item:selected { background-color: #37373D; color: #FFFFFF; border-radius: 4px; }
-            QTreeView::item:hover:!selected { background-color: #2A2D2E; border-radius: 4px; }
-            QTreeView::branch { background-color: transparent; }
+            }}
+            QTreeView::item {{ padding: 4px; }}
+            QTreeView::item:selected {{
+                background-color: {t['bg2']};
+                color: {t['fg0']};
+                border-radius: 4px;
+            }}
+            QTreeView::item:hover:!selected {{
+                background-color: {t['bg1']};
+                border-radius: 4px;
+            }}
+            QTreeView::branch {{ background-color: transparent; }}
         """)
-
+    
         self.tree_view.doubleClicked.connect(self.open_tree_item)
+    
         self.sidebar_dock = QDockWidget("Explorer", self)
-        self.sidebar_dock.setStyleSheet(DOCK_STYLE)
+        self.sidebar_dock.setStyleSheet(self._dock_style)
         self.sidebar_dock.setWidget(self.tree_view)
-        self.sidebar_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
+        self.sidebar_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetClosable |
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+        )
         self.sidebar_dock.setObjectName("sidebar_dock")
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.sidebar_dock)
 
@@ -1774,122 +1896,9 @@ if __name__ == "__main__":
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
         
-    # ==========================================
-    # Global Modern IDE Stylesheet
-    # ==========================================
-    app.setStyleSheet("""
-        QWidget {
-            background-color: #1E1E1E;
-            color: #D4D4D4;
-        }
-
-        QSplitter::handle {
-            background-color: #333333;
-            margin: 0px;
-        }
-        QSplitter::handle:horizontal {
-            width: 1px;
-        }
-        QSplitter::handle:vertical {
-            height: 1px;
-        }
-
-        QSplitter::handle:hover {
-            background-color: #007ACC;
-        }
-
-        QScrollBar:vertical {
-            border: none;
-            background: transparent;
-            width: 14px;
-            margin: 0px;
-        }
-        QScrollBar::handle:vertical {
-            background: #424242;
-            min-height: 30px;
-            border-radius: 7px;
-            margin: 2px 3px 2px 3px;
-        }
-        QScrollBar::handle:vertical:hover {
-            background: #4F4F4F;
-        }
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-            height: 0px;
-        }
-        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-            background: none;
-        }
-
-        QScrollBar:horizontal {
-            border: none;
-            background: transparent;
-            height: 14px;
-            margin: 0px;
-        }
-        QScrollBar::handle:horizontal {
-            background: #424242;
-            min-width: 30px;
-            border-radius: 7px;
-            margin: 3px 2px 3px 2px;
-        }
-        QScrollBar::handle:horizontal:hover {
-            background: #4F4F4F;
-        }
-        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
-            width: 0px;
-        }
-        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
-            background: none;
-        }
-
-        QLineEdit, QTextEdit {
-            background-color: #252526;
-            border: 1px solid #3E3E42;
-            border-radius: 4px;
-            padding: 5px 8px;
-            color: #CCCCCC;
-            selection-background-color: #264F78;
-        }
-        QLineEdit:focus, QTextEdit:focus {
-            border: 1px solid #007ACC;
-        }
-
-        QTreeView, QListView {
-            background-color: #1E1E1E;
-            border: none;
-            outline: none;
-        }
-        QTreeView::item, QListView::item {
-            padding: 4px;
-            border-radius: 4px;
-        }
-        QTreeView::item:selected, QListView::item:selected {
-            background-color: #37373D;
-            color: #FFFFFF;
-        }
-        QTreeView::item:hover:!selected, QListView::item:hover:!selected {
-            background-color: #2A2D2E;
-        }
-
-        QPushButton {
-            background-color: #0E639C;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            padding: 6px 14px;
-            font-weight: bold;
-        }
-        QPushButton:hover {
-            background-color: #1177BB;
-        }
-        QPushButton:pressed {
-            background-color: #094771;
-        }
-        QPushButton:disabled {
-            background-color: #333333;
-            color: #888888;
-        }
-    """)
+    sm = SettingsManager()
+    theme_name = sm.get('theme') or 'gruvbox_dark'
+    apply_theme(app, theme_name)
 
     window = CodeEditor()
     window.resize(1000, 700)

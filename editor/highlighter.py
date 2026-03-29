@@ -6,7 +6,7 @@ from PyQt6.QtCore import QRegularExpression
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. Theme Engine
+# 1. Syntax Highlighting Color Engine
 # ─────────────────────────────────────────────────────────────────────────────
 
 def create_format(color_hex, style=''):
@@ -20,18 +20,60 @@ def create_format(color_hex, style=''):
     return fmt
 
 
-# Monokai-inspired dark theme shared across all language plugins
-THEME = {
-    'keyword':   create_format('#F92672', 'bold'),
-    'builtin':   create_format('#66D9EF', 'italic'),
-    'string':    create_format('#E6DB74'),
-    'comment':   create_format('#75715E', 'italic'),
-    'number':    create_format('#AE81FF'),
-    'class_def': create_format('#A6E22E', 'bold'),
-    'func_def':  create_format('#A6E22E', 'bold'),
-    'tag':       create_format('#F92672', 'bold'),
-    'attribute': create_format('#A6E22E'),
-}
+def build_syntax_theme(ui_theme: dict) -> dict:
+    """
+    Builds the syntax highlighting palette from the UI theme.
+    All syntax colors come from the same palette the UI uses,
+    so switching themes changes everything — UI chrome and code colors together.
+
+    Semantic mapping:
+      keywords    → red      (control flow, language keywords)
+      builtins    → aqua     (built-in functions and types)
+      strings     → yellow   (string literals)
+      comments    → fg4      (muted — least important)
+      numbers     → purple   (numeric literals)
+      class/func  → green    (definitions — most important)
+      tags        → red      (HTML/XML tags)
+      attributes  → green    (HTML attributes, decorators)
+      types       → aqua     (type annotations)
+      constants   → purple   (True, False, None, etc.)
+      operators   → orange   (operators, special symbols)
+    """
+    return {
+        'keyword':   create_format(ui_theme['red'],    'bold'),
+        'builtin':   create_format(ui_theme['aqua'],   'italic'),
+        'string':    create_format(ui_theme['yellow']),
+        'comment':   create_format(ui_theme['fg4'],    'italic'),
+        'number':    create_format(ui_theme['purple']),
+        'class_def': create_format(ui_theme['green'],  'bold'),
+        'func_def':  create_format(ui_theme['green'],  'bold'),
+        'tag':       create_format(ui_theme['red'],    'bold'),
+        'attribute': create_format(ui_theme['green']),
+        'decorator': create_format(ui_theme['green']),
+        'type':      create_format(ui_theme['aqua'],   'italic'),
+        'constant':  create_format(ui_theme['purple']),
+        'operator':  create_format(ui_theme['orange']),
+    }
+
+
+# Bootstrap with the default theme — replaced immediately when apply_theme runs
+def _bootstrap_theme() -> dict:
+    from ui.theme import get_theme
+    return build_syntax_theme(get_theme())
+
+
+THEME: dict = {}
+
+
+def refresh_syntax_theme(ui_theme: dict):
+    """
+    Rebuilds the global THEME dict in place from the given UI theme.
+    Called by apply_theme() whenever the user switches themes.
+    All subsequent highlighting passes will use the new colors.
+    """
+    global THEME
+    THEME.clear()
+    THEME.update(build_syntax_theme(ui_theme))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -48,25 +90,32 @@ class LanguagePlugin:
       3. Add rules in __init__ using self.add_rule() or self.rules.append()
       4. Drop the file in plugins/languages/
       5. That's it — auto-registered on startup, no main.py changes needed.
+
+    Color keys available in add_rule():
+        'keyword'   'builtin'   'string'    'comment'
+        'number'    'class_def' 'func_def'  'tag'
+        'attribute' 'decorator' 'type'      'constant'
+        'operator'
     """
 
     EXTENSIONS = []
 
     def __init__(self):
         self.rules = []
-
-        # Optional multiline support (e.g. block comments, docstrings)
-        self.multiline_start = QRegularExpression()
-        self.multiline_end = QRegularExpression()
+        self.multiline_start  = QRegularExpression()
+        self.multiline_end    = QRegularExpression()
         self.multiline_format = QTextCharFormat()
 
     def add_rule(self, pattern: str, format_name: str):
-        """Add a highlighting rule using a theme color key."""
+        """
+        Add a highlighting rule using a semantic color key.
+        Rules are applied in order — later rules take precedence.
+        """
         if format_name in THEME:
             self.rules.append((QRegularExpression(pattern), THEME[format_name]))
 
     def add_rule_fmt(self, pattern: str, fmt: QTextCharFormat):
-        """Add a highlighting rule with a custom QTextCharFormat."""
+        """Add a highlighting rule with a fully custom QTextCharFormat."""
         self.rules.append((QRegularExpression(pattern), fmt))
 
 
@@ -77,18 +126,22 @@ class FeaturePlugin:
     To create a new feature plugin:
       1. Subclass FeaturePlugin
       2. Set NAME and DESCRIPTION
-      3. Implement activate() to wire up your feature (add docks, menus, etc.)
-      4. Implement deactivate() to clean up
+      3. Implement activate() to wire up your feature (docks, menus, shortcuts)
+      4. Implement deactivate() to clean up on close
       5. Drop the file in plugins/features/
-      6. It will be discovered and passed the main window on startup.
+      6. It will be discovered and activated automatically on startup.
 
     Example:
-        class MyPlugin(FeaturePlugin):
-            NAME = "My Feature"
-            DESCRIPTION = "Does something cool"
+        class TodoPlugin(FeaturePlugin):
+            NAME = "TODO Panel"
+            DESCRIPTION = "Shows a panel of TODO comments across the project"
 
             def activate(self):
-                self.window.menuBar().addMenu("My Menu")
+                self.dock = QDockWidget("TODOs", self.window)
+                self.window.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.dock)
+
+            def deactivate(self):
+                self.dock.deleteLater()
     """
 
     NAME = ""
@@ -102,7 +155,7 @@ class FeaturePlugin:
         pass
 
     def deactivate(self):
-        """Called when the plugin is disabled or the app closes."""
+        """Called on app close or when the plugin is disabled."""
         pass
 
 
@@ -113,7 +166,7 @@ class FeaturePlugin:
 class UniversalHighlighter(QSyntaxHighlighter):
     """
     Drives any LanguagePlugin — applies its rules to each text block.
-    Handles both single-line and multiline patterns.
+    Handles both single-line and multiline patterns (docstrings, block comments).
     """
 
     def __init__(self, document, plugin: LanguagePlugin):
@@ -121,14 +174,16 @@ class UniversalHighlighter(QSyntaxHighlighter):
         self.plugin = plugin
 
     def highlightBlock(self, text):
-        # Single-line rules
+        # ── Single-line rules ─────────────────────────────────────
         for regex, fmt in self.plugin.rules:
             iterator = regex.globalMatch(text)
             while iterator.hasNext():
                 match = iterator.next()
-                self.setFormat(match.capturedStart(), match.capturedLength(), fmt)
+                self.setFormat(
+                    match.capturedStart(), match.capturedLength(), fmt
+                )
 
-        # Multiline rules (block comments, docstrings, etc.)
+        # ── Multiline rules (docstrings, block comments) ──────────
         self.setCurrentBlockState(0)
 
         if not self.plugin.multiline_start.pattern():
@@ -150,8 +205,12 @@ class UniversalHighlighter(QSyntaxHighlighter):
 
             self.setFormat(start_index, length, self.plugin.multiline_format)
 
-            next_match = self.plugin.multiline_start.match(text, start_index + length)
-            start_index = next_match.capturedStart() if next_match.hasMatch() else -1
+            next_match = self.plugin.multiline_start.match(
+                text, start_index + length
+            )
+            start_index = (
+                next_match.capturedStart() if next_match.hasMatch() else -1
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -166,7 +225,7 @@ class HighlighterRegistry:
 
     def __init__(self):
         self._language_plugins: dict = {}
-        self._feature_plugins: list = []
+        self._feature_plugins: list  = []
 
     # ── Language plugins ──────────────────────────────────────────
 
@@ -174,11 +233,15 @@ class HighlighterRegistry:
         """Manually register a language plugin for a file extension."""
         self._language_plugins[extension] = plugin_class
 
-    def get_highlighter(self, document, extension: str = ".py"):
+    def get_highlighter(self, document, extension: str = ""):
         """
         Returns a QSyntaxHighlighter for the given document and extension.
-        Returns None if no plugin is registered for that extension.
+        Returns None if no plugin is registered — meaning no highlighting,
+        which is correct for unsaved or unknown file types.
         """
+        if not extension:
+            return None
+
         plugin_class = self._language_plugins.get(extension)
         if plugin_class is None:
             return None
@@ -195,8 +258,8 @@ class HighlighterRegistry:
         Scans plugins/languages/ and registers every LanguagePlugin subclass
         that declares an EXTENSIONS list.
 
-        To add a new language: drop a *_plugin.py file in plugins/languages/
-        with EXTENSIONS = ['.xyz'] — no other changes needed.
+        To add a new language: drop a *_plugin.py in plugins/languages/
+        with EXTENSIONS = ['.xyz'] — zero other changes needed anywhere.
         """
         if not os.path.isdir(languages_dir):
             print(f"Language plugins directory not found: {languages_dir}")
@@ -210,27 +273,28 @@ class HighlighterRegistry:
             module_name = f"plugins.languages.{filename[:-3]}"
 
             try:
-                spec = importlib.util.spec_from_file_location(module_name, module_path)
+                spec = importlib.util.spec_from_file_location(
+                    module_name, module_path
+                )
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
 
                 for _, obj in inspect.getmembers(module, inspect.isclass):
                     if not inspect.isclass(obj):
                         continue
-                    # Accept LanguagePlugin subclasses with EXTENSIONS
+
                     is_language = (
                         issubclass(obj, LanguagePlugin) and
                         obj is not LanguagePlugin and
                         obj.EXTENSIONS
                     )
-                    # Also accept standalone QSyntaxHighlighter subclasses
-                    # that declare EXTENSIONS (e.g. MarkdownPlugin)
                     is_standalone = (
                         issubclass(obj, QSyntaxHighlighter) and
                         not issubclass(obj, UniversalHighlighter) and
                         hasattr(obj, 'EXTENSIONS') and
                         obj.EXTENSIONS
                     )
+
                     if is_language or is_standalone:
                         for ext in obj.EXTENSIONS:
                             self.register(ext, obj)
@@ -257,7 +321,9 @@ class HighlighterRegistry:
             module_name = f"plugins.features.{filename[:-3]}"
 
             try:
-                spec = importlib.util.spec_from_file_location(module_name, module_path)
+                spec = importlib.util.spec_from_file_location(
+                    module_name, module_path
+                )
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
 
@@ -273,6 +339,14 @@ class HighlighterRegistry:
 
             except Exception as e:
                 print(f"Could not load feature plugin '{filename}': {e}")
+
+    def on_theme_changed(self, ui_theme: dict):
+        """
+        Called by apply_theme() when the user switches UI themes.
+        Rebuilds the syntax color palette so code highlighting
+        matches the new theme automatically.
+        """
+        refresh_syntax_theme(ui_theme)
 
     def deactivate_all_features(self):
         """Call on app close to cleanly shut down all feature plugins."""
@@ -290,9 +364,38 @@ class HighlighterRegistry:
 
     @property
     def active_features(self) -> list:
-        """Returns names of all active feature plugins."""
+        """Returns names of all currently active feature plugins."""
         return [p.NAME for p in self._feature_plugins]
 
 
+# ─────────────────────────────────────────────────────────────────────────────
 # Global registry instance
+# ─────────────────────────────────────────────────────────────────────────────
 registry = HighlighterRegistry()
+
+
+# Bootstrap the syntax theme using the default UI theme.
+# This runs once at import time so THEME is populated before any plugin loads.
+# apply_theme() will call refresh_syntax_theme() again with the user's saved
+# theme on startup, and again whenever they switch themes at runtime.
+try:
+    from ui.theme import get_theme as _get_theme
+    THEME.update(build_syntax_theme(_get_theme()))
+except Exception:
+    # Fallback to hardcoded Monokai if theme system isn't available yet
+    # (e.g. during unit testing or early import)
+    THEME.update({
+        'keyword':   create_format('#F92672', 'bold'),
+        'builtin':   create_format('#66D9EF', 'italic'),
+        'string':    create_format('#E6DB74'),
+        'comment':   create_format('#75715E', 'italic'),
+        'number':    create_format('#AE81FF'),
+        'class_def': create_format('#A6E22E', 'bold'),
+        'func_def':  create_format('#A6E22E', 'bold'),
+        'tag':       create_format('#F92672', 'bold'),
+        'attribute': create_format('#A6E22E'),
+        'decorator': create_format('#A6E22E'),
+        'type':      create_format('#66D9EF', 'italic'),
+        'constant':  create_format('#AE81FF'),
+        'operator':  create_format('#FD971F'),
+    })

@@ -4,6 +4,8 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
 from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QRect, pyqtSignal, QTimer
 from PyQt6.QtGui import QKeySequence, QTextCursor, QShortcut, QCursor
 
+from ui.theme import get_theme
+
 
 class ResizeGrip(QWidget):
     def __init__(self, parent=None):
@@ -14,6 +16,12 @@ class ResizeGrip(QWidget):
         self._dragging = False
         self._drag_start_x = 0
         self._drag_start_width = 0
+
+    def _get_theme(self) -> dict:
+        p = self.parent()
+        if p and hasattr(p, 'settings_manager') and p.settings_manager:
+            return get_theme(p.settings_manager.get('theme'))
+        return get_theme()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -36,7 +44,8 @@ class ResizeGrip(QWidget):
             event.accept()
 
     def enterEvent(self, event):
-        self.setStyleSheet("background-color: #0E639C;")
+        t = self._get_theme()
+        self.setStyleSheet(f"background-color: {t['accent']};")
         super().enterEvent(event)
 
     def leaveEvent(self, event):
@@ -78,6 +87,12 @@ class SlidingPanel(QWidget):
         self._setup_ui()
         self._position_collapsed()
 
+    def _get_theme(self) -> dict:
+        theme_name = None
+        if self.settings_manager:
+            theme_name = self.settings_manager.get('theme')
+        return get_theme(theme_name)
+
     def set_panel_width(self, width: int):
         self.PANEL_WIDTH = width
         self.setFixedWidth(width)
@@ -90,11 +105,13 @@ class SlidingPanel(QWidget):
             self.settings_manager.set("panel_width", self.PANEL_WIDTH)
 
     def _setup_ui(self):
-        self.setStyleSheet("""
-            QWidget#slidingPanel {
-                background-color: #252526;
-                border-left: 1px solid #3E3E42;
-            }
+        t = self._get_theme()
+
+        self.setStyleSheet(f"""
+            QWidget#slidingPanel {{
+                background-color: {t['bg1']};
+                border-left: 1px solid {t['border']};
+            }}
         """)
 
         main_layout = QHBoxLayout(self)
@@ -113,7 +130,7 @@ class SlidingPanel(QWidget):
         self.arrow_label = QLabel("❯")
         self.arrow_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.arrow_label.setStyleSheet(
-            "color: #555555; font-size: 11pt; background: transparent;"
+            f"color: {t['fg4']}; font-size: 11pt; background: transparent;"
         )
         self.arrow_label.setMouseTracking(True)
         handle_layout.addStretch()
@@ -127,7 +144,7 @@ class SlidingPanel(QWidget):
         self.content = QWidget(self)
         self.content.setFixedWidth(self.PANEL_WIDTH - self.HANDLE_WIDTH - 5)
         self.content.setMouseTracking(True)
-        self.content.setStyleSheet("background-color: #252526;")
+        self.content.setStyleSheet(f"background-color: {t['bg1']};")
 
         content_layout = QVBoxLayout(self.content)
         content_layout.setContentsMargins(0, 0, 0, 0)
@@ -137,7 +154,8 @@ class SlidingPanel(QWidget):
         tab_bar = QWidget(self.content)
         tab_bar.setFixedHeight(38)
         tab_bar.setStyleSheet(
-            "background-color: #1E1E1E; border-bottom: 1px solid #3E3E42;"
+            f"background-color: {t['bg0_hard']}; "
+            f"border-bottom: 1px solid {t['border']};"
         )
         tab_bar_layout = QHBoxLayout(tab_bar)
         tab_bar_layout.setContentsMargins(8, 0, 8, 0)
@@ -153,22 +171,22 @@ class SlidingPanel(QWidget):
         ]):
             btn = QPushButton(f"{icon}  {name}")
             btn.setCheckable(True)
-            btn.setStyleSheet("""
-                QPushButton {
+            btn.setStyleSheet(f"""
+                QPushButton {{
                     background: transparent;
-                    color: #888888;
+                    color: {t['fg4']};
                     border: none;
                     border-bottom: 2px solid transparent;
                     padding: 6px 12px;
                     font-family: Inter, sans-serif;
                     font-size: 9pt;
                     font-weight: bold;
-                }
-                QPushButton:checked {
-                    color: #FFFFFF;
-                    border-bottom: 2px solid #0E639C;
-                }
-                QPushButton:hover:!checked { color: #CCCCCC; }
+                }}
+                QPushButton:checked {{
+                    color: {t['fg0']};
+                    border-bottom: 2px solid {t['tab_active_bar']};
+                }}
+                QPushButton:hover:!checked {{ color: {t['fg2']}; }}
             """)
             btn.clicked.connect(lambda checked, idx=i: self._switch_tab(idx))
             tab_bar_layout.addWidget(btn)
@@ -180,20 +198,16 @@ class SlidingPanel(QWidget):
         self.pin_btn.setFixedSize(24, 24)
         self.pin_btn.setCheckable(True)
         self.pin_btn.setToolTip("Pin open")
-        self.pin_btn.setStyleSheet("""
-            QPushButton {
+        self.pin_btn.setStyleSheet(f"""
+            QPushButton {{
                 background: transparent;
-                color: #555555;
+                color: {t['fg4']};
                 border: none;
                 font-size: 12pt;
                 padding: 0;
-            }
-            QPushButton:checked {
-                color: #0E639C;
-            }
-            QPushButton:hover {
-                color: #CCCCCC;
-            }
+            }}
+            QPushButton:checked {{ color: {t['accent']}; }}
+            QPushButton:hover {{ color: {t['fg2']}; }}
         """)
         self.pin_btn.toggled.connect(self._on_pin_toggled)
         tab_bar_layout.addWidget(self.pin_btn)
@@ -212,6 +226,8 @@ class SlidingPanel(QWidget):
     # ── Chat panel ────────────────────────────────────────────────
 
     def _build_chat_panel(self):
+        t = self._get_theme()
+
         panel = QWidget(self.content)
         panel.setMouseTracking(True)
         layout = QVBoxLayout(panel)
@@ -221,14 +237,14 @@ class SlidingPanel(QWidget):
         self.chat_history = QTextBrowser(panel)
         self.chat_history.setOpenLinks(False)
         self.chat_history.setMouseTracking(True)
-        self.chat_history.setStyleSheet("""
-            QTextBrowser {
-                background-color: #1E1E1E;
-                color: #D4D4D4;
-                border: 1px solid #3E3E42;
+        self.chat_history.setStyleSheet(f"""
+            QTextBrowser {{
+                background-color: {t['bg0_hard']};
+                color: {t['fg1']};
+                border: 1px solid {t['border']};
                 border-radius: 6px;
                 padding: 8px;
-            }
+            }}
         """)
         layout.addWidget(self.chat_history)
 
@@ -237,27 +253,30 @@ class SlidingPanel(QWidget):
         self.chat_input.setFixedHeight(70)
         self.chat_input.setPlaceholderText("Ask QuillAI... (Ctrl+Enter)")
         self.chat_input.setMouseTracking(True)
-        self.chat_input.setStyleSheet("""
-            QTextEdit {
-                background-color: #2D2D30;
-                color: #FFFFFF;
-                border: 1px solid #3E3E42;
+        self.chat_input.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {t['bg1']};
+                color: {t['fg0']};
+                border: 1px solid {t['border']};
                 border-radius: 6px;
                 padding: 8px;
                 font-family: Inter, sans-serif;
                 font-size: 10pt;
-            }
-            QTextEdit:focus { border: 1px solid #0E639C; }
+            }}
+            QTextEdit:focus {{ border: 1px solid {t['border_focus']}; }}
         """)
 
         send_btn = QPushButton("➤", panel)
         send_btn.setFixedSize(36, 70)
-        send_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #0E639C; color: white;
-                border: none; border-radius: 6px; font-size: 14pt;
-            }
-            QPushButton:hover { background-color: #1177BB; }
+        send_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t['accent']};
+                color: {t['bg0_hard']};
+                border: none;
+                border-radius: 6px;
+                font-size: 14pt;
+            }}
+            QPushButton:hover {{ background-color: {t['yellow']}; }}
         """)
         send_btn.clicked.connect(self._send)
 
@@ -270,7 +289,6 @@ class SlidingPanel(QWidget):
         input_row.addWidget(send_btn)
         layout.addLayout(input_row)
 
-        # THIS was the missing line
         self._stack.addWidget(panel)
 
     # ── Memory panel ──────────────────────────────────────────────
@@ -345,21 +363,20 @@ class SlidingPanel(QWidget):
         if self._animating:
             return
         if self._expanded:
-            # Already open — just make sure arrow is correct
             self.arrow_label.setText("❮")
             return
         self._animating = True
         self._expanded = True
         self.raise_()
         self.arrow_label.setText("❮")
-    
+
         parent = self.parent()
         h = parent.height()
         start = QRect(parent.width() - self.HANDLE_WIDTH, self.y(),
                       self.PANEL_WIDTH, h)
         end = QRect(parent.width() - self.PANEL_WIDTH, self.y(),
                     self.PANEL_WIDTH, h)
-    
+
         self._anim = QPropertyAnimation(self, b"geometry")
         self._anim.setDuration(180)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)

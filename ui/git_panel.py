@@ -9,6 +9,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QDir, QThread
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor
 
 from ui.diff_viewer import DiffViewerDialog
+from ui.theme import get_theme
 from ai.worker import AIWorker
 
 
@@ -23,15 +24,25 @@ class GitDockWidget(QDockWidget):
         self._ai_thread = None
         self._ai_worker = None
 
-        self.folder_icon = self._create_icon("#D4A373", is_folder=True)
-        self.file_icon   = self._create_icon("#A9A9A9", is_folder=False)
-        self.py_icon     = self._create_icon("#4B8BBE", is_folder=False)
-        self.html_icon   = self._create_icon("#E34F26", is_folder=False)
+        t = self._get_theme()
+        self.folder_icon = self._create_icon(t['yellow'],  is_folder=True)
+        self.file_icon   = self._create_icon(t['fg4'],     is_folder=False)
+        self.py_icon     = self._create_icon(t['blue'],    is_folder=False)
+        self.html_icon   = self._create_icon(t['orange'],  is_folder=False)
 
         self.setup_ui()
         self.refresh_status()
 
+    def _get_theme(self) -> dict:
+        """Get current theme — safe to call before parent_window is fully init."""
+        theme_name = None
+        if (self.parent_window and
+                hasattr(self.parent_window, 'settings_manager')):
+            theme_name = self.parent_window.settings_manager.get('theme')
+        return get_theme(theme_name or 'gruvbox_dark')
+
     def _create_icon(self, color, is_folder):
+        t = self._get_theme()
         pixmap = QPixmap(16, 16)
         pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
@@ -45,7 +56,7 @@ class GitDockWidget(QDockWidget):
             painter.setBrush(QColor(color))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(3, 1, 10, 14, 1, 1)
-            painter.setBrush(QColor("#1E1E1E"))
+            painter.setBrush(QColor(t['bg0_hard']))
             painter.drawRect(5, 5, 6, 1)
             painter.drawRect(5, 8, 6, 1)
             painter.drawRect(5, 11, 4, 1)
@@ -53,14 +64,19 @@ class GitDockWidget(QDockWidget):
         return QIcon(pixmap)
 
     def setup_ui(self):
-        self.setStyleSheet("""
-            QDockWidget {
-                color: #CCCCCC;
+        t = self._get_theme()
+
+        self.setStyleSheet(f"""
+            QDockWidget {{
+                color: {t['fg2']};
                 font-family: 'Inter', 'SF Pro Text', 'Segoe UI', sans-serif;
                 font-weight: bold;
                 font-size: 10pt;
-            }
-            QDockWidget::title { background-color: #252526; padding: 6px 10px; }
+            }}
+            QDockWidget::title {{
+                background-color: {t['bg1']};
+                padding: 6px 10px;
+            }}
         """)
 
         container = QWidget()
@@ -69,18 +85,29 @@ class GitDockWidget(QDockWidget):
 
         # Action bar
         btn_layout = QHBoxLayout()
+
         self.refresh_btn = QPushButton("🔄 Refresh")
-        self.refresh_btn.setStyleSheet(
-            "QPushButton { background-color: #3E3E42; color: white; border-radius: 4px; padding: 4px 8px; }"
-            "QPushButton:hover { background-color: #4E4E52; }"
-        )
+        self.refresh_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t['bg2']};
+                color: {t['fg1']};
+                border-radius: 4px;
+                padding: 4px 8px;
+            }}
+            QPushButton:hover {{ background-color: {t['bg3']}; }}
+        """)
         self.refresh_btn.clicked.connect(self.refresh_status)
 
         self.push_btn = QPushButton("↑ Push")
-        self.push_btn.setStyleSheet(
-            "QPushButton { background-color: #3E3E42; color: white; border-radius: 4px; padding: 4px 8px; }"
-            "QPushButton:hover { background-color: #4E4E52; }"
-        )
+        self.push_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t['bg2']};
+                color: {t['fg1']};
+                border-radius: 4px;
+                padding: 4px 8px;
+            }}
+            QPushButton:hover {{ background-color: {t['bg3']}; }}
+        """)
         self.push_btn.clicked.connect(self.push_changes)
 
         btn_layout.addWidget(self.refresh_btn)
@@ -91,26 +118,37 @@ class GitDockWidget(QDockWidget):
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(15)
-        self.tree.setStyleSheet("""
-            QTreeWidget {
-                background-color: #1E1E1E;
-                color: #CCCCCC;
+        self.tree.setStyleSheet(f"""
+            QTreeWidget {{
+                background-color: {t['bg0_hard']};
+                color: {t['fg1']};
                 border: none;
                 font-family: 'Inter', 'SF Pro Text', 'Segoe UI', sans-serif;
                 font-size: 11pt;
-            }
-            QTreeWidget::item { padding: 4px; }
-            QTreeWidget::item:selected { background-color: #37373D; border-radius: 4px; }
-            QTreeWidget::item:hover:!selected { background-color: #2A2D2E; border-radius: 4px; }
-            QTreeWidget::branch { background-color: transparent; }
-            QTreeWidget::indicator:unchecked {
-                border: 1px solid #555; background-color: #1E1E1E;
-                border-radius: 2px; width: 12px; height: 12px;
-            }
-            QTreeWidget::indicator:checked {
-                background-color: #0E639C; border: 1px solid #0E639C;
-                border-radius: 2px; width: 12px; height: 12px;
-            }
+            }}
+            QTreeWidget::item {{ padding: 4px; }}
+            QTreeWidget::item:selected {{
+                background-color: {t['bg2']};
+                color: {t['fg0']};
+                border-radius: 4px;
+            }}
+            QTreeWidget::item:hover:!selected {{
+                background-color: {t['bg1']};
+                border-radius: 4px;
+            }}
+            QTreeWidget::branch {{ background-color: transparent; }}
+            QTreeWidget::indicator:unchecked {{
+                border: 1px solid {t['fg4']};
+                background-color: {t['bg0_hard']};
+                border-radius: 2px;
+                width: 12px; height: 12px;
+            }}
+            QTreeWidget::indicator:checked {{
+                background-color: {t['accent']};
+                border: 1px solid {t['accent']};
+                border-radius: 2px;
+                width: 12px; height: 12px;
+            }}
         """)
         self.tree.itemDoubleClicked.connect(self.on_item_double_clicked)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -119,47 +157,51 @@ class GitDockWidget(QDockWidget):
         # Commit message input
         self.commit_input = QLineEdit()
         self.commit_input.setPlaceholderText("Message (Enter to commit)")
-        self.commit_input.setStyleSheet("""
-            QLineEdit {
-                background-color: #2D2D30;
-                color: #FFFFFF;
-                border: 1px solid #3E3E42;
+        self.commit_input.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {t['bg1']};
+                color: {t['fg1']};
+                border: 1px solid {t['border']};
                 border-radius: 4px;
                 padding: 6px;
                 font-family: 'Inter', 'SF Pro Text', 'Segoe UI', sans-serif;
-            }
+            }}
+            QLineEdit:focus {{ border: 1px solid {t['border_focus']}; }}
         """)
         self.commit_input.returnPressed.connect(self.commit_changes)
 
-        # AI message button + commit button row
+        # AI message + commit buttons
         commit_btn_layout = QHBoxLayout()
         commit_btn_layout.setSpacing(4)
 
         self.ai_msg_btn = QPushButton("✨ AI Message")
-        self.ai_msg_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #8A2BE2;
-                color: white;
+        self.ai_msg_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t['purple']};
+                color: {t['bg0_hard']};
                 border-radius: 4px;
                 padding: 6px 10px;
                 font-weight: bold;
                 font-size: 9pt;
-            }
-            QPushButton:hover { background-color: #9B30FF; }
-            QPushButton:disabled { background-color: #4A1A7A; color: #888888; }
+            }}
+            QPushButton:hover {{ background-color: {t['purple_dim']}; }}
+            QPushButton:disabled {{
+                background-color: {t['bg2']};
+                color: {t['fg4']};
+            }}
         """)
         self.ai_msg_btn.clicked.connect(self.generate_ai_commit_message)
 
         self.commit_btn = QPushButton("✓ Commit Selected")
-        self.commit_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #0E639C;
-                color: white;
+        self.commit_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t['accent']};
+                color: {t['bg0_hard']};
                 border-radius: 4px;
                 padding: 6px;
                 font-weight: bold;
-            }
-            QPushButton:hover { background-color: #1177BB; }
+            }}
+            QPushButton:hover {{ background-color: {t['yellow']}; }}
         """)
         self.commit_btn.clicked.connect(self.commit_changes)
 
@@ -198,14 +240,7 @@ class GitDockWidget(QDockWidget):
             return False, str(e)
 
     def _get_diff_for_ai(self) -> str:
-        """
-        Gets the diff of checked files, or falls back to unstaged
-        diff if nothing is checked. Caps at 6000 chars so we don't
-        blow the context window.
-        """
         CAP = 6000
-
-        # Collect checked files
         checked = []
         it = QTreeWidgetItemIterator(self.tree)
         while it.value():
@@ -216,17 +251,10 @@ class GitDockWidget(QDockWidget):
             it += 1
 
         if checked:
-            # Diff only the checked files against HEAD
-            ok, diff = self.run_git_command(
-                ['git', 'diff', 'HEAD', '--'] + checked
-            )
+            ok, diff = self.run_git_command(['git', 'diff', 'HEAD', '--'] + checked)
             if not ok or not diff.strip():
-                # Try staged diff
-                ok, diff = self.run_git_command(
-                    ['git', 'diff', '--cached', '--'] + checked
-                )
+                ok, diff = self.run_git_command(['git', 'diff', '--cached', '--'] + checked)
         else:
-            # No files checked — diff everything
             ok, diff = self.run_git_command(['git', 'diff', 'HEAD'])
             if not ok or not diff.strip():
                 ok, diff = self.run_git_command(['git', 'diff', '--cached'])
@@ -234,24 +262,22 @@ class GitDockWidget(QDockWidget):
         if not ok or not diff.strip():
             return ""
 
-        # Cap the diff size
         if len(diff) > CAP:
             diff = diff[:CAP] + "\n...(diff truncated)..."
 
         return diff
 
     def generate_ai_commit_message(self):
-        """Generate a commit message using the AI based on the current diff."""
         if not self.parent_window:
             return
-    
+
         if self._ai_thread is not None:
             try:
                 if self._ai_thread.isRunning():
                     return
             except RuntimeError:
                 self._ai_thread = None
-    
+
         diff = self._get_diff_for_ai()
         if not diff:
             QMessageBox.information(
@@ -260,33 +286,33 @@ class GitDockWidget(QDockWidget):
                 "Make sure you have uncommitted changes or check the files you want to commit."
             )
             return
-    
+
         _, log = self.run_git_command(['git', 'log', '--oneline', '-10'])
-    
+
         prompt = f"""Generate a concise git commit message for the following diff.
-    
-    Rules:
-    - Use the imperative mood ("Add feature" not "Added feature")
-    - Keep it under 72 characters — be concise
-    - If you cannot fit it in 72 characters, summarize rather than truncate
-    - Be specific about what changed and why
-    - Do not include bullet points or line breaks — single line only
-    - Do not wrap in quotes
-    - Match the style of the recent commit history if provided
-    
-    Recent commit history (for style reference):
-    {log if log else "No history available"}
-    
-    Diff:
-    {diff}
-    
-    Respond with ONLY the commit message. Nothing else."""
-    
+
+Rules:
+- Use the imperative mood ("Add feature" not "Added feature")
+- Keep it under 72 characters — be concise
+- If you cannot fit it in 72 characters, summarize rather than truncate
+- Be specific about what changed and why
+- Do not include bullet points or line breaks — single line only
+- Do not wrap in quotes
+- Match the style of the recent commit history if provided
+
+Recent commit history (for style reference):
+{log if log else "No history available"}
+
+Diff:
+{diff}
+
+Respond with ONLY the commit message. Nothing else."""
+
         self.ai_msg_btn.setText("✨ Thinking...")
         self.ai_msg_btn.setEnabled(False)
         self.commit_input.clear()
         self.commit_input.setPlaceholderText("Generating commit message...")
-    
+
         thread = QThread()
         worker = AIWorker(
             prompt=prompt,
@@ -298,40 +324,29 @@ class GitDockWidget(QDockWidget):
             api_key=self.parent_window.settings_manager.get_api_key(),
             backend=self.parent_window.settings_manager.get_backend(),
         )
-    
+
         self._ai_thread = thread
         self._ai_worker = worker
         result_buf = []
-    
+
         def on_update(text):
-            # Collect silently — do NOT touch the UI here
             result_buf.append(text)
-    
+
         def on_finished():
             self._ai_thread = None
             self._ai_worker = None
-    
-            raw = ''.join(result_buf).strip()
-    
-            # Strip any quotes the AI might have added
-            raw = raw.strip('"\'`')
-    
-            # Take only the first non-empty line
+
+            raw = ''.join(result_buf).strip().strip('"\'`')
             lines = [l.strip() for l in raw.split('\n') if l.strip()]
             message = lines[0] if lines else ""
-    
-            # Trim to 72 chars if needed
-            if len(message) > 72:
-                message = message[:69] + "..."
-    
+
             self.commit_input.setText(message)
             self.commit_input.setPlaceholderText("Message (Enter to commit)")
             self.ai_msg_btn.setText("✨ AI Message")
             self.ai_msg_btn.setEnabled(True)
             self.commit_input.setFocus()
             self.commit_input.selectAll()
-    
-        # Connect update_ghost to collect tokens silently
+
         worker.chat_update.connect(on_update)
         worker.finished.connect(on_finished)
         worker.finished.connect(thread.quit)
@@ -339,7 +354,7 @@ class GitDockWidget(QDockWidget):
         thread.finished.connect(thread.deleteLater)
         thread.started.connect(worker.run)
         thread.start()
-    
+
         if hasattr(self.parent_window, 'active_threads'):
             self.parent_window.active_threads.append(thread)
             thread.finished.connect(
@@ -348,11 +363,14 @@ class GitDockWidget(QDockWidget):
             )
 
     def refresh_status(self):
+        t = self._get_theme()
         self.tree.clear()
         success, output = self.run_git_command(['git', 'status', '--porcelain', '-u'])
 
         if not success:
-            self.tree.addTopLevelItem(QTreeWidgetItem([f"Not a git repo or git error: {output}"]))
+            self.tree.addTopLevelItem(
+                QTreeWidgetItem([f"Not a git repo or git error: {output}"])
+            )
             return
 
         if not output:
@@ -390,13 +408,14 @@ class GitDockWidget(QDockWidget):
             else:
                 file_item.setIcon(0, self.file_icon)
 
-            color = "#CCCCCC"
+            # Use theme colors for status indicators
+            color = t['fg1']
             if 'M' in status:
-                color = "#FFD700"
+                color = t['yellow']
             elif '?' in status or 'A' in status:
-                color = "#4CAF50"
+                color = t['green']
             elif 'D' in status:
-                color = "#F44336"
+                color = t['red']
 
             file_item.setForeground(0, QColor(color))
             file_item.setData(0, Qt.ItemDataRole.UserRole, file_path)
@@ -407,6 +426,7 @@ class GitDockWidget(QDockWidget):
         self.tree.expandAll()
 
     def show_context_menu(self, position):
+        t = self._get_theme()
         item = self.tree.itemAt(position)
         if not item:
             return
@@ -415,10 +435,17 @@ class GitDockWidget(QDockWidget):
             return
 
         menu = QMenu()
-        menu.setStyleSheet("""
-            QMenu { background-color: #252526; color: #CCCCCC; border: 1px solid #3E3E42; }
-            QMenu::item { padding: 6px 20px; }
-            QMenu::item:selected { background-color: #0E639C; color: white; }
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {t['bg1']};
+                color: {t['fg1']};
+                border: 1px solid {t['border']};
+            }}
+            QMenu::item {{ padding: 6px 20px; }}
+            QMenu::item:selected {{
+                background-color: {t['highlight']};
+                color: {t['fg0']};
+            }}
         """)
         diff_action    = menu.addAction("🔍 View Diff")
         menu.addSeparator()

@@ -3,6 +3,7 @@ import base64
 from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import QApplication
+from ui.theme import get_theme
 
 
 class ChatRenderer:
@@ -18,7 +19,19 @@ class ChatRenderer:
                        .replace("<", "&lt;")
                        .replace(">", "&gt;")
                        .replace("\n", "<br>"))
-
+    
+        t = get_theme(
+            self.settings_manager.get('theme')
+            if hasattr(self, 'settings_manager') else None
+        )
+    
+        # Pull colors out first — can't use dict keys inside f-strings safely
+        bubble_bg  = t['chat_user_bubble']
+        fg1        = t['fg1']
+        fg4        = t['fg4']
+        ai_label   = t['chat_ai_label']
+        bg1        = t['bg1']
+    
         html = (
             f'<table width="100%" cellpadding="0" cellspacing="0" '
             f'style="margin:8px 0;">'
@@ -26,21 +39,21 @@ class ChatRenderer:
             f'<td width="30%"></td>'
             f'<td width="70%" align="right">'
             f'<table cellpadding="0" cellspacing="0" align="right" width="100%">'
-            f'<tr><td style="background-color:#0E639C; '
+            f'<tr><td style="background-color:{bubble_bg}; '
             f'border-radius:18px 18px 4px 18px; '
-            f'padding:10px 14px; color:#FFFFFF; '
+            f'padding:10px 14px; color:{fg1}; '
             f'font-family:Inter,sans-serif; font-size:10pt; '
             f'line-height:1.5;">{escaped}</td></tr>'
             f'<tr><td align="right" style="padding:2px 4px 8px 0; '
-            f'color:#555555; font-size:8pt; '
+            f'color:{fg4}; font-size:8pt; '
             f'font-family:Inter,sans-serif;">You</td></tr>'
             f'</table></td></tr></table>'
-            f'<p style="margin:8px 0 2px 4px; color:#8A2BE2; '
+            f'<p style="margin:8px 0 2px 4px; color:{ai_label}; '
             f'font-size:8pt; font-family:Inter,sans-serif; '
             f'font-weight:bold;">QuillAI</p>'
             f'<p style="margin:0; font-size:1px;">&nbsp;</p>'
         )
-
+    
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
         self.chat_history.insertHtml(html)
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
@@ -136,6 +149,15 @@ class ChatRenderer:
         return text
 
     def _render_markdown_text(self, text: str) -> str:
+        t = get_theme(
+            self.settings_manager.get('theme')
+            if hasattr(self, 'settings_manager') else None
+        )
+        fg1     = t['fg1']
+        blue    = t['blue']
+        border  = t['border']
+        bg1     = t['bg1']
+        
         lines = text.split('\n')
         html_lines = []
         in_ul = False
@@ -156,7 +178,7 @@ class ChatRenderer:
                     in_ul = True
                 content = re.sub(r'^[-*+]\s+', '', stripped)
                 html_lines.append(
-                    f'<li style="color:#D4D4D4; font-family:Hack,JetBrains Mono,'
+                    f'<li style="color:{fg1}; font-family:Hack,JetBrains Mono,'
                     f'monospace; font-size:10pt; line-height:1.8; '
                     f'margin:2px 0;">{self._apply_inline_markdown(content)}</li>'
                 )
@@ -171,7 +193,7 @@ class ChatRenderer:
                     in_ol = True
                 content = re.sub(r'^\d+\.\s+', '', stripped)
                 html_lines.append(
-                    f'<li style="color:#D4D4D4; font-family:Hack,JetBrains Mono,'
+                    f'<li style="color:{fg1}; font-family:Hack,JetBrains Mono,'
                     f'monospace; font-size:10pt; line-height:1.8; '
                     f'margin:2px 0;">{self._apply_inline_markdown(content)}</li>'
                 )
@@ -189,7 +211,7 @@ class ChatRenderer:
                 content = re.sub(r'^#+\s+', '', stripped)
                 sizes = {1: '14pt', 2: '12pt', 3: '11pt'}
                 html_lines.append(
-                    f'<p style="margin:10px 0 4px 0; color:#569CD6; '
+                    f'<p style="margin:10px 0 4px 0; color:{blue}; '
                     f'font-weight:bold; font-family:Hack,JetBrains Mono,monospace; '
                     f'font-size:{sizes.get(level, "11pt")};">'
                     f'{self._apply_inline_markdown(content)}</p>'
@@ -198,7 +220,7 @@ class ChatRenderer:
 
             if re.match(r'^[-*_]{3,}\s*$', stripped):
                 html_lines.append(
-                    '<hr style="border:none; border-top:1px solid #3E3E42; '
+                    '<hr style="border:none; border-top:1px solid {border}; '
                     'margin:8px 0;"/>'
                 )
                 continue
@@ -208,7 +230,7 @@ class ChatRenderer:
                 continue
 
             html_lines.append(
-                f'<p style="margin:2px 0; color:#D4D4D4; '
+                f'<p style="margin:2px 0; color:{fg1}; '
                 f'font-family:Hack,JetBrains Mono,monospace; '
                 f'font-size:10pt; line-height:1.8;">'
                 f'{self._apply_inline_markdown(stripped)}</p>'
@@ -222,39 +244,52 @@ class ChatRenderer:
         return ''.join(html_lines)
 
     def _render_ai_response(self, text: str) -> str:
+        t = get_theme(
+            self.settings_manager.get('theme')
+            if hasattr(self, 'settings_manager') else None
+        )
+    
+        # Pull colors out before f-strings
+        code_header_bg = t['bg1']
+        code_body_bg   = t['bg0_hard']
+        border         = t['border']
+        fg1            = t['fg1']
+        fg4            = t['fg4']
+        blue           = t['blue']
+    
         parts = re.split(r'(```(?:[\w]*)\n.*?```)', text, flags=re.DOTALL)
         html_parts = []
-
+    
         for part in parts:
             if part.startswith('```'):
                 lang_match = re.match(r'```([\w]*)\n?', part)
                 lang = lang_match.group(1).lower() if lang_match else ""
                 code = re.sub(r'^```[\w]*\n?', '', part)
                 code = re.sub(r'\n?```$', '', code)
-
+    
                 highlighted = self._highlight_code_block(code, lang)
                 encoded = base64.b64encode(code.encode('utf-8')).decode('utf-8')
                 lang_label = lang.upper() if lang else "CODE"
-
+    
                 html_parts.append(
                     f'<table width="100%" cellpadding="0" cellspacing="0" '
                     f'style="margin:8px 0;">'
-                    f'<tr><td width="100%" style="background-color:#2A2A2D; '
+                    f'<tr><td width="100%" style="background-color:{code_header_bg}; '
                     f'border-radius:12px 12px 0 0; padding:4px 12px;">'
-                    f'<span style="color:#888888; font-family:Hack,monospace; '
+                    f'<span style="color:{fg4}; font-family:Hack,monospace; '
                     f'font-size:8pt;">{lang_label}</span>'
                     f'&nbsp;&nbsp;'
-                    f'<a href="copy:{encoded}" style="color:#569CD6; '
+                    f'<a href="copy:{encoded}" style="color:{blue}; '
                     f'font-family:Hack,monospace; font-size:8pt; '
                     f'text-decoration:none;">⎘ Copy</a>'
                     f'</td></tr>'
-                    f'<tr><td width="100%" style="background-color:#1A1A1C; '
-                    f'border:1px solid #3E3E42; border-radius:0 0 12px 12px; '
+                    f'<tr><td width="100%" style="background-color:{code_body_bg}; '
+                    f'border:1px solid {border}; border-radius:0 0 12px 12px; '
                     f'padding:12px 16px;">'
                     f'<pre style="margin:0; '
                     f'font-family:Hack,JetBrains Mono,Courier New,monospace; '
                     f'font-size:10pt; line-height:1.8; white-space:pre; '
-                    f'color:#D4D4D4;">{highlighted}</pre>'
+                    f'color:{fg1};">{highlighted}</pre>'
                     f'</td></tr></table>'
                 )
             else:
@@ -264,7 +299,7 @@ class ChatRenderer:
                               .replace("<", "&lt;")
                               .replace(">", "&gt;"))
                 html_parts.append(self._render_markdown_text(escaped))
-
+    
         inner = ''.join(html_parts)
         return (
             f'<table width="100%" cellpadding="0" cellspacing="0" '

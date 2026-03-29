@@ -4,6 +4,8 @@ from PyQt6.QtGui import QTextCursor, QTextCharFormat, QColor, QFont
 from PyQt6.QtCore import Qt
 import difflib
 
+from ui.theme import get_theme
+
 
 class DiffApplyDialog(QDialog):
     def __init__(self, original: str, proposed: str, parent=None):
@@ -11,29 +13,45 @@ class DiffApplyDialog(QDialog):
         self.setWindowTitle("Review AI Changes")
         self.setMinimumSize(900, 500)
         self.accepted_code = None
-        self.setStyleSheet("""
-            QDialog { background-color: #1E1E1E; color: #D4D4D4; }
-            QLabel {
-                color: #888888;
+        self.original = original
+        self.proposed = proposed
+
+        # Get theme from parent window if available
+        theme_name = None
+        if parent and hasattr(parent, 'settings_manager'):
+            theme_name = parent.settings_manager.get('theme')
+        self._t = get_theme(theme_name)
+
+        self._apply_style()
+        self.setup_ui()
+        self.populate()
+
+    def _apply_style(self):
+        t = self._t
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {t['bg0']};
+                color: {t['fg1']};
+            }}
+            QLabel {{
+                color: {t['fg4']};
                 font-family: 'Inter', sans-serif;
                 font-size: 9pt;
                 padding: 4px 8px;
-                background-color: #252526;
-            }
-            QPushButton {
+                background-color: {t['bg1']};
+            }}
+            QPushButton {{
                 border-radius: 4px;
                 padding: 6px 20px;
                 font-weight: bold;
                 font-family: 'Inter', sans-serif;
                 border: none;
-            }
+            }}
         """)
-        self.original = original
-        self.proposed = proposed
-        self.setup_ui()
-        self.populate()
 
     def setup_ui(self):
+        t = self._t
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 12)
         layout.setSpacing(0)
@@ -41,17 +59,20 @@ class DiffApplyDialog(QDialog):
         # Splitter with two panes
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(2)
-        splitter.setStyleSheet("QSplitter::handle { background-color: #3E3E42; }")
+        splitter.setStyleSheet(
+            f"QSplitter::handle {{ background-color: {t['border']}; }}"
+        )
 
         # Left — original
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
+
         left_label = QLabel("  Original")
         left_label.setStyleSheet(
-            "background-color: #3D1A1A; color: #F44336; "
-            "font-weight: bold; font-size: 9pt; padding: 4px 8px;"
+            f"background-color: {t['bg1']}; color: {t['red']}; "
+            f"font-weight: bold; font-size: 9pt; padding: 4px 8px;"
         )
         self.original_view = self._make_view()
         left_layout.addWidget(left_label)
@@ -63,10 +84,11 @@ class DiffApplyDialog(QDialog):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(0)
+
         right_label = QLabel("  AI Rewrite")
         right_label.setStyleSheet(
-            "background-color: #1A3D1A; color: #4CAF50; "
-            "font-weight: bold; font-size: 9pt; padding: 4px 8px;"
+            f"background-color: {t['bg1']}; color: {t['green']}; "
+            f"font-weight: bold; font-size: 9pt; padding: 4px 8px;"
         )
         self.proposed_view = self._make_view()
         right_layout.addWidget(right_label)
@@ -76,7 +98,7 @@ class DiffApplyDialog(QDialog):
         splitter.setSizes([450, 450])
         layout.addWidget(splitter)
 
-        # Sync scrolling between panes
+        # Sync scrolling
         self.original_view.verticalScrollBar().valueChanged.connect(
             self.proposed_view.verticalScrollBar().setValue
         )
@@ -90,21 +112,31 @@ class DiffApplyDialog(QDialog):
 
         hint = QLabel("Review the changes above then accept or discard.")
         hint.setStyleSheet(
-            "color: #555; font-size: 9pt; background: transparent; padding: 0;"
+            f"color: {t['fg4']}; font-size: 9pt; "
+            f"background: transparent; padding: 0;"
         )
 
         discard_btn = QPushButton("✕  Discard")
-        discard_btn.setStyleSheet(
-            "QPushButton { background-color: #3E3E42; color: #CCCCCC; }"
-            "QPushButton:hover { background-color: #F44336; color: white; }"
-        )
+        discard_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t['bg2']};
+                color: {t['fg1']};
+            }}
+            QPushButton:hover {{
+                background-color: {t['red']};
+                color: {t['bg0_hard']};
+            }}
+        """)
         discard_btn.clicked.connect(self.reject)
 
         accept_btn = QPushButton("✓  Accept")
-        accept_btn.setStyleSheet(
-            "QPushButton { background-color: #0E639C; color: white; }"
-            "QPushButton:hover { background-color: #1177BB; }"
-        )
+        accept_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t['accent']};
+                color: {t['bg0_hard']};
+            }}
+            QPushButton:hover {{ background-color: {t['yellow']}; }}
+        """)
         accept_btn.clicked.connect(self._accept)
 
         btn_layout.addWidget(hint)
@@ -114,37 +146,39 @@ class DiffApplyDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def _make_view(self):
+        t = self._t
         view = QTextEdit()
         view.setReadOnly(True)
         view.setFont(QFont("JetBrains Mono", 10))
-        view.setStyleSheet("""
-            QTextEdit {
-                background-color: #1E1E1E;
-                color: #D4D4D4;
+        view.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {t['bg0_hard']};
+                color: {t['fg1']};
                 border: none;
                 padding: 8px;
-            }
+            }}
         """)
         view.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         return view
 
     def populate(self):
+        t = self._t
+
         orig_lines = self.original.splitlines(keepends=True)
         prop_lines = self.proposed.splitlines(keepends=True)
         matcher = difflib.SequenceMatcher(None, orig_lines, prop_lines)
 
-        # Formats
         removed_fmt = QTextCharFormat()
-        removed_fmt.setBackground(QColor("#3D1A1A"))
-        removed_fmt.setForeground(QColor("#F88070"))
+        removed_fmt.setBackground(QColor(t['red_dim']))
+        removed_fmt.setForeground(QColor(t['red']))
 
         added_fmt = QTextCharFormat()
-        added_fmt.setBackground(QColor("#1A3D1A"))
-        added_fmt.setForeground(QColor("#80C880"))
+        added_fmt.setBackground(QColor(t['green_dim']))
+        added_fmt.setForeground(QColor(t['green']))
 
         neutral_fmt = QTextCharFormat()
-        neutral_fmt.setBackground(QColor("#1E1E1E"))
-        neutral_fmt.setForeground(QColor("#D4D4D4"))
+        neutral_fmt.setBackground(QColor(t['bg0_hard']))
+        neutral_fmt.setForeground(QColor(t['fg1']))
 
         orig_cursor = self.original_view.textCursor()
         prop_cursor = self.proposed_view.textCursor()
@@ -162,7 +196,6 @@ class DiffApplyDialog(QDialog):
                 for line in orig_lines[i1:i2]:
                     orig_cursor.setCharFormat(removed_fmt)
                     orig_cursor.insertText(line)
-                # Pad proposed side to keep lines aligned
                 pad = len(orig_lines[i1:i2]) - len(prop_lines[j1:j2])
                 for line in prop_lines[j1:j2]:
                     prop_cursor.setCharFormat(added_fmt)
@@ -175,13 +208,11 @@ class DiffApplyDialog(QDialog):
                 for line in orig_lines[i1:i2]:
                     orig_cursor.setCharFormat(removed_fmt)
                     orig_cursor.insertText(line)
-                # Pad proposed side
                 for _ in orig_lines[i1:i2]:
                     prop_cursor.setCharFormat(neutral_fmt)
                     prop_cursor.insertText("\n")
 
             elif tag == 'insert':
-                # Pad original side
                 for _ in prop_lines[j1:j2]:
                     orig_cursor.setCharFormat(neutral_fmt)
                     orig_cursor.insertText("\n")
@@ -189,7 +220,6 @@ class DiffApplyDialog(QDialog):
                     prop_cursor.setCharFormat(added_fmt)
                     prop_cursor.insertText(line)
 
-        # Scroll both to top
         self.original_view.verticalScrollBar().setValue(0)
         self.proposed_view.verticalScrollBar().setValue(0)
 

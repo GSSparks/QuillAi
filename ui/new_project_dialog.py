@@ -1,97 +1,13 @@
 import os
-import re 
+import re
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                               QLineEdit, QPushButton, QComboBox, QFileDialog,
                               QCheckBox, QMessageBox, QWidget, QGroupBox)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 
+from ui.theme import get_theme
 
-DIALOG_STYLE = """
-    QDialog {
-        background-color: #1E1E1E;
-        color: #CCCCCC;
-    }
-    QLabel {
-        color: #CCCCCC;
-        font-size: 10pt;
-    }
-    QLineEdit {
-        background-color: #2D2D30;
-        color: #FFFFFF;
-        border: 1px solid #3E3E42;
-        border-radius: 4px;
-        padding: 6px 10px;
-        font-size: 10pt;
-    }
-    QLineEdit:focus {
-        border: 1px solid #0E639C;
-    }
-    QComboBox {
-        background-color: #2D2D30;
-        color: #FFFFFF;
-        border: 1px solid #3E3E42;
-        border-radius: 4px;
-        padding: 6px 10px;
-        font-size: 10pt;
-    }
-    QComboBox::drop-down {
-        border: none;
-    }
-    QComboBox QAbstractItemView {
-        background-color: #2D2D30;
-        color: #FFFFFF;
-        selection-background-color: #0E639C;
-        border: 1px solid #3E3E42;
-    }
-    QPushButton {
-        background-color: #0E639C;
-        color: white;
-        border: none;
-        border-radius: 4px;
-        padding: 8px 18px;
-        font-size: 10pt;
-        font-weight: bold;
-    }
-    QPushButton:hover { background-color: #1177BB; }
-    QPushButton:pressed { background-color: #094771; }
-    QPushButton#cancel {
-        background-color: #3E3E42;
-        color: #CCCCCC;
-    }
-    QPushButton#cancel:hover { background-color: #4E4E52; }
-    QCheckBox {
-        color: #CCCCCC;
-        font-size: 10pt;
-        spacing: 8px;
-    }
-    QCheckBox::indicator {
-        width: 16px;
-        height: 16px;
-        border-radius: 3px;
-        border: 1px solid #3E3E42;
-        background-color: #2D2D30;
-    }
-    QCheckBox::indicator:checked {
-        background-color: #0E639C;
-        border-color: #0E639C;
-    }
-    QGroupBox {
-        color: #888888;
-        font-size: 9pt;
-        font-weight: bold;
-        border: 1px solid #3E3E42;
-        border-radius: 4px;
-        margin-top: 8px;
-        padding-top: 8px;
-    }
-    QGroupBox::title {
-        subcontrol-origin: margin;
-        subcontrol-position: top left;
-        padding: 0 6px;
-        left: 10px;
-    }
-"""
 
 PROJECT_TYPES = {
     "Python": {
@@ -161,12 +77,106 @@ class NewProjectDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("New Project")
         self.setFixedSize(520, 420)
-        self.setStyleSheet(DIALOG_STYLE)
         self.result_path = None
         self.result_open_file = None
+
+        # Get theme from parent if available
+        theme_name = None
+        if parent and hasattr(parent, 'settings_manager'):
+            theme_name = parent.settings_manager.get('theme')
+        self._t = get_theme(theme_name)
+
+        self._apply_style()
         self._setup_ui()
 
+    def _apply_style(self):
+        t = self._t
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {t['bg0']};
+                color: {t['fg1']};
+            }}
+            QLabel {{
+                color: {t['fg1']};
+                font-size: 10pt;
+            }}
+            QLineEdit {{
+                background-color: {t['bg1']};
+                color: {t['fg0']};
+                border: 1px solid {t['border']};
+                border-radius: 4px;
+                padding: 6px 10px;
+                font-size: 10pt;
+            }}
+            QLineEdit:focus {{
+                border: 1px solid {t['border_focus']};
+            }}
+            QComboBox {{
+                background-color: {t['bg1']};
+                color: {t['fg0']};
+                border: 1px solid {t['border']};
+                border-radius: 4px;
+                padding: 6px 10px;
+                font-size: 10pt;
+            }}
+            QComboBox::drop-down {{ border: none; }}
+            QComboBox QAbstractItemView {{
+                background-color: {t['bg1']};
+                color: {t['fg0']};
+                selection-background-color: {t['highlight']};
+                border: 1px solid {t['border']};
+            }}
+            QPushButton {{
+                background-color: {t['accent']};
+                color: {t['bg0_hard']};
+                border: none;
+                border-radius: 4px;
+                padding: 8px 18px;
+                font-size: 10pt;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: {t['yellow']}; }}
+            QPushButton:pressed {{ background-color: {t['yellow_dim']}; }}
+            QPushButton#cancel {{
+                background-color: {t['bg2']};
+                color: {t['fg1']};
+            }}
+            QPushButton#cancel:hover {{ background-color: {t['bg3']}; }}
+            QCheckBox {{
+                color: {t['fg1']};
+                font-size: 10pt;
+                spacing: 8px;
+            }}
+            QCheckBox::indicator {{
+                width: 16px;
+                height: 16px;
+                border-radius: 3px;
+                border: 1px solid {t['border']};
+                background-color: {t['bg1']};
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: {t['accent']};
+                border-color: {t['accent']};
+            }}
+            QGroupBox {{
+                color: {t['fg4']};
+                font-size: 9pt;
+                font-weight: bold;
+                border: 1px solid {t['border']};
+                border-radius: 4px;
+                margin-top: 8px;
+                padding-top: 8px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 0 6px;
+                left: 10px;
+            }}
+        """)
+
     def _setup_ui(self):
+        t = self._t
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
@@ -174,27 +184,24 @@ class NewProjectDialog(QDialog):
         # Title
         title = QLabel("New Project")
         title.setFont(QFont("Inter", 14, QFont.Weight.Bold))
-        title.setStyleSheet("color: #FFFFFF; font-size: 14pt;")
+        title.setStyleSheet(f"color: {t['fg0']}; font-size: 14pt;")
         layout.addWidget(title)
 
         # Project name
-        name_label = QLabel("Project name")
-        layout.addWidget(name_label)
+        layout.addWidget(QLabel("Project name"))
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("my_project")
         layout.addWidget(self.name_input)
 
         # Project type
-        type_label = QLabel("Project type")
-        layout.addWidget(type_label)
+        layout.addWidget(QLabel("Project type"))
         self.type_combo = QComboBox()
         for ptype in PROJECT_TYPES:
             self.type_combo.addItem(ptype)
         layout.addWidget(self.type_combo)
 
         # Location
-        loc_label = QLabel("Location")
-        layout.addWidget(loc_label)
+        layout.addWidget(QLabel("Location"))
         loc_layout = QHBoxLayout()
         self.loc_input = QLineEdit()
         self.loc_input.setPlaceholderText(os.path.expanduser("~/projects"))
@@ -220,7 +227,6 @@ class NewProjectDialog(QDialog):
         options_layout.addWidget(self.venv_check)
 
         layout.addWidget(options_group)
-
         layout.addStretch()
 
         # Buttons
@@ -249,7 +255,6 @@ class NewProjectDialog(QDialog):
             QMessageBox.warning(self, "Missing Name", "Please enter a project name.")
             return
 
-        # Sanitize name — no spaces or special chars
         safe_name = re.sub(r'[^\w\-]', '_', name)
         if safe_name != name:
             self.name_input.setText(safe_name)
@@ -270,14 +275,11 @@ class NewProjectDialog(QDialog):
                 self.accept()
             return
 
-        # Create the project
         try:
             ptype = self.type_combo.currentText()
             template = PROJECT_TYPES[ptype]
-
             os.makedirs(project_path, exist_ok=True)
 
-            # Write template files
             for rel_path, content in template["files"].items():
                 rel_path = rel_path.replace("{name}", name)
                 content = content.replace("{name}", name)
@@ -286,32 +288,22 @@ class NewProjectDialog(QDialog):
                 with open(full_path, "w", encoding="utf-8") as f:
                     f.write(content)
 
-            # Git init
             if self.git_check.isChecked():
                 import subprocess
-                subprocess.run(
-                    ["git", "init"],
-                    cwd=project_path,
-                    capture_output=True
-                )
-                # Initial commit
+                subprocess.run(["git", "init"], cwd=project_path, capture_output=True)
                 subprocess.run(["git", "add", "."], cwd=project_path, capture_output=True)
                 subprocess.run(
                     ["git", "commit", "-m", "Initial commit"],
-                    cwd=project_path,
-                    capture_output=True
+                    cwd=project_path, capture_output=True
                 )
 
-            # Virtual environment
             if self.venv_check.isChecked():
                 import subprocess
                 subprocess.run(
                     ["python3", "-m", "venv", ".venv"],
-                    cwd=project_path,
-                    capture_output=True
+                    cwd=project_path, capture_output=True
                 )
 
-            # Determine which file to open first
             open_file = template.get("open", "")
             if open_file:
                 open_file = open_file.replace("{name}", name)
