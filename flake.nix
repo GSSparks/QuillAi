@@ -18,7 +18,7 @@
         desktopName = "QuillAI";
         comment = "A Privacy-First Python IDE";
         exec = "quillai";
-        icon = "accessories-text-editor"; # Standard generic text editor icon
+        icon = "quillai_logo_min";
         terminal = false;
         categories = [ "Development" "IDE" "TextEditor" ];
       };
@@ -55,21 +55,20 @@
         desktopItems = [ quillaiDesktop ];
 
         installPhase = ''
-          # Start the pre-install hooks
           runHook preInstall
-
+        
           mkdir -p $out/bin
           mkdir -p $out/share/quillai
-          
+          mkdir -p $out/share/icons/hicolor/scalable/apps
+        
           cp -r * $out/share/quillai/
-          
-          # Wrap the binary and explicitly inject git, python, and shellcheck into the runtime PATH!
+          cp images/quillai_logo_min.svg $out/share/icons/hicolor/scalable/apps/quillai_logo_min.svg
+        
           makeWrapper ${python.interpreter} $out/bin/quillai \
             --add-flags "$out/share/quillai/main.py" \
             --set PYTHONPATH "$PYTHONPATH:$out/share/quillai" \
             --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.git python pkgs.shellcheck ]}
-
-          # Run the post-install hooks (This is what actually builds the .desktop file!)
+        
           runHook postInstall
         '';
 
