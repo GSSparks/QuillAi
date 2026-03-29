@@ -1901,6 +1901,108 @@ def build_chat_styles(t: dict) -> dict:
     }
 
 
+def build_menu_stylesheet(t: dict) -> str:
+    """Themed QMenu stylesheet — used for the Recent Projects menu and context menus."""
+    return f"""
+        QMenu {{
+            background-color: {t['bg1']};
+            color: {t['fg1']};
+            border: 1px solid {t['border']};
+            font-family: {FONT_UI};
+            font-size: 10pt;
+        }}
+        QMenu::item {{ padding: 6px 24px 6px 12px; }}
+        QMenu::item:selected {{
+            background-color: {t['highlight']};
+            color: {t['fg0']};
+        }}
+        QMenu::item:disabled {{ color: {t['fg4']}; }}
+        QMenu::separator {{
+            height: 1px;
+            background-color: {t['border']};
+            margin: 4px 0;
+        }}
+    """
+
+
+def build_file_dialog_stylesheet(t: dict) -> str:
+    """Stylesheet for QFileDialog when DontUseNativeDialog is set."""
+    return f"""
+        QFileDialog, QMessageBox {{
+            background-color: {t['bg0']};
+            color: {t['fg1']};
+            font-family: {FONT_UI};
+        }}
+        QWidget {{
+            background-color: {t['bg0']};
+            color: {t['fg1']};
+        }}
+        QLineEdit, QTreeView, QListView {{
+            background-color: {t['bg1']};
+            border: 1px solid {t['border']};
+            border-radius: 4px;
+            color: {t['fg1']};
+            padding: 2px;
+        }}
+        QPushButton {{
+            background-color: {t['accent']};
+            color: {t['bg0_hard']};
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-weight: bold;
+        }}
+        QPushButton:hover {{ background-color: {t['yellow']}; }}
+    """
+
+
+def build_find_in_files_parts(t: dict) -> dict:
+    """Per-widget styles and colors for FindInFilesWidget."""
+    return {
+        "search_btn": f"""
+            QPushButton {{
+                background-color: {t['accent']};
+                color: {t['bg0_hard']};
+                border: none; border-radius: 4px;
+                padding: 5px 16px; font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: {t['yellow']}; }}
+        """,
+        "inputs": f"""
+            QLineEdit {{
+                background-color: {t['bg0_hard']};
+                color: {t['fg0']};
+                border: 1px solid {t['border']};
+                border-radius: 4px;
+                padding: 4px 8px;
+            }}
+            QLineEdit:focus {{ border: 1px solid {t['border_focus']}; }}
+        """,
+        "results_tree": f"""
+            QTreeWidget {{
+                background-color: {t['bg0_hard']};
+                color: {t['fg1']};
+                border: 1px solid {t['border']};
+                border-radius: 4px;
+            }}
+            QTreeWidget::item {{ padding: 2px 4px; }}
+            QTreeWidget::item:selected {{
+                background-color: {t['bg2']};
+                color: {t['fg0']};
+            }}
+            QTreeWidget::item:hover:!selected {{
+                background-color: {t['bg1']};
+            }}
+        """,
+        "status_default": f"color: {t['fg4']};",
+        "status_found":   f"color: {t['green']};",
+        "status_empty":   f"color: {t['red']};",
+        # Raw colors for QTreeWidgetItem.setForeground
+        "file_node_fg":   t['blue'],
+        "line_node_fg":   t['fg1'],
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Runtime Theme Application
 # ─────────────────────────────────────────────────────────────────────────────

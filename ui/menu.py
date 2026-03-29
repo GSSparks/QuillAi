@@ -3,70 +3,19 @@ from PyQt6.QtWidgets import QFileDialog, QMessageBox, QMenu
 from PyQt6.QtGui import QAction, QKeySequence
 from editor.highlighter import registry
 
-DIALOG_STYLE = """
-    QFileDialog, QMessageBox { 
-        background-color: #1E1E1E; 
-        color: #CCCCCC; 
-        font-family: 'JetBrains Mono', monospace; 
-    }
-    QWidget { 
-        background-color: #1E1E1E; 
-        color: #CCCCCC; 
-    }
-    QLineEdit, QTreeView, QListView { 
-        background-color: #2D2D30; 
-        border: 1px solid #3E3E42; 
-        border-radius: 4px; 
-        color: white; 
-        padding: 2px; 
-    }
-    QPushButton { 
-        background-color: #0E639C; 
-        color: white; 
-        border: none; 
-        padding: 6px 12px; 
-        border-radius: 4px; 
-    }
-    QPushButton:hover { background-color: #1177BB; }
-"""
+from ui.theme import get_theme, build_menu_stylesheet, build_file_dialog_stylesheet
 
-MENU_STYLE = """
-    QMenu {
-        background-color: #252526;
-        color: #CCCCCC;
-        border: 1px solid #3E3E42;
-        font-family: 'Inter', 'Segoe UI', sans-serif;
-        font-size: 10pt;
-    }
-    QMenu::item {
-        padding: 6px 24px 6px 12px;
-    }
-    QMenu::item:selected {
-        background-color: #0E639C;
-        color: white;
-    }
-    QMenu::item:disabled {
-        color: #555555;
-    }
-    QMenu::separator {
-        height: 1px;
-        background-color: #3E3E42;
-        margin: 4px 0;
-    }
-"""
 
 def _new_project(window):
     from ui.new_project_dialog import NewProjectDialog
     dialog = NewProjectDialog(window)
     if dialog.exec() and dialog.result_path:
         folder_path = dialog.result_path
-        open_file = dialog.result_open_file
+        open_file   = dialog.result_open_file
 
-        # Save current session
         if hasattr(window, '_save_current_session'):
             window._save_current_session()
 
-        # Switch to new project
         window._close_all_tabs_for_switch()
 
         if hasattr(window, 'tree_view') and hasattr(window, 'file_model'):
@@ -86,11 +35,9 @@ def _new_project(window):
             window.update_git_branch()
         if hasattr(window, 'update_status_bar'):
             window.update_status_bar()
-
         if hasattr(window, 'load_project_chat'):
             window.load_project_chat()
 
-        # Open the entry point file
         if open_file and os.path.exists(open_file):
             window.open_file_in_tab(open_file)
         else:
@@ -100,8 +47,8 @@ def _new_project(window):
             f"Project '{os.path.basename(folder_path)}' created.", 4000
         )
 
+
 def _open_recent_project(folder_path, window):
-    """Opens a recent project — same logic as open_folder."""
     if not os.path.isdir(folder_path):
         QMessageBox.warning(window, "Project Not Found",
                             f"The folder no longer exists:\n{folder_path}")
@@ -124,7 +71,7 @@ def _open_recent_project(folder_path, window):
         window.memory_manager.set_project(folder_path)
     if hasattr(window, 'memory_panel'):
         window.memory_panel.refresh()
-        
+
     if hasattr(window, 'memory_manager'):
         window.memory_manager.set_project(folder_path)
     if hasattr(window, 'load_project_chat'):
@@ -140,10 +87,9 @@ def _open_recent_project(folder_path, window):
 
 
 def _populate_recent_projects(menu, window):
-    """Populates the Recent Projects submenu fresh each time it opens."""
     from ui.session_manager import list_project_sessions
     menu.clear()
-    menu.setStyleSheet(MENU_STYLE)
+    menu.setStyleSheet(build_menu_stylesheet(get_theme()))
 
     sessions = list_project_sessions()
 
@@ -153,14 +99,13 @@ def _populate_recent_projects(menu, window):
         menu.addAction(empty_action)
         return
 
-    # Sort by most recently modified session file
     sessions.sort(key=lambda s: os.path.getmtime(s["file"]), reverse=True)
 
     for session in sessions[:10]:
         project_path = session["project_path"]
-        tab_count = session["tab_count"]
-        name = os.path.basename(project_path.rstrip('/'))
-        label = f"{name}  ({tab_count} tab{'s' if tab_count != 1 else ''})"
+        tab_count    = session["tab_count"]
+        name         = os.path.basename(project_path.rstrip('/'))
+        label        = f"{name}  ({tab_count} tab{'s' if tab_count != 1 else ''})"
 
         action = QAction(label, window)
         action.setToolTip(project_path)
@@ -182,7 +127,6 @@ def _populate_recent_projects(menu, window):
 
 def _clear_recent_projects(menu, window):
     from ui.session_manager import list_project_sessions
-
     reply = QMessageBox.question(
         window, "Clear Recent Projects",
         "Remove all recent project history?",
@@ -196,7 +140,7 @@ def _clear_recent_projects(menu, window):
             except Exception:
                 pass
         menu.clear()
-        menu.setStyleSheet(MENU_STYLE)
+        menu.setStyleSheet(build_menu_stylesheet(get_theme()))
         empty = QAction("No recent projects", window)
         empty.setEnabled(False)
         menu.addAction(empty)
@@ -206,53 +150,46 @@ def setup_file_menu(window):
     menu = window.menuBar()
     file_menu = menu.addMenu("File")
 
-    new_file_action = QAction("New File", window)
+    new_file_action    = QAction("New File", window)
     new_project_action = QAction("New Project...", window)
-    new_project_action.setShortcut(QKeySequence("Ctrl+Shift+N"))
-    new_project_action.triggered.connect(lambda: _new_project(window)) 
-    open_action = QAction("Open File...", window)
+    open_action        = QAction("Open File...", window)
     open_folder_action = QAction("Open Folder (Project)...", window)
-    save_action = QAction("Save", window)
-    save_as_action = QAction("Save As...", window)
-    settings_action = QAction("⚙ Settings", window)
+    save_action        = QAction("Save", window)
+    save_as_action     = QAction("Save As...", window)
+    settings_action    = QAction("⚙ Settings", window)
 
     new_file_action.setShortcut(QKeySequence("Ctrl+N"))
+    new_project_action.setShortcut(QKeySequence("Ctrl+Shift+N"))
     open_action.setShortcut(QKeySequence("Ctrl+O"))
     save_action.setShortcut(QKeySequence("Ctrl+S"))
     save_as_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
     settings_action.setShortcut(QKeySequence("Ctrl+,"))
 
-    # Recent Projects submenu
+    new_project_action.triggered.connect(lambda: _new_project(window))
+
+    # Recent Projects submenu — styled on aboutToShow so it tracks theme changes
     recent_menu = QMenu("Recent Projects", window)
-    recent_menu.setStyleSheet(MENU_STYLE)
+    recent_menu.setStyleSheet(build_menu_stylesheet(get_theme()))
     recent_menu.aboutToShow.connect(
         lambda: _populate_recent_projects(recent_menu, window)
     )
 
-    def create_themed_dialog(title, accept_mode, is_folder=False):
-        dialog = QFileDialog(window, title)
-        dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
-        if is_folder:
-            dialog.setFileMode(QFileDialog.FileMode.Directory)
-            dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
-        else:
-            dialog.setAcceptMode(accept_mode)
-        dialog.setStyleSheet(DIALOG_STYLE)
-        return dialog
+    def _dialog_style() -> str:
+        return build_file_dialog_stylesheet(get_theme())
 
     def new_file():
         window.add_new_tab("Untitled", "")
 
     def open_folder():
-        dialog = create_themed_dialog(
-            "Open Project Folder", QFileDialog.AcceptMode.AcceptOpen, is_folder=True
-        )
+        dialog = QFileDialog(window, "Open Project Folder")
+        dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+        dialog.setFileMode(QFileDialog.FileMode.Directory)
+        dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
+        dialog.setStyleSheet(_dialog_style())
         if dialog.exec():
-            selected_files = dialog.selectedFiles()
-            if selected_files:
-                folder_path = selected_files[0]
-                if os.path.isdir(folder_path):
-                    _open_recent_project(folder_path, window)
+            selected = dialog.selectedFiles()
+            if selected and os.path.isdir(selected[0]):
+                _open_recent_project(selected[0], window)
 
     def open_file():
         from PyQt6.QtCore import QDir
@@ -260,12 +197,12 @@ def setup_file_menu(window):
                      if hasattr(window, 'git_dock') and window.git_dock.repo_path
                      else QDir.currentPath())
         dialog = QFileDialog(window, "Open File", start_dir)
-        dialog.setStyleSheet(DIALOG_STYLE)
+        dialog.setStyleSheet(_dialog_style())
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
         if dialog.exec():
-            selected_files = dialog.selectedFiles()
-            if selected_files:
-                window.open_file_in_tab(selected_files[0])
+            selected = dialog.selectedFiles()
+            if selected:
+                window.open_file_in_tab(selected[0])
 
     def save_as_file():
         editor = window.current_editor()
