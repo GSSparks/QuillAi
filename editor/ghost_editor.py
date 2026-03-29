@@ -14,7 +14,13 @@ except ImportError:
     HAS_YAML = False
 
 from ai.worker import AIWorker
-from ui.theme import get_theme
+from ui.theme import (
+    get_theme, theme_signals,
+    build_editor_stylesheet,
+    build_minimap_stylesheet,
+    build_jump_bar_stylesheet,
+    build_color_swatch_stylesheet,
+)
 
 # ==========================================
 # Professional Snippet Manager
@@ -55,34 +61,18 @@ class MinimapArea(QPlainTextEdit):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-        self._apply_style()
         self.editor.verticalScrollBar().valueChanged.connect(self.sync_scroll)
 
         font = QFont("JetBrains Mono, monospace", 4)
         font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         self.setFont(font)
 
-    def _get_theme(self) -> dict:
-        # Walk up to find settings_manager
-        p = self.editor
-        while p:
-            if hasattr(p, 'settings_manager') and p.settings_manager:
-                return get_theme(p.settings_manager.get('theme'))
-            p = p.parent() if hasattr(p, 'parent') else None
-        return get_theme()
+        # Apply initial style and subscribe to theme changes
+        self.apply_styles(get_theme())
+        theme_signals.theme_changed.connect(self.apply_styles)
 
-    def _apply_style(self):
-        t = self._get_theme()
-        self.setStyleSheet(f"""
-            QPlainTextEdit {{
-                background-color: {t['bg0_hard']};
-                color: {t['fg4']};
-                border-left: 1px solid {t['border']};
-                border-right: none;
-                border-top: none;
-                border-bottom: none;
-            }}
-        """)
+    def apply_styles(self, t: dict):
+        self.setStyleSheet(build_minimap_stylesheet(t))
 
     def sync_scroll(self, value):
         e_max = self.editor.verticalScrollBar().maximum()
@@ -115,12 +105,11 @@ class MinimapArea(QPlainTextEdit):
     def paintEvent(self, event):
         super().paintEvent(event)
 
-        t = self._get_theme()
+        t = get_theme()
 
         painter = QPainter(self.viewport())
         painter.setPen(Qt.PenStyle.NoPen)
 
-        # Use a subtle highlight color from the theme
         from PyQt6.QtGui import QColor
         highlight = QColor(t['accent'])
         highlight.setAlpha(20)
@@ -156,17 +145,12 @@ class GhostEditor(QPlainTextEdit):
     def __init__(self, settings_manager=None, intent_tracker=None):
         super().__init__()
         self.settings_manager = settings_manager
-        self._t = get_theme(
-            settings_manager.get('theme') if settings_manager else None
-        )
+        self._t = get_theme()
         self.intent_tracker = intent_tracker
         self._setup_jump_bar()
         self._setup_inline_chat()
 
-        self.setStyleSheet(
-            __import__('ui.theme', fromlist=['build_editor_stylesheet'])
-            .build_editor_stylesheet(self._t)
-        )
+        self.setStyleSheet(build_editor_stylesheet(self._t))
 
         self.file_path = None
         self.ghost_text = ""
@@ -219,7 +203,7 @@ class GhostEditor(QPlainTextEdit):
         self.cursorPositionChanged.connect(self.highlight_current_line)
         self.cursorPositionChanged.connect(self._track_cursor_symbol)
         self.highlight_current_line()
-        
+
         self._setup_color_swatch()
         self._swatch.mousePressEvent = lambda e: (
             self._on_color_swatch_clicked(
@@ -227,22 +211,19 @@ class GhostEditor(QPlainTextEdit):
             ) if self._get_hex_color_at_cursor() else None
         )
         self.cursorPositionChanged.connect(self._update_color_swatch)
- 
-    def _apply_style(self):
-        from ui.theme import get_theme, build_editor_stylesheet
-        theme_name = None
-        if self.settings_manager:
-            theme_name = self.settings_manager.get('theme')
-        t = get_theme(theme_name)
-        self.setStyleSheet(build_editor_stylesheet(t))
-    
-        # Update ghost text color
+
+        # Subscribe to theme changes
+        theme_signals.theme_changed.connect(self._on_theme_changed)
+
+    # ── Theme handling ────────────────────────────────────────────────────
+
+    def _on_theme_changed(self, t: dict):
         self._t = t
-                   
-    def focusOutEvent(self, event):
-        super().focusOutEvent(event)
-        if hasattr(self, '_swatch'):
-            self._swatch.hide()
+        self.setStyleSheet(build_editor_stylesheet(t))
+        self._jump_bar.setStyleSheet(build_jump_bar_stylesheet(t))
+        self.highlight_current_line()
+        self.viewport().update()
+        self.line_number_area.update()
 
     # ── Intent tracking ───────────────────────────────────────────────────
 
@@ -293,43 +274,34 @@ class GhostEditor(QPlainTextEdit):
         describes a function/class to create. Never fires for
         markdown files, shebangs, or casual comments.
         """
-        # Never fire for markdown files
         if self._is_markdown_file():
             return False
 
-        # Only applies to Python files — other languages handled differently
         if self.file_path and not self.file_path.lower().endswith('.py'):
             return False
 
         stripped = line.strip()
 
-        # Must start with # to be a comment
         if not stripped.startswith('#'):
             return False
 
-        # Never fire for shebangs
         if stripped.startswith('#!'):
             return False
 
         comment_text = stripped.lstrip('#').strip().lower()
 
-        # Must have enough words to be meaningful
         if len(comment_text) < 8:
             return False
 
-        # Must contain at least 3 words — single-word comments are notes, not specs
         if len(comment_text.split()) < 3:
             return False
 
-        # Explicit action keywords — user is clearly asking for code generation
         action_keywords = [
             'create', 'make', 'build', 'write', 'generate',
             'implement', 'add a', 'define', 'build a', 'make a',
             'create a', 'write a', 'implement a',
         ]
         if any(kw in comment_text for kw in action_keywords):
-            # Also needs a code concept word to avoid false positives
-            # e.g. "create a note" should NOT trigger
             code_concepts = [
                 'function', 'class', 'method', 'def', 'decorator',
                 'parser', 'handler', 'manager', 'helper', 'util',
@@ -341,11 +313,9 @@ class GhostEditor(QPlainTextEdit):
             if any(concept in comment_text for concept in code_concepts):
                 return True
 
-        # Pattern: explicit "function that/to" phrasing
         if re.search(r'\b(function|class|method)\s+(that|to|for|which)\b', comment_text):
             return True
 
-        # TODO/FIXME with implementation keyword
         if re.match(r'^(todo|fixme|hack)\s*:?\s*', comment_text):
             todo_body = re.sub(r'^(todo|fixme|hack)\s*:?\s*', '', comment_text)
             if any(kw in todo_body for kw in ['implement', 'create', 'add', 'build', 'write']):
@@ -359,17 +329,7 @@ class GhostEditor(QPlainTextEdit):
         from PyQt6.QtWidgets import QLineEdit
         self._jump_bar = QLineEdit(self)
         self._jump_bar.setPlaceholderText("Go to line...")
-        self._jump_bar.setStyleSheet("""
-            QLineEdit {
-                background-color: #252526;
-                color: #FFFFFF;
-                border: none;
-                border-top: 1px solid #0E639C;
-                font-family: 'JetBrains Mono', monospace;
-                font-size: 11pt;
-                padding: 4px 10px;
-            }
-        """)
+        self._jump_bar.setStyleSheet(build_jump_bar_stylesheet(get_theme()))
         self._jump_bar.setFixedHeight(28)
         self._jump_bar.hide()
         self._jump_bar.installEventFilter(self)
@@ -789,7 +749,7 @@ Answer concisely. If you include code, use a single fenced code block."""
         self.current_syntax_error = {'msg': error_msg, 'lineno': line_idx + 1, 'offset': col_offset}
         selection = QTextEdit.ExtraSelection()
         selection.format.setUnderlineStyle(QTextCharFormat.UnderlineStyle.WaveUnderline)
-        selection.format.setUnderlineColor(QColor("#F44336"))
+        selection.format.setUnderlineColor(QColor(self._t['error']))
         cursor = QTextCursor(self.document())
         cursor.setPosition(self.document().findBlockByNumber(line_idx).position())
         cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.MoveAnchor, col_offset)
@@ -854,7 +814,6 @@ Answer concisely. If you include code, use a single fenced code block."""
     def handle_text_changed_for_ai(self):
         self.clear_ghost_text()
 
-        # Never auto-complete in markdown
         if self._is_markdown_file():
             self.ai_suggest_timer.stop()
             return
@@ -873,19 +832,16 @@ Answer concisely. If you include code, use a single fenced code block."""
         prev_block = cursor.block().previous()
         prev_line = prev_block.text().rstrip() if prev_block.isValid() else ""
 
-        # Trigger on entering a block body (after colon)
         just_entered_block = (
             current_line.strip() == ""
             and prev_line.endswith(":")
         )
 
-        # Trigger inside an indented empty line
         inside_indented_empty = (
             current_line == ""
             and prev_line.startswith((" ", "\t"))
         )
 
-        # Only trigger after a comment if it passes the function generation check
         after_generatable_comment = (
             current_line.strip() == ""
             and prev_line.strip().startswith("#")
@@ -899,7 +855,6 @@ Answer concisely. If you include code, use a single fenced code block."""
         self.ai_suggest_timer.start(300)
 
     def request_completion_hotkey(self):
-        # No completions in markdown
         if self._is_markdown_file():
             return
 
@@ -915,7 +870,6 @@ Answer concisely. If you include code, use a single fenced code block."""
         self.trigger_inline_completion()
 
     def trigger_inline_completion(self):
-        # No completions in markdown
         if self._is_markdown_file():
             return
 
@@ -1203,22 +1157,16 @@ Answer concisely. If you include code, use a single fenced code block."""
         cursor = self.replacement_cursor
         cursor.removeSelectedText()
         cursor.insertText(self.function_output)
-        
+
     # ── Color picker ──────────────────────────────────────────────────────
-    
+
     def _setup_color_swatch(self):
         """Small floating swatch that appears near hex colors."""
         self._swatch = QLabel(self.viewport())
         self._swatch.setFixedSize(56, 24)
-        self._swatch.setStyleSheet("""
-            QLabel {
-                border: 1px solid #555555;
-                border-radius: 4px;
-            }
-        """)
         self._swatch.hide()
         self._current_color_range = None
-    
+
     def _get_hex_color_at_cursor(self):
         """
         Checks if the cursor is on or adjacent to a hex color.
@@ -1228,17 +1176,16 @@ Answer concisely. If you include code, use a single fenced code block."""
         block = cursor.block()
         text = block.text()
         pos_in_block = cursor.positionInBlock()
-    
+
         for match in re.finditer(
             r'#([0-9A-Fa-f]{8}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{3})\b', text
         ):
             start = match.start()
             end = match.end()
-            # Include one char either side so cursor can be adjacent
             if start - 1 <= pos_in_block <= end + 1:
                 return match.group(0), block.position() + start, block.position() + end
         return None
-    
+
     def _update_color_swatch(self):
         """Show or hide the swatch based on cursor position."""
         result = self._get_hex_color_at_cursor()
@@ -1246,11 +1193,10 @@ Answer concisely. If you include code, use a single fenced code block."""
             self._swatch.hide()
             self._current_color_range = None
             return
-    
+
         hex_color, start, end = result
         self._current_color_range = (start, end)
-    
-        # Validate the color
+
         try:
             color = QColor(hex_color)
             if not color.isValid():
@@ -1259,51 +1205,34 @@ Answer concisely. If you include code, use a single fenced code block."""
         except Exception:
             self._swatch.hide()
             return
-    
-        # Position swatch just above the cursor
+
         cursor = self.textCursor()
         rect = self.cursorRect(cursor)
-    
-        # Show hex value on swatch, use contrasting text color
+
         brightness = (
             color.red() * 299 +
             color.green() * 587 +
             color.blue() * 114
         ) / 1000
         text_color = "#000000" if brightness > 128 else "#FFFFFF"
-    
-        self._swatch.setStyleSheet(f"""
-            QLabel {{
-                background-color: {hex_color};
-                border: 1px solid #555555;
-                border-radius: 4px;
-                color: {text_color};
-                font-family: 'Hack', monospace;
-                font-size: 8pt;
-                padding: 0 4px;
-            }}
-        """)
+
+        self._swatch.setStyleSheet(build_color_swatch_stylesheet(hex_color, text_color))
         self._swatch.setText(hex_color.upper())
         self._swatch.adjustSize()
         self._swatch.setFixedHeight(20)
-    
-        # Position above the cursor, clamped to viewport
+
         swatch_x = max(0, rect.left() - 4)
         swatch_y = max(0, rect.top() - 26)
-    
-        # Don't go off the right edge
+
         if swatch_x + self._swatch.width() > self.viewport().width():
             swatch_x = self.viewport().width() - self._swatch.width() - 4
-    
+
         self._swatch.move(swatch_x, swatch_y)
         self._swatch.show()
         self._swatch.raise_()
-    
+
     def _on_color_swatch_clicked(self, hex_color: str):
-        """
-        Open a color dialog to pick a new color.
-        Replaces the hex value in the editor on accept.
-        """
+        """Open a color dialog; replace the hex value in the editor on accept."""
         from PyQt6.QtWidgets import QColorDialog
         current = QColor(hex_color)
         new_color = QColorDialog.getColor(
@@ -1313,13 +1242,12 @@ Answer concisely. If you include code, use a single fenced code block."""
         )
         if not new_color.isValid():
             return
-    
-        # Format to match original — 8 char if alpha, 6 otherwise
+
         if new_color.alpha() < 255 or len(hex_color) == 9:
             new_hex = new_color.name(QColor.NameFormat.HexArgb).upper()
         else:
             new_hex = new_color.name().upper()
-    
+
         if self._current_color_range:
             start, end = self._current_color_range
             cursor = self.textCursor()
@@ -1327,6 +1255,11 @@ Answer concisely. If you include code, use a single fenced code block."""
             cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
             cursor.insertText(new_hex)
             self._update_color_swatch()
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        if hasattr(self, '_swatch'):
+            self._swatch.hide()
 
     # ── Key handling ──────────────────────────────────────────────────────
 
@@ -1391,7 +1324,6 @@ Answer concisely. If you include code, use a single fenced code block."""
                 indent += "    "
             if indent:
                 self.textCursor().insertText(indent)
-            # Use smart check before generating
             if self._should_generate_function(previous_line_stripped):
                 self.handle_comment_generate(previous_line_stripped)
             self.clear_ghost_text()
