@@ -24,21 +24,27 @@ mkdir -p "$APPDIR/usr/share/icons/hicolor/scalable/apps"
 
 echo "🖼️ Fixing desktop + icon..."
 
-# Copy desktop file (ensure correct naming)
-if compgen -G "$APPDIR/usr/share/applications/*.desktop" > /dev/null; then
-  cp "$APPDIR/usr/share/applications/"*.desktop \
-     "$APPDIR/usr/share/applications/${APP_ID}.desktop"
-else
+# Safe desktop detection
+shopt -s nullglob
+desktop_files=("$APPDIR/usr/share/applications/"*.desktop)
+shopt -u nullglob
+
+if [ ${#desktop_files[@]} -eq 0 ]; then
   echo "❌ No desktop file found!"
   exit 1
 fi
 
-# Ensure desktop file is correct
-sed -i "s|Exec=.*|Exec=${APP_ID}|g" \
-  "$APPDIR/usr/share/applications/${APP_ID}.desktop"
+DESKTOP_SRC="${desktop_files[0]}"
+DESKTOP_DST="$APPDIR/usr/share/applications/${APP_ID}.desktop"
 
-sed -i "s|Icon=.*|Icon=${APP_ID}|g" \
-  "$APPDIR/usr/share/applications/${APP_ID}.desktop"
+# Copy only if needed
+if [ "$DESKTOP_SRC" != "$DESKTOP_DST" ]; then
+  cp "$DESKTOP_SRC" "$DESKTOP_DST"
+fi
+
+# Fix desktop entries
+sed -i "s|Exec=.*|Exec=${APP_ID}|g" "$DESKTOP_DST"
+sed -i "s|Icon=.*|Icon=${APP_ID}|g" "$DESKTOP_DST"
 
 # Copy icon
 if [ -f "images/quillai_logo_min.svg" ]; then
@@ -74,7 +80,7 @@ echo "⚙️ Building AppImage..."
 
 ./$LINUXDEPLOY \
   --appdir "$APPDIR" \
-  --desktop-file "$APPDIR/usr/share/applications/${APP_ID}.desktop" \
+  --desktop-file "$DESKTOP_DST" \
   --icon-file "$APPDIR/usr/share/icons/hicolor/scalable/apps/${APP_ID}.svg" \
   --plugin qt \
   --output appimage
@@ -83,13 +89,9 @@ echo "🏷️ Renaming output..."
 
 APPIMAGE=$(ls *.AppImage | head -n 1)
 
-if [ -n "${GITHUB_REF_NAME:-}" ]; then
-  VERSION="$GITHUB_REF_NAME"
-else
-  VERSION="local"
-fi
-
+VERSION="${GITHUB_REF_NAME:-local}"
 FINAL_NAME="${APP_NAME}-${VERSION}-x86_64.AppImage"
+
 mv "$APPIMAGE" "$FINAL_NAME"
 
 echo ""
