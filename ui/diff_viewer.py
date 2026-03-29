@@ -3,7 +3,7 @@ from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton, QHBoxL
 from PyQt6.QtGui import QFont, QColor, QTextCharFormat, QTextCursor
 from PyQt6.QtCore import Qt, QDir
 
-from ui.theme import get_theme, build_dialog_stylesheet, theme_signals
+from ui.theme import get_theme, build_dialog_stylesheet, theme_signals, QFONT_CODE
 
 
 class DiffViewerDialog(QDialog):
@@ -40,7 +40,7 @@ class DiffViewerDialog(QDialog):
 
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
-        self.text_edit.setFont(QFont("JetBrains Mono, monospace", 10))
+        self.text_edit.setFont(QFont(QFONT_CODE, 10))
         self.text_edit.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
 
         btn_layout = QHBoxLayout()

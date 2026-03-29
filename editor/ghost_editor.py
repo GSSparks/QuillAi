@@ -20,6 +20,7 @@ from ui.theme import (
     build_minimap_stylesheet,
     build_jump_bar_stylesheet,
     build_color_swatch_stylesheet,
+    QFONT_CODE,
 )
 
 # ==========================================
@@ -63,7 +64,7 @@ class MinimapArea(QPlainTextEdit):
 
         self.editor.verticalScrollBar().valueChanged.connect(self.sync_scroll)
 
-        font = QFont("JetBrains Mono, monospace", 4)
+        font = QFont(QFONT_CODE, 4)
         font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         self.setFont(font)
 
@@ -161,7 +162,7 @@ class GhostEditor(QPlainTextEdit):
         self.function_active = False
         self.function_output = ""
 
-        font = QFont("JetBrains Mono, monospace")
+        font = QFont(QFONT_CODE)
         font.setPointSize(10)
         font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         self.setFont(font)

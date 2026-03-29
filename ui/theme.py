@@ -1795,6 +1795,113 @@ def build_tree_view_stylesheet(t: dict) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Font Constants
+# These are the canonical font stacks used throughout the UI.  Import them
+# anywhere a font string is needed so there is one place to change them.
+# ─────────────────────────────────────────────────────────────────────────────
+
+FONT_UI   = "'Inter', 'SF Pro Text', 'Segoe UI', sans-serif"
+FONT_CODE = "'JetBrains Mono', 'Hack', 'Courier New', monospace"
+
+# QFont family names — used when constructing QFont() objects directly.
+# Qt will fall back to the system monospace / sans-serif if the preferred
+# font is not installed.
+QFONT_CODE = "JetBrains Mono"
+QFONT_UI   = "Inter"
+
+
+def build_chat_styles(t: dict) -> dict:
+    """
+    Returns a dict of pre-built style strings for ChatRenderer.
+    Calling this once per render avoids repeated get_theme() lookups and
+    keeps all colour + font decisions in theme.py.
+
+    Keys
+    ----
+    prose_p        paragraph <p> style (sans-serif body text)
+    prose_li       list item <li> style
+    heading_1/2/3  <p> styles for markdown headings
+    inline_code    <code> style for `backtick` spans
+    code_header    style for the language label bar above a code block
+    code_body      style for the <td> wrapping a <pre> block
+    code_pre       style for the <pre> element itself
+    user_bubble    style for the user message <td>
+    user_label     style for the "You" timestamp label
+    ai_label_p     style for the "QuillAI" label paragraph
+    copy_link      style for the ⎘ Copy anchor
+    lang_label     style for the language name span in the code header
+    hr             style for horizontal rule
+    """
+    return {
+        "prose_p": (
+            f"margin:2px 0; color:{t['fg1']}; "
+            f"font-family:{FONT_UI}; font-size:10pt; line-height:1.8;"
+        ),
+        "prose_li": (
+            f"color:{t['fg1']}; font-family:{FONT_UI}; "
+            f"font-size:10pt; line-height:1.8; margin:2px 0;"
+        ),
+        "ul": "margin:4px 0 4px 16px; padding:0; list-style-type:disc;",
+        "ol": "margin:4px 0 4px 16px; padding:0;",
+        "heading_1": (
+            f"margin:10px 0 4px 0; color:{t['blue']}; font-weight:bold; "
+            f"font-family:{FONT_UI}; font-size:14pt;"
+        ),
+        "heading_2": (
+            f"margin:10px 0 4px 0; color:{t['blue']}; font-weight:bold; "
+            f"font-family:{FONT_UI}; font-size:12pt;"
+        ),
+        "heading_3": (
+            f"margin:10px 0 4px 0; color:{t['blue']}; font-weight:bold; "
+            f"font-family:{FONT_UI}; font-size:11pt;"
+        ),
+        "inline_code": (
+            f"background:{t['bg2']}; color:{t['orange']}; "
+            f"padding:1px 5px; border-radius:3px; "
+            f"font-family:{FONT_CODE}; font-size:9pt;"
+        ),
+        "code_header_td": (
+            f"background-color:{t['bg1']}; "
+            f"border-radius:12px 12px 0 0; padding:4px 12px;"
+        ),
+        "code_body_td": (
+            f"background-color:{t['bg0_hard']}; "
+            f"border:1px solid {t['border']}; "
+            f"border-radius:0 0 12px 12px; padding:12px 16px;"
+        ),
+        "code_pre": (
+            f"margin:0; font-family:{FONT_CODE}; "
+            f"font-size:10pt; line-height:1.8; "
+            f"white-space:pre; color:{t['fg1']};"
+        ),
+        "lang_label": (
+            f"color:{t['fg4']}; font-family:{FONT_CODE}; font-size:8pt;"
+        ),
+        "copy_link": (
+            f"color:{t['blue']}; font-family:{FONT_CODE}; "
+            f"font-size:8pt; text-decoration:none;"
+        ),
+        "user_bubble_td": (
+            f"background-color:{t['chat_user_bubble']}; "
+            f"border-radius:18px 18px 4px 18px; "
+            f"padding:10px 14px; color:{t['fg1']}; "
+            f"font-family:{FONT_UI}; font-size:10pt; line-height:1.5;"
+        ),
+        "user_label": (
+            f"padding:2px 4px 8px 0; color:{t['fg4']}; "
+            f"font-size:8pt; font-family:{FONT_UI};"
+        ),
+        "ai_label_p": (
+            f"margin:8px 0 2px 4px; color:{t['chat_ai_label']}; "
+            f"font-size:8pt; font-family:{FONT_UI}; font-weight:bold;"
+        ),
+        "hr": (
+            f"border:none; border-top:1px solid {t['border']}; margin:8px 0;"
+        ),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Runtime Theme Application
 # ─────────────────────────────────────────────────────────────────────────────
 

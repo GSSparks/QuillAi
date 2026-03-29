@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 
-from ui.theme import get_theme, theme_signals, build_new_project_dialog_stylesheet
+from ui.theme import get_theme, theme_signals, build_new_project_dialog_stylesheet, QFONT_UI
 
 
 PROJECT_TYPES = {
@@ -107,7 +107,7 @@ class NewProjectDialog(QDialog):
 
         # Title
         self._title_label = QLabel("New Project")
-        self._title_label.setFont(QFont("Inter, sans-serif", 14, QFont.Weight.Bold))
+        self._title_label.setFont(QFont(QFONT_UI, 14, QFont.Weight.Bold))
         layout.addWidget(self._title_label)
 
         # Project name

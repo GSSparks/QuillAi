@@ -6,7 +6,8 @@ from PyQt6.QtCore import Qt
 
 from ui.theme import (get_theme, theme_signals,
                       build_diff_apply_dialog_stylesheet,
-                      build_diff_apply_parts)
+                      build_diff_apply_parts,
+                      QFONT_CODE)
 
 
 class DiffApplyDialog(QDialog):
@@ -112,7 +113,7 @@ class DiffApplyDialog(QDialog):
     def _make_view() -> QTextEdit:
         view = QTextEdit()
         view.setReadOnly(True)
-        view.setFont(QFont("JetBrains Mono, monospace", 10))
+        view.setFont(QFont(QFONT_CODE, 10))
         view.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         return view
 

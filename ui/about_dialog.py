@@ -7,7 +7,8 @@ from PyQt6.QtGui import QFont, QDesktopServices
 
 from ui.theme import (get_theme, theme_signals,
                       build_about_dialog_stylesheet,
-                      build_about_dialog_parts)
+                      build_about_dialog_parts,
+                      QFONT_UI)
 
 
 def _get_dependency_versions() -> list:
@@ -103,7 +104,7 @@ class AboutDialog(QDialog):
 
         self._name_label = QLabel("QuillAI")
         self._name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._name_label.setFont(QFont("Inter, sans-serif", 20, QFont.Weight.Bold))
+        self._name_label.setFont(QFont(QFONT_UI, 20, QFont.Weight.Bold))
         header_layout.addWidget(self._name_label)
 
         self._version_label = QLabel("v0.1.0  ·  MIT License")
