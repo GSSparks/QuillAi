@@ -4,9 +4,9 @@
 
 # QuillAI
 
-
-
-
+<p align="center">
+  <img src="./images/Screenshot.png" width="900" alt="QuillAI editor showing find/replace, minimap, git panel, and find in files"/>
+</p>
 
 **A privacy-first, AI-powered code editor built for developers who want AI assistance without sending their code to the cloud.**
 
