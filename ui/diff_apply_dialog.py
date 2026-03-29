@@ -16,7 +16,6 @@ class DiffApplyDialog(QDialog):
         self.original = original
         self.proposed = proposed
 
-        # Get theme from parent window if available
         theme_name = None
         if parent and hasattr(parent, 'settings_manager'):
             theme_name = parent.settings_manager.get('theme')
@@ -56,7 +55,6 @@ class DiffApplyDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 12)
         layout.setSpacing(0)
 
-        # Splitter with two panes
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(2)
         splitter.setStyleSheet(
@@ -71,8 +69,7 @@ class DiffApplyDialog(QDialog):
 
         left_label = QLabel("  Original")
         left_label.setStyleSheet(
-            f"background-color: {t['bg1']}; color: {t['red']}; "
-            f"font-weight: bold; font-size: 9pt; padding: 4px 8px;"
+            f"background-color: {t['bg1']}; color: {t['red']}; font-weight: bold;"
         )
         self.original_view = self._make_view()
         left_layout.addWidget(left_label)
@@ -87,8 +84,7 @@ class DiffApplyDialog(QDialog):
 
         right_label = QLabel("  AI Rewrite")
         right_label.setStyleSheet(
-            f"background-color: {t['bg1']}; color: {t['green']}; "
-            f"font-weight: bold; font-size: 9pt; padding: 4px 8px;"
+            f"background-color: {t['bg1']}; color: {t['green']}; font-weight: bold;"
         )
         self.proposed_view = self._make_view()
         right_layout.addWidget(right_label)
@@ -112,8 +108,7 @@ class DiffApplyDialog(QDialog):
 
         hint = QLabel("Review the changes above then accept or discard.")
         hint.setStyleSheet(
-            f"color: {t['fg4']}; font-size: 9pt; "
-            f"background: transparent; padding: 0;"
+            f"color: {t['fg4']}; font-size: 9pt; background: transparent;"
         )
 
         discard_btn = QPushButton("✕  Discard")
@@ -168,16 +163,14 @@ class DiffApplyDialog(QDialog):
         prop_lines = self.proposed.splitlines(keepends=True)
         matcher = difflib.SequenceMatcher(None, orig_lines, prop_lines)
 
+        # ✅ TEXT-ONLY FORMATS
         removed_fmt = QTextCharFormat()
-        removed_fmt.setBackground(QColor(t['red_dim']))
         removed_fmt.setForeground(QColor(t['red']))
 
         added_fmt = QTextCharFormat()
-        added_fmt.setBackground(QColor(t['green_dim']))
         added_fmt.setForeground(QColor(t['green']))
 
         neutral_fmt = QTextCharFormat()
-        neutral_fmt.setBackground(QColor(t['bg0_hard']))
         neutral_fmt.setForeground(QColor(t['fg1']))
 
         orig_cursor = self.original_view.textCursor()
@@ -196,10 +189,13 @@ class DiffApplyDialog(QDialog):
                 for line in orig_lines[i1:i2]:
                     orig_cursor.setCharFormat(removed_fmt)
                     orig_cursor.insertText(line)
+
                 pad = len(orig_lines[i1:i2]) - len(prop_lines[j1:j2])
+
                 for line in prop_lines[j1:j2]:
                     prop_cursor.setCharFormat(added_fmt)
                     prop_cursor.insertText(line)
+
                 for _ in range(max(0, pad)):
                     prop_cursor.setCharFormat(neutral_fmt)
                     prop_cursor.insertText("\n")
@@ -208,6 +204,7 @@ class DiffApplyDialog(QDialog):
                 for line in orig_lines[i1:i2]:
                     orig_cursor.setCharFormat(removed_fmt)
                     orig_cursor.insertText(line)
+
                 for _ in orig_lines[i1:i2]:
                     prop_cursor.setCharFormat(neutral_fmt)
                     prop_cursor.insertText("\n")
@@ -216,6 +213,7 @@ class DiffApplyDialog(QDialog):
                 for _ in prop_lines[j1:j2]:
                     orig_cursor.setCharFormat(neutral_fmt)
                     orig_cursor.insertText("\n")
+
                 for line in prop_lines[j1:j2]:
                     prop_cursor.setCharFormat(added_fmt)
                     prop_cursor.insertText(line)
