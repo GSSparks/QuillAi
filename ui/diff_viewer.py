@@ -101,12 +101,11 @@ class DiffViewerDialog(QDialog):
         self.text_edit.clear()
         cursor = self.text_edit.textCursor()
 
+        # --- TEXT-ONLY coloring (no background) ---
         format_add = QTextCharFormat()
-        format_add.setBackground(QColor(t['green_dim']))
         format_add.setForeground(QColor(t['green']))
 
         format_rem = QTextCharFormat()
-        format_rem.setBackground(QColor(t['red_dim']))
         format_rem.setForeground(QColor(t['red']))
 
         format_hunk = QTextCharFormat()
