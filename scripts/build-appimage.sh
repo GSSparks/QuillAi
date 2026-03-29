@@ -22,23 +22,18 @@ mkdir -p "$APPDIR/usr/bin"
 mkdir -p "$APPDIR/usr/share/applications"
 mkdir -p "$APPDIR/usr/share/icons/hicolor/scalable/apps"
 
-echo "🖼️ Fixing desktop + icon..."
+echo "🖼️ Creating desktop file + icon..."
 
-DESKTOP_SRC=$(ls "$APPDIR/usr/share/applications/"*.desktop | head -n 1)
+# Create a fresh, writable desktop file
 DESKTOP_DST="$APPDIR/usr/share/applications/${APP_ID}.desktop"
-
-if [ ! -f "$DESKTOP_SRC" ]; then
-  echo "❌ No desktop file found!"
-  exit 1
-fi
-
-# Copy to writable AppDir path
-cp "$DESKTOP_SRC" "$DESKTOP_DST"
-
-# Fix fields using temp file (avoids sed -i on read-only files)
-tmpfile=$(mktemp)
-sed "s|Exec=.*|Exec=${APP_ID}|g; s|Icon=.*|Icon=${APP_ID}|g" "$DESKTOP_DST" > "$tmpfile"
-mv "$tmpfile" "$DESKTOP_DST"
+cat > "$DESKTOP_DST" <<EOL
+[Desktop Entry]
+Name=$APP_NAME
+Exec=$APP_ID
+Icon=$APP_ID
+Type=Application
+Categories=Development;IDE;TextEditor;
+EOL
 
 # Copy icon
 if [ -f "images/quillai_logo_min.svg" ]; then
@@ -46,7 +41,7 @@ if [ -f "images/quillai_logo_min.svg" ]; then
      "$APPDIR/usr/share/icons/hicolor/scalable/apps/${APP_ID}.svg"
 fi
 
-echo "⬇️ Downloading linuxdeploy (if needed)..."
+echo "⬇️ Downloading linuxdeploy + Qt plugin (if missing)..."
 
 LINUXDEPLOY="linuxdeploy-x86_64.AppImage"
 QT_PLUGIN="linuxdeploy-plugin-qt-x86_64.AppImage"
@@ -62,7 +57,6 @@ if [ ! -f "$QT_PLUGIN" ]; then
 fi
 
 echo "🔍 Locating qmake..."
-
 if ! command -v qmake &> /dev/null; then
   echo "❌ qmake not found. Make sure qt6.qtbase is in your environment."
   exit 1
@@ -71,10 +65,9 @@ fi
 export QMAKE="$(which qmake)"
 
 echo "⚙️ Building AppImage..."
-
 ./$LINUXDEPLOY \
   --appdir "$APPDIR" \
-  --desktop-file "$APPDIR/usr/share/applications/${APP_ID}.desktop" \
+  --desktop-file "$DESKTOP_DST" \
   --icon-file "$APPDIR/usr/share/icons/hicolor/scalable/apps/${APP_ID}.svg" \
   --plugin qt \
   --output appimage
