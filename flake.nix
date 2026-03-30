@@ -35,7 +35,7 @@
 
         nativeBuildInputs = [
           pkgs.qt6.wrapQtAppsHook
-          pkgs.qt6.base
+          pkgs.qt6.qtbase
           pkgs.makeWrapper
           pkgs.copyDesktopItems # Nix hook to automatically install desktop items
           pkgs.inter
