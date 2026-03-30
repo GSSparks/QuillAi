@@ -647,57 +647,77 @@ def build_color_swatch_stylesheet(hex_color: str, text_color: str) -> str:
 
 def build_inline_chat_stylesheet(t: dict) -> dict:
     """
-    Returns a dict of per-widget stylesheet strings for InlineChatWidget.
-    Keeping them separate (rather than one giant sheet) lets the widget
-    call setStyleSheet on each child directly, which is both more precise
-    and avoids selector-specificity fights with the app-level sheet.
-
-    Keys match the widget attribute names in InlineChatWidget.
+    Per-widget stylesheet strings for InlineChatWidget.
+    Unified aesthetic matching the git panel — flat surfaces, subtle borders,
+    bg0_hard inputs, grouped button rows.
+    """
+    # Shared button base used for all footer buttons
+    _footer_btn = f"""
+        QPushButton {{
+            background-color: {t['bg1']};
+            color: {t['fg2']};
+            border: 1px solid {t['border']};
+            border-radius: 4px;
+            padding: 3px 10px;
+            font-family: {FONT_UI};
+            font-size: 9pt;
+        }}
+        QPushButton:hover {{
+            background-color: {t['bg2']};
+            color: {t['fg0']};
+            border-color: {t['border_focus']};
+        }}
     """
     return {
         "panel": f"""
             QWidget#inlineChat {{
                 background-color: {t['bg1']};
-                border: 1px solid {t['accent']};
+                border: 1px solid {t['border']};
                 border-radius: 6px;
             }}
         """,
         "header": (
-            f"background-color: {t['bg0_hard']}; border-radius: 6px 6px 0 0;"
+            f"background-color: {t['bg0_hard']}; "
+            f"border-bottom: 1px solid {t['border']}; "
+            f"border-radius: 6px 6px 0 0;"
         ),
         "title_label": (
-            f"color: {t['aqua']}; font-weight: bold; font-size: 9pt;"
-            f" background: transparent;"
+            f"color: {t['fg2']}; font-weight: bold; font-size: 9pt;"
+            f" font-family: {FONT_UI}; background: transparent;"
         ),
         "context_label": (
-            f"color: {t['fg4']}; font-size: 8pt; background: transparent;"
+            f"color: {t['fg4']}; font-size: 8pt;"
+            f" font-family: {FONT_UI}; background: transparent;"
         ),
         "close_btn": f"""
             QPushButton {{
                 background: transparent; color: {t['fg4']};
                 border: none; font-size: 9pt; padding: 0;
             }}
-            QPushButton:hover {{ color: {t['red']}; }}
+            QPushButton:hover {{ color: {t['fg1']}; }}
         """,
         "input_container": (
-            f"background: {t['bg0_hard']}; border-top: 1px solid {t['border']};"
+            f"background: {t['bg0_hard']};"
         ),
         "input": f"""
             QLineEdit {{
                 background: transparent;
                 border: none;
                 color: {t['fg0']};
-                font-family: 'Inter', 'Segoe UI', sans-serif;
+                font-family: {FONT_UI};
                 font-size: 10pt;
+                padding: 0;
             }}
         """,
         "send_btn": f"""
             QPushButton {{
-                background-color: {t['accent']};
-                color: {t['bg0_hard']};
-                border: none; border-radius: 4px; font-size: 10pt;
+                background-color: transparent;
+                color: {t['fg4']};
+                border: none;
+                font-size: 10pt;
+                padding: 0 4px;
             }}
-            QPushButton:hover {{ background-color: {t['yellow']}; }}
+            QPushButton:hover {{ color: {t['fg0']}; }}
         """,
         "response_area": f"""
             QTextEdit {{
@@ -705,7 +725,7 @@ def build_inline_chat_stylesheet(t: dict) -> dict:
                 color: {t['fg1']};
                 border: none;
                 border-top: 1px solid {t['border']};
-                font-family: 'Inter', 'Segoe UI', sans-serif;
+                font-family: {FONT_UI};
                 font-size: 10pt;
                 padding: 8px;
             }}
@@ -716,30 +736,28 @@ def build_inline_chat_stylesheet(t: dict) -> dict:
         ),
         "insert_btn": f"""
             QPushButton {{
-                background-color: {t['accent']};
-                color: {t['bg0_hard']};
-                border: none; border-radius: 3px;
-                padding: 3px 10px; font-size: 9pt; font-weight: bold;
+                background-color: {t['blue_dim']};
+                color: {t['fg0']};
+                border: 1px solid {t['border']};
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-family: {FONT_UI};
+                font-size: 9pt;
+                font-weight: bold;
             }}
-            QPushButton:hover {{ background-color: {t['yellow']}; }}
+            QPushButton:hover {{ background-color: {t['blue']}; }}
         """,
-        "chat_btn": f"""
-            QPushButton {{
-                background-color: {t['bg2']};
-                color: {t['fg1']};
-                border: none; border-radius: 3px;
-                padding: 3px 10px; font-size: 9pt;
-            }}
-            QPushButton:hover {{ background-color: {t['bg3']}; }}
-        """,
+        "chat_btn":  _footer_btn,
         "clear_btn": f"""
             QPushButton {{
                 background-color: transparent;
                 color: {t['fg4']};
-                border: none; border-radius: 3px;
-                padding: 3px 8px; font-size: 9pt;
+                border: none;
+                padding: 3px 8px;
+                font-family: {FONT_UI};
+                font-size: 9pt;
             }}
-            QPushButton:hover {{ color: {t['red']}; }}
+            QPushButton:hover {{ color: {t['fg2']}; }}
         """,
     }
 
@@ -828,11 +846,9 @@ def build_new_project_dialog_stylesheet(t: dict) -> str:
 
 
 def build_snippet_palette_stylesheet(t: dict) -> str:
-    """Main stylesheet for SnippetPalette — covers the dialog and all standard child widgets."""
+    """Stylesheet for SnippetPalette — unified aesthetic matching git panel."""
     return f"""
-        QDialog {{
-            background-color: transparent;
-        }}
+        QDialog {{ background-color: transparent; }}
         QWidget#snippetFrame {{
             background-color: {t['bg1']};
             border: 1px solid {t['border_focus']};
@@ -846,8 +862,9 @@ def build_snippet_palette_stylesheet(t: dict) -> str:
             border-radius: 8px 8px 0 0;
             padding: 10px 14px;
             font-family: {FONT_UI};
-            font-size: 13pt;
+            font-size: 11pt;
         }}
+        QLineEdit:focus {{ border-bottom: 1px solid {t['border_focus']}; }}
         QListWidget {{
             background-color: {t['bg1']};
             color: {t['fg1']};
@@ -856,17 +873,12 @@ def build_snippet_palette_stylesheet(t: dict) -> str:
             font-family: {FONT_UI};
             font-size: 10pt;
         }}
-        QListWidget::item {{
-            padding: 6px 12px;
-            border-radius: 0;
-        }}
+        QListWidget::item {{ padding: 5px 12px; }}
         QListWidget::item:selected {{
             background-color: {t['bg2']};
             color: {t['fg0']};
         }}
-        QListWidget::item:hover:!selected {{
-            background-color: {t['bg1']};
-        }}
+        QListWidget::item:hover:!selected {{ background-color: {t['bg1']}; }}
         QPlainTextEdit {{
             background-color: {t['bg0_hard']};
             color: {t['fg1']};
@@ -876,53 +888,78 @@ def build_snippet_palette_stylesheet(t: dict) -> str:
             padding: 10px;
         }}
         QPushButton {{
+            background-color: {t['bg1']};
+            color: {t['fg2']};
+            border: 1px solid {t['border']};
             border-radius: 4px;
-            padding: 5px 16px;
+            padding: 4px 14px;
             font-family: {FONT_UI};
-            font-weight: bold;
-            font-size: 10pt;
-            border: none;
+            font-size: 9pt;
+        }}
+        QPushButton:hover {{
+            background-color: {t['bg2']};
+            color: {t['fg0']};
+            border-color: {t['border_focus']};
         }}
         QLabel {{
             color: {t['fg4']};
             font-family: {FONT_UI};
             font-size: 9pt;
-            padding: 4px 12px;
         }}
     """
 
 
 def build_snippet_palette_parts(t: dict) -> dict:
-    """
-    Per-widget stylesheet strings for the parts of SnippetPalette that
-    can't be cleanly reached by the main dialog-level sheet.
-    """
+    """Per-widget styles for SnippetPalette children."""
     return {
         "splitter_handle": (
-            f"QSplitter::handle {{ background-color: {t['border']}; }}"
+            f"QSplitter::handle {{ background-color: {t['border']}; width: 1px; }}"
         ),
         "preview_container": f"background-color: {t['bg0_hard']};",
         "preview_header": f"""
             QLabel {{
-                color: {t['fg1']};
+                color: {t['fg2']};
                 background-color: {t['bg1']};
                 border-bottom: 1px solid {t['border']};
-                font-weight: bold;
-                font-size: 10pt;
-                padding: 6px 12px;
+                font-family: {FONT_UI};
+                font-size: 9pt;
+                padding: 5px 12px;
             }}
         """,
         "footer": (
             f"background-color: {t['bg1']}; border-top: 1px solid {t['border']};"
         ),
-        "hint": f"color: {t['fg4']}; font-size: 9pt; padding: 0;",
+        "hint": (
+            f"color: {t['fg4']}; font-family: {FONT_UI}; font-size: 9pt; padding: 0;"
+        ),
         "cancel_btn": f"""
-            QPushButton {{ background-color: {t['bg2']}; color: {t['fg1']}; }}
-            QPushButton:hover {{ background-color: {t['bg3']}; }}
+            QPushButton {{
+                background-color: {t['bg1']};
+                color: {t['fg2']};
+                border: 1px solid {t['border']};
+                border-radius: 4px;
+                padding: 4px 14px;
+                font-family: {FONT_UI};
+                font-size: 9pt;
+            }}
+            QPushButton:hover {{
+                background-color: {t['bg2']};
+                color: {t['fg0']};
+                border-color: {t['border_focus']};
+            }}
         """,
         "insert_btn": f"""
-            QPushButton {{ background-color: {t['accent']}; color: {t['bg0_hard']}; }}
-            QPushButton:hover {{ background-color: {t['yellow']}; }}
+            QPushButton {{
+                background-color: {t['blue_dim']};
+                color: {t['fg0']};
+                border: 1px solid {t['border']};
+                border-radius: 4px;
+                padding: 4px 14px;
+                font-family: {FONT_UI};
+                font-size: 9pt;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: {t['blue']}; }}
         """,
     }
 
@@ -2073,9 +2110,7 @@ def build_find_in_files_parts(t: dict) -> dict:
 def build_command_palette_stylesheet(t: dict) -> str:
     """Outer shell for the command palette dialog."""
     return f"""
-        QDialog {{
-            background-color: transparent;
-        }}
+        QDialog {{ background-color: transparent; }}
         QWidget#paletteFrame {{
             background-color: {t['bg1']};
             border: 1px solid {t['border_focus']};
@@ -2087,10 +2122,11 @@ def build_command_palette_stylesheet(t: dict) -> str:
             border: none;
             border-bottom: 1px solid {t['border']};
             border-radius: 8px 8px 0 0;
-            padding: 12px 16px;
+            padding: 10px 14px;
             font-family: {FONT_UI};
-            font-size: 13pt;
+            font-size: 11pt;
         }}
+        QLineEdit:focus {{ border-bottom: 1px solid {t['border_focus']}; }}
         QListWidget {{
             background-color: {t['bg1']};
             color: {t['fg1']};
@@ -2100,27 +2136,22 @@ def build_command_palette_stylesheet(t: dict) -> str:
             font-family: {FONT_UI};
             font-size: 10pt;
         }}
-        QListWidget::item {{
-            padding: 6px 12px;
-            border-radius: 0;
-        }}
+        QListWidget::item {{ padding: 5px 12px; }}
         QListWidget::item:selected {{
-            background-color: {t['highlight']};
+            background-color: {t['bg2']};
             color: {t['fg0']};
         }}
-        QListWidget::item:hover:!selected {{
-            background-color: {t['bg2']};
-        }}
+        QListWidget::item:hover:!selected {{ background-color: {t['bg2']}; }}
     """
 
 
 def build_command_palette_parts(t: dict) -> dict:
     return {
-        "icon_color":    t['accent'],
-        "hint_color":    t['fg4'],
-        "label_color":   t['fg1'],
-        "selected_bg":   t['highlight'],
-        "selected_fg":   t['fg0'],
+        "icon_color":  t['accent'],
+        "hint_color":  t['fg4'],
+        "label_color": t['fg1'],
+        "selected_bg": t['bg2'],
+        "selected_fg": t['fg0'],
     }
 
 
@@ -2237,57 +2268,6 @@ def build_rename_dialog_stylesheet(t: dict) -> str:
         }}
         QPushButton#cancel:hover {{ background-color: {t['bg3']}; }}
     """
-
-
-def build_command_palette_stylesheet(t: dict) -> str:
-    """Outer shell for the command palette dialog."""
-    return f"""
-        QDialog {{
-            background-color: transparent;
-        }}
-        QWidget#paletteFrame {{
-            background-color: {t['bg1']};
-            border: 1px solid {t['border_focus']};
-            border-radius: 8px;
-        }}
-        QLineEdit {{
-            background-color: {t['bg0_hard']};
-            color: {t['fg0']};
-            border: none;
-            border-bottom: 1px solid {t['border']};
-            border-radius: 8px 8px 0 0;
-            padding: 12px 16px;
-            font-family: {FONT_UI};
-            font-size: 13pt;
-        }}
-        QListWidget {{
-            background-color: {t['bg1']};
-            color: {t['fg1']};
-            border: none;
-            border-radius: 0 0 8px 8px;
-            outline: none;
-            font-family: {FONT_UI};
-            font-size: 10pt;
-        }}
-        QListWidget::item {{ padding: 6px 12px; border-radius: 0; }}
-        QListWidget::item:selected {{
-            background-color: {t['highlight']};
-            color: {t['fg0']};
-        }}
-        QListWidget::item:hover:!selected {{
-            background-color: {t['bg2']};
-        }}
-    """
-
-
-def build_command_palette_parts(t: dict) -> dict:
-    return {
-        "icon_color":  t['accent'],
-        "hint_color":  t['fg4'],
-        "label_color": t['fg1'],
-        "selected_bg": t['highlight'],
-        "selected_fg": t['fg0'],
-    }
 
 
 def build_terminal_stylesheet(t: dict) -> str:

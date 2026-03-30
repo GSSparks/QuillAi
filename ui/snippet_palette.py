@@ -8,7 +8,8 @@ from PyQt6.QtGui import QColor, QKeySequence, QShortcut
 
 from ui.theme import (get_theme, theme_signals,
                       build_snippet_palette_stylesheet,
-                      build_snippet_palette_parts)
+                      build_snippet_palette_parts,
+                      FONT_UI, FONT_CODE)
 
 
 CATEGORY_COLORS = {
@@ -61,7 +62,8 @@ class SnippetPalette(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Insert Snippet")
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
-        self.resize(640, 380)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.resize(660, 400)
         self.snippets = self._load_snippets()
         self.filtered = list(self.snippets)
 
@@ -75,12 +77,11 @@ class SnippetPalette(QDialog):
 
         theme_signals.theme_changed.connect(self._on_theme_changed)
 
-    # ── Theme handling ────────────────────────────────────────────────────
+    # ── Theme ─────────────────────────────────────────────────────────────
 
     def _on_theme_changed(self, t: dict):
         self._t = t
         self._apply_styles(t)
-        # Re-populate so list item foreground colors update
         self._populate(self.filtered)
 
     def _apply_styles(self, t: dict):
@@ -98,18 +99,29 @@ class SnippetPalette(QDialog):
 
     def _setup_ui(self):
         t = self._t
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+
+        # Transparent dialog shell — all chrome lives inside _frame
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self._frame = QWidget()
+        self._frame.setObjectName("snippetFrame")
+        self._frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        outer.addWidget(self._frame)
+
+        layout = QVBoxLayout(self._frame)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
 
         # Search bar
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search snippets...")
+        self.search_input.setPlaceholderText("Search snippets…")
         self.search_input.textChanged.connect(self._on_search)
         self.search_input.installEventFilter(self)
         layout.addWidget(self.search_input)
 
-        # Splitter: list + preview
+        # Splitter: list | preview
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
         self._splitter.setHandleWidth(1)
 
@@ -131,7 +143,7 @@ class SnippetPalette(QDialog):
         preview_layout.addWidget(self.preview_header)
         preview_layout.addWidget(self.preview_edit)
         self._splitter.addWidget(self._preview_container)
-        self._splitter.setSizes([220, 420])
+        self._splitter.setSizes([220, 440])
 
         layout.addWidget(self._splitter)
 
@@ -139,6 +151,7 @@ class SnippetPalette(QDialog):
         self._footer = QWidget()
         footer_layout = QHBoxLayout(self._footer)
         footer_layout.setContentsMargins(10, 6, 10, 6)
+        footer_layout.setSpacing(6)
 
         self._hint = QLabel("↑↓ navigate · Enter insert · Esc close")
 
@@ -158,7 +171,6 @@ class SnippetPalette(QDialog):
         QShortcut(QKeySequence("Return"), self, activated=self._insert)
         QShortcut(QKeySequence("Escape"), self, activated=self.reject)
 
-        # Apply all styles now that every widget reference exists
         self._apply_styles(t)
 
     # ── Snippet data ──────────────────────────────────────────────────────
@@ -211,10 +223,11 @@ class SnippetPalette(QDialog):
         item = self.list_widget.item(row)
         if not item:
             return
-        data = item.data(Qt.ItemDataRole.UserRole)
+        data  = item.data(Qt.ItemDataRole.UserRole)
         color = CATEGORY_COLORS.get(data["category"], self._t['fg4'])
         self.preview_header.setText(
-            f'{data["name"]}  <span style="color:{color};font-weight:normal;font-size:9pt">'
+            f'{data["name"]}'
+            f'  <span style="color:{color}; font-weight:normal; font-size:8pt;">'
             f'{data["category"]}</span>'
         )
         self.preview_header.setTextFormat(Qt.TextFormat.RichText)

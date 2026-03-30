@@ -225,8 +225,8 @@ class CommandPalette(QDialog):
         outer.addWidget(self._frame)
 
         layout = QVBoxLayout(self._frame)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search files, commands…")

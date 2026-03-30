@@ -4,7 +4,8 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLineEdit,
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QTextCursor
 
-from ui.theme import get_theme, theme_signals, build_inline_chat_stylesheet
+from ui.theme import (get_theme, theme_signals,
+                      build_inline_chat_stylesheet, FONT_UI)
 
 
 class InlineChatWidget(QWidget):
@@ -25,7 +26,7 @@ class InlineChatWidget(QWidget):
 
         theme_signals.theme_changed.connect(self._on_theme_changed)
 
-    # ── Theme handling ────────────────────────────────────────────────────
+    # ── Theme ─────────────────────────────────────────────────────────────
 
     def _on_theme_changed(self, t: dict):
         self._apply_styles(t)
@@ -50,15 +51,17 @@ class InlineChatWidget(QWidget):
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
 
-        # ── Header ────────────────────────────────────────────
+        # ── Header ────────────────────────────────────────────────────────
         self.header = QWidget()
+        self.header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         header_layout = QHBoxLayout(self.header)
-        header_layout.setContentsMargins(10, 6, 8, 6)
+        header_layout.setContentsMargins(10, 5, 8, 5)
+        header_layout.setSpacing(6)
 
-        self.title_label = QLabel("⚡ Inline AI")
+        self.title_label   = QLabel("Inline AI")
         self.context_label = QLabel("")
 
         self.close_btn = QPushButton("✕")
@@ -71,24 +74,26 @@ class InlineChatWidget(QWidget):
         header_layout.addWidget(self.close_btn)
         layout.addWidget(self.header)
 
-        # ── Input ─────────────────────────────────────────────
+        # ── Input row ─────────────────────────────────────────────────────
         self.input_container = QWidget()
+        self.input_container.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         input_layout = QHBoxLayout(self.input_container)
-        input_layout.setContentsMargins(10, 6, 8, 6)
+        input_layout.setContentsMargins(10, 7, 8, 7)
+        input_layout.setSpacing(6)
 
         self.input = QLineEdit()
-        self.input.setPlaceholderText("Ask about this code... (Enter to send, Esc to close)")
+        self.input.setPlaceholderText("Ask about this code…")
         self.input.installEventFilter(self)
 
         self.send_btn = QPushButton("➤")
-        self.send_btn.setFixedSize(24, 24)
+        self.send_btn.setFixedSize(22, 22)
         self.send_btn.clicked.connect(self.send)
 
         input_layout.addWidget(self.input)
         input_layout.addWidget(self.send_btn)
         layout.addWidget(self.input_container)
 
-        # ── Response ──────────────────────────────────────────
+        # ── Response area ─────────────────────────────────────────────────
         self.response_area = QTextEdit()
         self.response_area.setReadOnly(True)
         self.response_area.setMaximumHeight(200)
@@ -96,21 +101,22 @@ class InlineChatWidget(QWidget):
         self.response_area.setVisible(False)
         layout.addWidget(self.response_area)
 
-        # ── Footer ────────────────────────────────────────────
+        # ── Footer ────────────────────────────────────────────────────────
         self.footer = QWidget()
+        self.footer.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.footer.setVisible(False)
         footer_layout = QHBoxLayout(self.footer)
         footer_layout.setContentsMargins(8, 5, 8, 5)
         footer_layout.setSpacing(6)
 
-        self.insert_btn = QPushButton("⚡ Insert Code")
+        self.insert_btn = QPushButton("Insert Code")
         self.insert_btn.setVisible(False)
         self.insert_btn.clicked.connect(self._insert_code)
 
-        self.chat_btn = QPushButton("↗ Open in Chat")
+        self.chat_btn = QPushButton("Open in Chat")
         self.chat_btn.clicked.connect(self._send_to_chat)
 
-        self.clear_btn = QPushButton("✕ Clear")
+        self.clear_btn = QPushButton("Clear")
         self.clear_btn.clicked.connect(self._clear_response)
 
         footer_layout.addWidget(self.insert_btn)
@@ -119,7 +125,6 @@ class InlineChatWidget(QWidget):
         footer_layout.addWidget(self.clear_btn)
         layout.addWidget(self.footer)
 
-        # Apply initial styles
         self._apply_styles(get_theme())
 
     # ── Public API ────────────────────────────────────────────────────────
@@ -127,7 +132,7 @@ class InlineChatWidget(QWidget):
     def set_context(self, line_num, line_text):
         truncated = line_text.strip()[:50]
         if len(line_text.strip()) > 50:
-            truncated += "..."
+            truncated += "…"
         self.context_label.setText(f"line {line_num}  ·  {truncated}")
         self.input.setFocus()
 
