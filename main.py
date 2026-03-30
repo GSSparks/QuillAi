@@ -40,6 +40,10 @@ from ui.session_manager import save_session, load_session
 from ui.session_intent import init_tracker
 from ui.sliding_chat_panel import SlidingPanel
 from ui.markdown_preview import MarkdownPreviewDock
+from ui.command_palette import CommandPalette
+from ui.terminal import TerminalDock
+from ui.command_palette import CommandPalette
+from ui.terminal import TerminalDock
 
 from editor.highlighter import registry
 from ui.git_panel import GitDockWidget
@@ -222,6 +226,18 @@ class CodeEditor(QMainWindow, ChatRenderer):
             os.path.join(_plugins_dir, 'languages')
         )
 
+        # Command palette — Ctrl+P
+        self.command_palette = CommandPalette(self)
+        QShortcut(QKeySequence("Ctrl+P"), self).activated.connect(
+            self.command_palette.show_palette
+        )
+
+        # Terminal — Ctrl+`
+        self.setup_terminal()
+        QShortcut(QKeySequence("Ctrl+`"), self).activated.connect(
+            self.toggle_terminal
+        )
+
         # Single theme-change handler for main-window-owned widgets
         theme_signals.theme_changed.connect(self._apply_theme_to_widgets)
 
@@ -259,12 +275,17 @@ class CodeEditor(QMainWindow, ChatRenderer):
 
         dock_style = build_dock_stylesheet(t)
         for dock in (self.sidebar_dock, self.output_dock,
-                     self.search_dock, self.md_preview_dock):
+                     self.search_dock, self.md_preview_dock,
+                     self.terminal_dock):
             dock.setStyleSheet(dock_style)
 
         # Rebuild file model icons with new palette
         self.file_model._rebuild_icons(t)
         self.tree_view.viewport().update()
+
+        # Terminal
+        if hasattr(self, 'terminal_dock'):
+            self.terminal_dock.apply_styles(t)
 
         # Re-apply syntax highlighting to all open editors
         for i in range(self.tabs.count()):
@@ -672,6 +693,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         index = self.tabs.addTab(editor, name)
         self.tabs.setCurrentIndex(index)
         self._is_loading = False
+
         return editor
 
     def handle_editor_error_help(self, error_msg, code, line_num):
@@ -1168,6 +1190,27 @@ Instructions:
             self.memory_panel
         ))
 
+    def setup_terminal(self):
+        self.terminal_dock = TerminalDock(self)
+        self.addDockWidget(
+            Qt.DockWidgetArea.BottomDockWidgetArea, self.terminal_dock
+        )
+        if hasattr(self, 'output_dock'):
+            self.tabifyDockWidget(self.output_dock, self.terminal_dock)
+        self.terminal_dock.hide()
+
+    def toggle_terminal(self):
+        if self.terminal_dock.isVisible():
+            self.terminal_dock.hide()
+        else:
+            self.terminal_dock.show()
+            self.terminal_dock.raise_()
+            term = self.terminal_dock._terminal
+            if hasattr(term, 'input_line'):
+                term.input_line.setFocus()
+            elif hasattr(term, '_term'):
+                term._term.setFocus()
+
     # ── Runner ────────────────────────────────────────────────────────────
 
     def setup_run_menu(self):
@@ -1182,6 +1225,7 @@ Instructions:
         panels = [
             ("Chat",             lambda: self.chat_panel.switch_to_chat()),
             ("Memory",           lambda: self.chat_panel.switch_to_memory()),
+            ("Terminal",         lambda: self.toggle_terminal()),
             ("Markdown Preview", lambda: (self.md_preview_dock.show(),
                                           self.md_preview_dock.raise_(),
                                           self._refresh_markdown_preview())),

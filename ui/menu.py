@@ -37,6 +37,8 @@ def _new_project(window):
             window.update_status_bar()
         if hasattr(window, 'load_project_chat'):
             window.load_project_chat()
+        if hasattr(window, 'terminal_dock'):
+            window.terminal_dock.set_cwd(folder_path)
 
         if open_file and os.path.exists(open_file):
             window.open_file_in_tab(open_file)
@@ -81,6 +83,8 @@ def _open_recent_project(folder_path, window):
         window.update_git_branch()
     if hasattr(window, 'update_status_bar'):
         window.update_status_bar()
+    if hasattr(window, 'terminal_dock'):
+        window.terminal_dock.set_cwd(folder_path)
 
     if hasattr(window, '_restore_session'):
         window._restore_session(project_path=folder_path)

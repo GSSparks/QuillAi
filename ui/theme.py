@@ -241,261 +241,6 @@ THEMES = {
         "added_line":       "#859900",
         "modified_line":    "#b58900",
     },
-    
-    "one_dark": {
-        "name": "One Dark",
-
-        "bg0_hard":   "#21252b",
-        "bg0":        "#282c34",
-        "bg1":        "#2c313c",
-        "bg2":        "#3a3f4b",
-        "bg3":        "#4b5060",
-        "bg4":        "#5c6370",
-
-        "fg0":        "#ffffff",
-        "fg1":        "#abb2bf",
-        "fg2":        "#828997",
-        "fg3":        "#5c6370",
-        "fg4":        "#3e4452",
-
-        "red":        "#e06c75",
-        "green":      "#98c379",
-        "yellow":     "#e5c07b",
-        "blue":       "#61afef",
-        "purple":     "#c678dd",
-        "aqua":       "#56b6c2",
-        "orange":     "#d19a66",
-
-        "red_dim":    "#be5046",
-        "green_dim":  "#7fba00",
-        "yellow_dim": "#d19a66",
-        "blue_dim":   "#3b8eea",
-        "purple_dim": "#a074c4",
-        "aqua_dim":   "#2aa198",
-        "orange_dim": "#d1843a",
-
-        "accent":           "#61afef",
-        "accent_alt":       "#56b6c2",
-        "highlight":        "#3e4452",
-        "border":           "#2c313c",
-        "border_focus":     "#61afef",
-        "status_bar":       "#21252b",
-        "tab_active_bar":   "#61afef",
-        "scrollbar":        "#3a3f4b",
-        "scrollbar_hover":  "#4b5060",
-        "chat_user_bubble": "#61afef",
-        "chat_ai_label":    "#c678dd",
-        "ghost_text":       "#5c6370",
-        "error":            "#e06c75",
-        "warning":          "#e5c07b",
-        "success":          "#98c379",
-        "added_line":       "#98c379",
-        "modified_line":    "#e5c07b",
-    },
-
-    "dracula": {
-        "name": "Dracula",
-
-        "bg0_hard":   "#282a36",
-        "bg0":        "#44475a",
-        "bg1":        "#373844",
-        "bg2":        "#6272a4",
-        "bg3":        "#6272a4",
-        "bg4":        "#bd93f9",
-
-        "fg0":        "#f8f8f2",
-        "fg1":        "#f8f8f2",
-        "fg2":        "#f1fa8c",
-        "fg3":        "#50fa7b",
-        "fg4":        "#8be9fd",
-
-        "red":        "#ff5555",
-        "green":      "#50fa7b",
-        "yellow":     "#f1fa8c",
-        "blue":       "#6272a4",
-        "purple":     "#bd93f9",
-        "aqua":       "#8be9fd",
-        "orange":     "#ffb86c",
-
-        "red_dim":    "#ff6e6e",
-        "green_dim":  "#69ff94",
-        "yellow_dim": "#ffffa5",
-        "blue_dim":   "#7f8cdb",
-        "purple_dim": "#d6acff",
-        "aqua_dim":   "#9aedfe",
-        "orange_dim": "#ffcb6b",
-
-        "accent":           "#ff79c6",
-        "accent_alt":       "#8be9fd",
-        "highlight":        "#44475a",
-        "border":           "#373844",
-        "border_focus":     "#ff79c6",
-        "status_bar":       "#282a36",
-        "tab_active_bar":   "#ff79c6",
-        "scrollbar":        "#373844",
-        "scrollbar_hover":  "#6272a4",
-        "chat_user_bubble": "#8be9fd",
-        "chat_ai_label":    "#bd93f9",
-        "ghost_text":       "#6272a4",
-        "error":            "#ff5555",
-        "warning":          "#f1fa8c",
-        "success":          "#50fa7b",
-        "added_line":       "#50fa7b",
-        "modified_line":    "#f1fa8c",
-    },
-    
-    "solarized_light": {
-        "name": "Solarized Light",
-
-        "bg0_hard":   "#fdf6e3",
-        "bg0":        "#fdf6e3",
-        "bg1":        "#eee8d5",
-        "bg2":        "#93a1a1",
-        "bg3":        "#839496",
-        "bg4":        "#657b83",
-
-        "fg0":        "#073642",
-        "fg1":        "#586e75",
-        "fg2":        "#657b83",
-        "fg3":        "#839496",
-        "fg4":        "#93a1a1",
-
-        "red":        "#dc322f",
-        "green":      "#859900",
-        "yellow":     "#b58900",
-        "blue":       "#268bd2",
-        "purple":     "#6c71c4",
-        "aqua":       "#2aa198",
-        "orange":     "#cb4b16",
-
-        "red_dim":    "#a32422",
-        "green_dim":  "#647300",
-        "yellow_dim": "#896800",
-        "blue_dim":   "#1a6699",
-        "purple_dim": "#4f5491",
-        "aqua_dim":   "#1f7a72",
-        "orange_dim": "#9a380f",
-
-        "accent":           "#268bd2",
-        "accent_alt":       "#2aa198",
-        "highlight":        "#eee8d5",
-        "border":           "#93a1a1",
-        "border_focus":     "#268bd2",
-        "status_bar":       "#fdf6e3",
-        "tab_active_bar":   "#268bd2",
-        "scrollbar":        "#839496",
-        "scrollbar_hover":  "#657b83",
-        "chat_user_bubble": "#268bd2",
-        "chat_ai_label":    "#6c71c4",
-        "ghost_text":       "#93a1a1",
-        "error":            "#dc322f",
-        "warning":          "#b58900",
-        "success":          "#859900",
-        "added_line":       "#859900",
-        "modified_line":    "#b58900",
-    },
-
-    "nord": {
-        "name": "Nord",
-
-        "bg0_hard":   "#2e3440",
-        "bg0":        "#3b4252",
-        "bg1":        "#434c5e",
-        "bg2":        "#4c566a",
-        "bg3":        "#616e88",
-        "bg4":        "#81a1c1",
-
-        "fg0":        "#eceff4",
-        "fg1":        "#d8dee9",
-        "fg2":        "#e5e9f0",
-        "fg3":        "#8fbcbb",
-        "fg4":        "#88c0d0",
-
-        "red":        "#bf616a",
-        "green":      "#a3be8c",
-        "yellow":     "#ebcb8b",
-        "blue":       "#81a1c1",
-        "purple":     "#b48ead",
-        "aqua":       "#88c0d0",
-        "orange":     "#d08770",
-
-        "red_dim":    "#a54242",
-        "green_dim":  "#8fbcbb",
-        "yellow_dim": "#d7af87",
-        "blue_dim":   "#5e81ac",
-        "purple_dim": "#946ea3",
-        "aqua_dim":   "#5e81ac",
-        "orange_dim": "#b0725a",
-
-        "accent":           "#81a1c1",
-        "accent_alt":       "#88c0d0",
-        "highlight":        "#434c5e",
-        "border":           "#4c566a",
-        "border_focus":     "#81a1c1",
-        "status_bar":       "#2e3440",
-        "tab_active_bar":   "#81a1c1",
-        "scrollbar":        "#434c5e",
-        "scrollbar_hover":  "#616e88",
-        "chat_user_bubble": "#81a1c1",
-        "chat_ai_label":    "#b48ead",
-        "ghost_text":       "#616e88",
-        "error":            "#bf616a",
-        "warning":          "#ebcb8b",
-        "success":          "#a3be8c",
-        "added_line":       "#a3be8c",
-        "modified_line":    "#ebcb8b",
-    },
-
-    "palenight": {
-        "name": "Palenight",
-
-        "bg0_hard":   "#292d3e",
-        "bg0":        "#292d3e",
-        "bg1":        "#323550",
-        "bg2":        "#3f415e",
-        "bg3":        "#5c5f77",
-        "bg4":        "#676c7f",
-
-        "fg0":        "#e6e1cf",
-        "fg1":        "#a6accd",
-        "fg2":        "#bfbfef",
-        "fg3":        "#828bb8",
-        "fg4":        "#5c5f77",
-
-        "red":        "#ff5370",
-        "green":      "#c3e88d",
-        "yellow":     "#ffcb6b",
-        "blue":       "#82aaff",
-        "purple":     "#c792ea",
-        "aqua":       "#89ddff",
-        "orange":     "#f78c6c",
-
-        "red_dim":    "#e53950",
-        "green_dim":  "#8fbcbb",
-        "yellow_dim": "#f2b642",
-        "blue_dim":   "#6b9afc",
-        "purple_dim": "#ab47bc",
-        "aqua_dim":   "#66c2ff",
-        "orange_dim": "#e57373",
-
-        "accent":           "#82aaff",
-        "accent_alt":       "#89ddff",
-        "highlight":        "#3f415e",
-        "border":           "#323550",
-        "border_focus":     "#82aaff",
-        "status_bar":       "#292d3e",
-        "tab_active_bar":   "#82aaff",
-        "scrollbar":        "#3f415e",
-        "scrollbar_hover":  "#5c5f77",
-        "chat_user_bubble": "#82aaff",
-        "chat_ai_label":    "#c792ea",
-        "ghost_text":       "#5c5f77",
-        "error":            "#ff5370",
-        "warning":          "#ffcb6b",
-        "success":          "#c3e88d",
-        "added_line":       "#c3e88d",
-        "modified_line":    "#ffcb6b",
-    },
 }
 
 # Default theme
@@ -1086,8 +831,11 @@ def build_snippet_palette_stylesheet(t: dict) -> str:
     """Main stylesheet for SnippetPalette — covers the dialog and all standard child widgets."""
     return f"""
         QDialog {{
+            background-color: transparent;
+        }}
+        QWidget#snippetFrame {{
             background-color: {t['bg1']};
-            border: 1px solid {t['border']};
+            border: 1px solid {t['border_focus']};
             border-radius: 8px;
         }}
         QLineEdit {{
@@ -1095,9 +843,9 @@ def build_snippet_palette_stylesheet(t: dict) -> str:
             color: {t['fg0']};
             border: none;
             border-bottom: 1px solid {t['border']};
-            border-radius: 0;
+            border-radius: 8px 8px 0 0;
             padding: 10px 14px;
-            font-family: 'Inter', 'Segoe UI', sans-serif;
+            font-family: {FONT_UI};
             font-size: 13pt;
         }}
         QListWidget {{
@@ -1105,7 +853,7 @@ def build_snippet_palette_stylesheet(t: dict) -> str:
             color: {t['fg1']};
             border: none;
             outline: none;
-            font-family: 'Inter', 'Segoe UI', sans-serif;
+            font-family: {FONT_UI};
             font-size: 10pt;
         }}
         QListWidget::item {{
@@ -1123,21 +871,21 @@ def build_snippet_palette_stylesheet(t: dict) -> str:
             background-color: {t['bg0_hard']};
             color: {t['fg1']};
             border: none;
-            font-family: 'JetBrains Mono', 'Hack', monospace;
+            font-family: {FONT_CODE};
             font-size: 10pt;
             padding: 10px;
         }}
         QPushButton {{
             border-radius: 4px;
             padding: 5px 16px;
-            font-family: 'Inter', 'Segoe UI', sans-serif;
+            font-family: {FONT_UI};
             font-weight: bold;
             font-size: 10pt;
             border: none;
         }}
         QLabel {{
             color: {t['fg4']};
-            font-family: 'Inter', 'Segoe UI', sans-serif;
+            font-family: {FONT_UI};
             font-size: 9pt;
             padding: 4px 12px;
         }}
@@ -2256,6 +2004,252 @@ def build_find_in_files_parts(t: dict) -> dict:
         "file_node_fg":   t['blue'],
         "line_node_fg":   t['fg1'],
     }
+
+
+def build_command_palette_stylesheet(t: dict) -> str:
+    """Outer shell for the command palette dialog."""
+    return f"""
+        QDialog {{
+            background-color: transparent;
+        }}
+        QWidget#paletteFrame {{
+            background-color: {t['bg1']};
+            border: 1px solid {t['border_focus']};
+            border-radius: 8px;
+        }}
+        QLineEdit {{
+            background-color: {t['bg0_hard']};
+            color: {t['fg0']};
+            border: none;
+            border-bottom: 1px solid {t['border']};
+            border-radius: 8px 8px 0 0;
+            padding: 12px 16px;
+            font-family: {FONT_UI};
+            font-size: 13pt;
+        }}
+        QListWidget {{
+            background-color: {t['bg1']};
+            color: {t['fg1']};
+            border: none;
+            border-radius: 0 0 8px 8px;
+            outline: none;
+            font-family: {FONT_UI};
+            font-size: 10pt;
+        }}
+        QListWidget::item {{
+            padding: 6px 12px;
+            border-radius: 0;
+        }}
+        QListWidget::item:selected {{
+            background-color: {t['highlight']};
+            color: {t['fg0']};
+        }}
+        QListWidget::item:hover:!selected {{
+            background-color: {t['bg2']};
+        }}
+    """
+
+
+def build_command_palette_parts(t: dict) -> dict:
+    return {
+        "icon_color":    t['accent'],
+        "hint_color":    t['fg4'],
+        "label_color":   t['fg1'],
+        "selected_bg":   t['highlight'],
+        "selected_fg":   t['fg0'],
+    }
+
+
+def build_terminal_stylesheet(t: dict) -> str:
+    """Stylesheet for the terminal dock container and fallback widget."""
+    return f"""
+        QWidget#terminalContainer {{
+            background-color: {t['bg0_hard']};
+        }}
+        QPlainTextEdit {{
+            background-color: {t['bg0_hard']};
+            color: {t['fg1']};
+            font-family: {FONT_CODE};
+            font-size: 10pt;
+            border: none;
+            padding: 4px;
+        }}
+        QLineEdit {{
+            background-color: {t['bg0_hard']};
+            color: {t['fg0']};
+            border: none;
+            border-top: 1px solid {t['border']};
+            font-family: {FONT_CODE};
+            font-size: 10pt;
+            padding: 4px 8px;
+        }}
+    """
+
+
+def build_hover_popup_stylesheet(t: dict) -> str:
+    """Floating hover doc popup shown on Ctrl+hover / cursor pause."""
+    return f"""
+        QWidget#hoverPopup {{
+            background-color: {t['bg1']};
+            border: 1px solid {t['border']};
+            border-radius: 6px;
+        }}
+        QLabel {{
+            color: {t['fg1']};
+            font-family: {FONT_UI};
+            font-size: 10pt;
+            background: transparent;
+            padding: 8px 12px;
+        }}
+        QTextEdit {{
+            background-color: {t['bg1']};
+            color: {t['fg1']};
+            border: none;
+            font-family: {FONT_UI};
+            font-size: 10pt;
+            padding: 8px 12px;
+        }}
+    """
+
+
+def build_completion_popup_stylesheet(t: dict) -> str:
+    """Autocomplete list popup."""
+    return f"""
+        QListWidget {{
+            background-color: {t['bg1']};
+            color: {t['fg1']};
+            border: 1px solid {t['border']};
+            border-radius: 4px;
+            font-family: {FONT_CODE};
+            font-size: 10pt;
+            outline: none;
+        }}
+        QListWidget::item {{ padding: 3px 10px; }}
+        QListWidget::item:selected {{
+            background-color: {t['highlight']};
+            color: {t['fg0']};
+        }}
+        QListWidget::item:hover:!selected {{
+            background-color: {t['bg2']};
+        }}
+    """
+
+
+def build_rename_dialog_stylesheet(t: dict) -> str:
+    """Inline rename symbol dialog."""
+    return f"""
+        QDialog {{
+            background-color: {t['bg1']};
+            border: 1px solid {t['border_focus']};
+            border-radius: 6px;
+        }}
+        QLabel {{
+            color: {t['fg2']};
+            font-family: {FONT_UI};
+            font-size: 9pt;
+            background: transparent;
+            padding: 0 2px;
+        }}
+        QLineEdit {{
+            background-color: {t['bg0_hard']};
+            color: {t['fg0']};
+            border: 1px solid {t['border']};
+            border-radius: 4px;
+            font-family: {FONT_CODE};
+            font-size: 11pt;
+            padding: 6px 10px;
+        }}
+        QLineEdit:focus {{ border: 1px solid {t['border_focus']}; }}
+        QPushButton {{
+            background-color: {t['accent']};
+            color: {t['bg0_hard']};
+            border: none; border-radius: 4px;
+            padding: 6px 16px; font-weight: bold;
+        }}
+        QPushButton:hover {{ background-color: {t['yellow']}; }}
+        QPushButton#cancel {{
+            background-color: {t['bg2']};
+            color: {t['fg1']};
+        }}
+        QPushButton#cancel:hover {{ background-color: {t['bg3']}; }}
+    """
+
+
+def build_command_palette_stylesheet(t: dict) -> str:
+    """Outer shell for the command palette dialog."""
+    return f"""
+        QDialog {{
+            background-color: transparent;
+        }}
+        QWidget#paletteFrame {{
+            background-color: {t['bg1']};
+            border: 1px solid {t['border_focus']};
+            border-radius: 8px;
+        }}
+        QLineEdit {{
+            background-color: {t['bg0_hard']};
+            color: {t['fg0']};
+            border: none;
+            border-bottom: 1px solid {t['border']};
+            border-radius: 8px 8px 0 0;
+            padding: 12px 16px;
+            font-family: {FONT_UI};
+            font-size: 13pt;
+        }}
+        QListWidget {{
+            background-color: {t['bg1']};
+            color: {t['fg1']};
+            border: none;
+            border-radius: 0 0 8px 8px;
+            outline: none;
+            font-family: {FONT_UI};
+            font-size: 10pt;
+        }}
+        QListWidget::item {{ padding: 6px 12px; border-radius: 0; }}
+        QListWidget::item:selected {{
+            background-color: {t['highlight']};
+            color: {t['fg0']};
+        }}
+        QListWidget::item:hover:!selected {{
+            background-color: {t['bg2']};
+        }}
+    """
+
+
+def build_command_palette_parts(t: dict) -> dict:
+    return {
+        "icon_color":  t['accent'],
+        "hint_color":  t['fg4'],
+        "label_color": t['fg1'],
+        "selected_bg": t['highlight'],
+        "selected_fg": t['fg0'],
+    }
+
+
+def build_terminal_stylesheet(t: dict) -> str:
+    """Stylesheet for the terminal dock container and fallback widget."""
+    return f"""
+        QWidget#terminalContainer {{
+            background-color: {t['bg0_hard']};
+        }}
+        QPlainTextEdit {{
+            background-color: {t['bg0_hard']};
+            color: {t['fg1']};
+            font-family: {FONT_CODE};
+            font-size: 10pt;
+            border: none;
+            padding: 4px;
+        }}
+        QLineEdit {{
+            background-color: {t['bg0_hard']};
+            color: {t['fg0']};
+            border: none;
+            border-top: 1px solid {t['border']};
+            font-family: {FONT_CODE};
+            font-size: 10pt;
+            padding: 4px 8px;
+        }}
+    """
 
 
 # ─────────────────────────────────────────────────────────────────────────────
