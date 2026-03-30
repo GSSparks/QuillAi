@@ -15,10 +15,13 @@ echo "🔨 Building Nix package..."
 nix build .#default
 
 echo "📦 Copying Nix result into AppDir (dereferencing symlinks)..."
-# Copy everything except desktop files and icons to avoid permission issues
-rsync -a --exclude='share/applications/*.desktop' \
-          --exclude='share/icons/hicolor/scalable/apps/*.svg' \
-          result/ "$APPDIR/usr/"
+rsync -a --copy-links \
+    --exclude='share/applications/*.desktop' \
+    --exclude='share/icons/hicolor/scalable/apps/*.svg' \
+    result/ "$APPDIR/usr/"
+
+echo "🔓 Fixing permissions (Nix store is read-only)..."
+chmod -R u+w "$APPDIR"
 
 echo "📁 Ensuring AppDir structure..."
 mkdir -p "$APPDIR/usr/bin"
@@ -39,7 +42,7 @@ EOL
 # Copy icon
 if [ -f "images/quillai_logo_min.svg" ]; then
     cp images/quillai_logo_min.svg \
-       "$APPDIR/usr/share/icons/hicolor/scalable/apps/${APP_ID}.svg"
+        "$APPDIR/usr/share/icons/hicolor/scalable/apps/${APP_ID}.svg"
 fi
 
 echo "⬇️ Downloading linuxdeploy (if needed)..."
@@ -72,7 +75,7 @@ echo "⚙️ Building AppImage..."
     --output appimage
 
 echo "🏷️ Renaming output..."
-APPIMAGE=$(ls *.AppImage | head -n 1)
+APPIMAGE=$(ls *.AppImage | grep -v linuxdeploy | head -n 1)
 
 if [ -n "${GITHUB_REF_NAME:-}" ]; then
     VERSION="$GITHUB_REF_NAME"
