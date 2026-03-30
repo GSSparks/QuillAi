@@ -2,6 +2,7 @@ from PyQt6.QtWidgets import QPlainTextEdit, QWidget, QTextEdit, QMenu, QLabel
 from PyQt6.QtGui import QPainter, QColor, QFontMetrics, QTextCursor, QFont, QTextFormat, QAction, QTextCharFormat, QTextBlockFormat, QTextOption, QIcon
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect, QSize, QTimer
 import re
+import os
 import ast
 import difflib
 import subprocess
@@ -191,6 +192,11 @@ class GhostEditor(QPlainTextEdit):
         self.lint_selections = []
         self.bracket_selections = []
         self.current_syntax_error = None
+
+        # Git blame
+        self._blame_data: dict[int, str] = {}   # line_number → "hash Author"
+        self._blame_visible = False
+        self._blame_width   = 0
 
         self.line_number_area = LineNumberArea(self)
 
@@ -752,6 +758,98 @@ Answer concisely. If you include code, use a single fenced code block."""
             self.bracket_selections
         )
 
+    def toggle_blame(self):
+        """Toggle git blame column."""
+        if self._blame_visible:
+            self._blame_visible = False
+            self._blame_width   = 0
+            self._blame_data    = {}
+            self.update_line_number_area_width(0)
+            self.line_number_area.update()
+        else:
+            self._fetch_blame()
+
+    def _fetch_blame(self):
+        """Run git blame on the current file and apply results on the GUI thread."""
+        if not self.file_path or not os.path.exists(self.file_path):
+            print(f"[blame] No file path or file does not exist: {self.file_path!r}")
+            return
+
+        import subprocess, threading
+
+        # Capture self.file_path now — don't reference self from the thread
+        file_path = self.file_path
+        cwd       = os.path.dirname(file_path)
+
+        def run():
+            try:
+                result = subprocess.run(
+                    ['git', 'blame', '--porcelain', file_path],
+                    cwd=cwd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=10,
+                )
+                print(f"[blame] git returned code {result.returncode}")
+                if result.returncode != 0:
+                    print(f"[blame] stderr: {result.stderr[:200]}")
+                    return
+
+                blame:   dict[int, str] = {}
+                authors: dict[str, str] = {}
+                current_hash = ''
+                current_line = 0
+
+                for raw_line in result.stdout.splitlines():
+                    # Porcelain header: exactly 40 hex chars followed by space
+                    # then original-line final-line [num-lines]
+                    if (len(raw_line) > 40 and raw_line[40] == ' '
+                            and all(c in '0123456789abcdef' for c in raw_line[:40])):
+                        parts = raw_line.split()
+                        if len(parts) >= 3:
+                            try:
+                                current_hash = parts[0][:8]
+                                current_line = int(parts[2])
+                            except (ValueError, IndexError):
+                                pass
+                    elif raw_line.startswith('author '):
+                        author = raw_line[7:].strip()
+                        short  = author.split()[0][:10] if author else '?'
+                        authors[current_hash] = short
+                    elif raw_line.startswith('\t'):
+                        author_short = authors.get(current_hash, '?')
+                        blame[current_line] = f"{current_hash} {author_short}"
+
+                # Use invokeMethod for guaranteed GUI thread delivery
+                from PyQt6.QtCore import QMetaObject, Qt as QtCore_Qt
+                QMetaObject.invokeMethod(
+                    self, "_apply_blame_slot",
+                    QtCore_Qt.ConnectionType.QueuedConnection,
+                )
+                # Store data where the slot can pick it up
+                self._blame_pending = blame
+
+            except Exception as e:
+                print(f"[blame] Exception: {e}")
+
+        threading.Thread(target=run, daemon=True).start()
+
+    from PyQt6.QtCore import pyqtSlot
+
+    @pyqtSlot()
+    def _apply_blame_slot(self):
+        blame = getattr(self, '_blame_pending', {})
+        self._apply_blame(blame)
+
+    def _apply_blame(self, blame: dict):
+        self._blame_data    = blame
+        self._blame_visible = True
+        sample = "a1b2c3d4 authorname"
+        self._blame_width = self.fontMetrics().horizontalAdvance(sample) + 12
+        self.update_line_number_area_width(0)
+        self.line_number_area.update()
+
     # ── Bracket matching ──────────────────────────────────────────────────
 
     _OPEN  = {'{': '}', '(': ')', '[': ']'}
@@ -1027,7 +1125,8 @@ Answer concisely. If you include code, use a single fenced code block."""
         while max_value >= 10:
             max_value /= 10
             digits += 1
-        return 14 + self.fontMetrics().horizontalAdvance('9') * digits
+        base = 14 + self.fontMetrics().horizontalAdvance('9') * digits
+        return base + self._blame_width
 
     def update_line_number_area_width(self, _):
         self.setViewportMargins(self.line_number_area_width(), 0, self.minimap_width, 0)
@@ -1056,22 +1155,58 @@ Answer concisely. If you include code, use a single fenced code block."""
         painter.setPen(QColor(self._t['border']))
         painter.drawLine(self.line_number_area.width() - 1, event.rect().top(),
                          self.line_number_area.width() - 1, event.rect().bottom())
+
+        # Blame column separator
+        if self._blame_visible and self._blame_width > 0:
+            painter.setPen(QColor(self._t['border']))
+            painter.drawLine(self._blame_width, event.rect().top(),
+                             self._blame_width, event.rect().bottom())
+
         block = self.firstVisibleBlock()
         block_number = block.blockNumber()
-        top = round(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
+        top    = round(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
         bottom = top + round(self.blockBoundingRect(block).height())
+        fm_h   = self.fontMetrics().height()
+
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
+                # ── Blame annotation ──────────────────────────────────────
+                if self._blame_visible and self._blame_width > 0:
+                    annotation = self._blame_data.get(block_number + 1, "")
+                    if annotation:
+                        painter.setPen(QColor(self._t['fg4']))
+                        blame_font = painter.font()
+                        blame_font.setPointSize(blame_font.pointSize() - 1)
+                        painter.setFont(blame_font)
+                        painter.drawText(
+                            2, top, self._blame_width - 6, fm_h,
+                            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                            annotation
+                        )
+                        # Restore font
+                        blame_font.setPointSize(blame_font.pointSize() + 1)
+                        painter.setFont(blame_font)
+
+                # ── Line number ───────────────────────────────────────────
                 painter.setPen(QColor(self._t['fg4']))
-                painter.drawText(0, top, self.line_number_area.width() - 8, self.fontMetrics().height(),
-                                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                                 str(block_number + 1))
+                painter.drawText(
+                    self._blame_width, top,
+                    self.line_number_area.width() - self._blame_width - 8, fm_h,
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                    str(block_number + 1)
+                )
+
+                # ── Diff indicator ────────────────────────────────────────
                 status = self.line_changes.get(block_number)
                 if status:
-                    color = QColor(self._t['added_line']) if status == 'added' else QColor(self._t['modified_line'])
-                    painter.fillRect(self.line_number_area.width() - 4, top, 4, self.fontMetrics().height(), color)
+                    color = QColor(self._t['added_line']) if status == 'added' \
+                            else QColor(self._t['modified_line'])
+                    painter.fillRect(
+                        self.line_number_area.width() - 4, top, 4, fm_h, color
+                    )
+
             block = block.next()
-            top = bottom
+            top    = bottom
             bottom = top + round(self.blockBoundingRect(block).height())
             block_number += 1
 

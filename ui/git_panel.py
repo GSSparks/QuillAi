@@ -4,7 +4,7 @@ import threading
 from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QTreeWidget,
                               QTreeWidgetItem, QPushButton, QHBoxLayout,
                               QLineEdit, QMessageBox, QTreeWidgetItemIterator,
-                              QMenu, QApplication)
+                              QMenu, QApplication, QComboBox, QInputDialog)
 from PyQt6.QtCore import Qt, pyqtSignal, QDir, QThread
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor
 
@@ -26,7 +26,6 @@ class GitDockWidget(QDockWidget):
         self._ai_thread = None
         self._ai_worker = None
 
-        # Build and cache the initial parts dict; rebuilt on theme change
         self._p = build_git_panel_parts(get_theme())
         self._rebuild_icons()
         self._setup_ui()
@@ -40,7 +39,6 @@ class GitDockWidget(QDockWidget):
         self._p = build_git_panel_parts(t)
         self.apply_styles(t)
         self._rebuild_icons()
-        # Re-populate so file-status colors update immediately
         self.refresh_status()
 
     def apply_styles(self, t: dict):
@@ -48,27 +46,38 @@ class GitDockWidget(QDockWidget):
         self.setStyleSheet(build_git_panel_stylesheet(t))
         self.refresh_btn.setStyleSheet(p["action_btn"])
         self.push_btn.setStyleSheet(p["action_btn"])
+        self.blame_btn.setStyleSheet(p["action_btn"])
         self.tree.setStyleSheet(p["tree"])
         self.commit_input.setStyleSheet(p["commit_input"])
         self.ai_msg_btn.setStyleSheet(p["ai_msg_btn"])
         self.commit_btn.setStyleSheet(p["commit_btn"])
+        self.branch_combo.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {t['bg2']};
+                color: {t['fg1']};
+                border: 1px solid {t['border']};
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 9pt;
+            }}
+            QComboBox::drop-down {{ border: none; width: 16px; }}
+            QComboBox QAbstractItemView {{
+                background-color: {t['bg1']};
+                color: {t['fg1']};
+                selection-background-color: {t['highlight']};
+                border: 1px solid {t['border']};
+            }}
+        """)
 
     def _rebuild_icons(self):
-        """Recreate file/folder icons from the current cached parts palette."""
         t = get_theme()
         self.folder_icon = self._create_icon(t['yellow'],  t['bg0_hard'], is_folder=True)
         self.file_icon   = self._create_icon(t['fg4'],     t['bg0_hard'], is_folder=False)
         self.py_icon     = self._create_icon(t['blue'],    t['bg0_hard'], is_folder=False)
         self.html_icon   = self._create_icon(t['orange'],  t['bg0_hard'], is_folder=False)
 
-    # ── Icon builder ──────────────────────────────────────────────────────
-
     @staticmethod
     def _create_icon(color: str, bg_hard: str, is_folder: bool) -> QIcon:
-        """
-        Pure function: builds a 16×16 icon from explicit color values.
-        No theme lookup — all colors passed in by the caller.
-        """
         pixmap = QPixmap(16, 16)
         pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
@@ -95,18 +104,56 @@ class GitDockWidget(QDockWidget):
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(4)
 
-        # Action bar
+        # ── Branch row ────────────────────────────────────────────────────
+        branch_layout = QHBoxLayout()
+        branch_layout.setSpacing(4)
+
+        self.branch_combo = QComboBox()
+        self.branch_combo.setToolTip("Current branch — select to switch")
+        self.branch_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToContents
+        )
+        self.branch_combo.activated.connect(self._on_branch_selected)
+
+        new_branch_btn = QPushButton("+ Branch")
+        new_branch_btn.setToolTip("Create a new branch")
+        new_branch_btn.setFixedHeight(26)
+        new_branch_btn.clicked.connect(self._create_branch)
+        new_branch_btn.setStyleSheet(self._p["action_btn"])
+
+        tag_btn = QPushButton("🏷 Tag")
+        tag_btn.setToolTip("Create a tag at HEAD")
+        tag_btn.setFixedHeight(26)
+        tag_btn.clicked.connect(self._create_tag)
+        tag_btn.setStyleSheet(self._p["action_btn"])
+
+        branch_layout.addWidget(self.branch_combo, 1)
+        branch_layout.addWidget(new_branch_btn)
+        branch_layout.addWidget(tag_btn)
+
+        # ── Action bar ────────────────────────────────────────────────────
         btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(4)
+
         self.refresh_btn = QPushButton("🔄 Refresh")
         self.refresh_btn.clicked.connect(self.refresh_status)
+
         self.push_btn = QPushButton("↑ Push")
         self.push_btn.clicked.connect(self.push_changes)
+
+        self.blame_btn = QPushButton("👤 Blame")
+        self.blame_btn.setToolTip("Toggle git blame in the editor gutter")
+        self.blame_btn.setCheckable(True)
+        self.blame_btn.clicked.connect(self._toggle_blame)
+
         btn_layout.addWidget(self.refresh_btn)
         btn_layout.addWidget(self.push_btn)
+        btn_layout.addWidget(self.blame_btn)
         btn_layout.addStretch()
 
-        # File tree
+        # ── File tree ─────────────────────────────────────────────────────
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(15)
@@ -114,12 +161,11 @@ class GitDockWidget(QDockWidget):
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.show_context_menu)
 
-        # Commit message input
+        # ── Commit area ───────────────────────────────────────────────────
         self.commit_input = QLineEdit()
         self.commit_input.setPlaceholderText("Message (Enter to commit)")
         self.commit_input.returnPressed.connect(self.commit_changes)
 
-        # AI message + commit buttons
         commit_btn_layout = QHBoxLayout()
         commit_btn_layout.setSpacing(4)
 
@@ -132,14 +178,145 @@ class GitDockWidget(QDockWidget):
         commit_btn_layout.addWidget(self.ai_msg_btn)
         commit_btn_layout.addWidget(self.commit_btn)
 
+        layout.addLayout(branch_layout)
         layout.addLayout(btn_layout)
         layout.addWidget(self.tree)
         layout.addWidget(self.commit_input)
         layout.addLayout(commit_btn_layout)
         self.setWidget(container)
 
-        # Apply all styles once all refs exist
         self.apply_styles(get_theme())
+
+    # ── Branch management ─────────────────────────────────────────────────
+
+    def _refresh_branches(self):
+        ok, output = self.run_git_command(['git', 'branch'])
+        if not ok:
+            return
+        self.branch_combo.blockSignals(True)
+        self.branch_combo.clear()
+        current = ''
+        for line in output.splitlines():
+            name = line.strip().lstrip('* ').strip()
+            if name:
+                self.branch_combo.addItem(name)
+            if line.startswith('*'):
+                current = name
+        if current:
+            self.branch_combo.setCurrentText(current)
+        self.branch_combo.blockSignals(False)
+
+    def _on_branch_selected(self, index: int):
+        name = self.branch_combo.itemText(index)
+        ok, current = self.run_git_command(['git', 'branch', '--show-current'])
+        if ok and current.strip() == name:
+            return
+
+        ok2, status = self.run_git_command(['git', 'status', '--porcelain'])
+        if ok2 and status.strip():
+            reply = QMessageBox.question(
+                self, "Uncommitted Changes",
+                f"You have uncommitted changes. Switch to '{name}' anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                self._refresh_branches()
+                return
+
+        ok3, err = self.run_git_command(['git', 'checkout', name])
+        if not ok3:
+            QMessageBox.critical(self, "Switch Branch Failed", err)
+            self._refresh_branches()
+        else:
+            self.refresh_status()
+            if hasattr(self.parent_window, 'update_git_branch'):
+                self.parent_window.update_git_branch()
+            if self.parent_window:
+                self.parent_window.statusBar().showMessage(
+                    f"Switched to branch '{name}'", 3000
+                )
+
+    def _create_branch(self):
+        name, ok = QInputDialog.getText(self, "New Branch", "Branch name:")
+        if not ok or not name.strip():
+            return
+        name = name.strip().replace(' ', '-')
+
+        reply = QMessageBox.question(
+            self, "Switch to Branch",
+            f"Create branch '{name}' and switch to it now?",
+            QMessageBox.StandardButton.Yes |
+            QMessageBox.StandardButton.No |
+            QMessageBox.StandardButton.Cancel,
+        )
+        if reply == QMessageBox.StandardButton.Cancel:
+            return
+
+        if reply == QMessageBox.StandardButton.Yes:
+            ok2, err = self.run_git_command(['git', 'checkout', '-b', name])
+        else:
+            ok2, err = self.run_git_command(['git', 'branch', name])
+
+        if not ok2:
+            QMessageBox.critical(self, "Create Branch Failed", err)
+        else:
+            self.refresh_status()
+            if hasattr(self.parent_window, 'update_git_branch'):
+                self.parent_window.update_git_branch()
+            if self.parent_window:
+                self.parent_window.statusBar().showMessage(
+                    f"Branch '{name}' created", 3000
+                )
+
+    def _create_tag(self):
+        name, ok = QInputDialog.getText(
+            self, "Create Tag", "Tag name (e.g. v1.0.0):"
+        )
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+
+        msg, ok2 = QInputDialog.getText(
+            self, "Tag Message",
+            "Annotation message (leave blank for lightweight tag):"
+        )
+        if not ok2:
+            return
+
+        if msg.strip():
+            success, err = self.run_git_command(
+                ['git', 'tag', '-a', name, '-m', msg.strip()]
+            )
+        else:
+            success, err = self.run_git_command(['git', 'tag', name])
+
+        if not success:
+            QMessageBox.critical(self, "Tag Failed", err)
+            return
+
+        reply = QMessageBox.question(
+            self, "Tag Created",
+            f"Tag '{name}' created. Push it to remote now?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            ok3, err2 = self.run_git_command(['git', 'push', 'origin', name])
+            if not ok3:
+                QMessageBox.critical(self, "Push Tag Failed", err2)
+            elif self.parent_window:
+                self.parent_window.statusBar().showMessage(
+                    f"Tag '{name}' pushed to origin", 3000
+                )
+
+    # ── Git blame ─────────────────────────────────────────────────────────
+
+    def _toggle_blame(self):
+        editor = self.parent_window.current_editor() if self.parent_window else None
+        if not editor or not hasattr(editor, 'toggle_blame'):
+            self.blame_btn.setChecked(False)
+            return
+        editor.toggle_blame()
+        self.blame_btn.setChecked(editor._blame_visible)
 
     # ── Git operations ────────────────────────────────────────────────────
 
@@ -288,6 +465,8 @@ Respond with ONLY the commit message. Nothing else."""
     def refresh_status(self):
         p = self._p
         self.tree.clear()
+        self._refresh_branches()
+
         success, output = self.run_git_command(['git', 'status', '--porcelain', '-u'])
 
         if not success:
@@ -305,10 +484,9 @@ Respond with ONLY the commit message. Nothing else."""
         for line in output.split('\n'):
             if len(line) < 3:
                 continue
-
-            status = line[:2]
+            status    = line[:2]
             file_path = line[2:].strip().strip('"')
-            parts = file_path.split('/')
+            parts     = file_path.split('/')
             current_parent = self.tree.invisibleRootItem()
 
             for i, part in enumerate(parts[:-1]):
@@ -320,7 +498,7 @@ Respond with ONLY the commit message. Nothing else."""
                     folder_nodes[folder_path] = node
                 current_parent = folder_nodes[folder_path]
 
-            filename = parts[-1]
+            filename  = parts[-1]
             file_item = QTreeWidgetItem([f"[{status.strip()}] {filename}"])
 
             lower = filename.lower()
@@ -359,6 +537,7 @@ Respond with ONLY the commit message. Nothing else."""
         menu = QMenu()
         menu.setStyleSheet(self._p["context_menu"])
         diff_action    = menu.addAction("🔍 View Diff")
+        blame_action   = menu.addAction("👤 Blame This File")
         menu.addSeparator()
         discard_action = menu.addAction("❌ Discard Changes")
 
@@ -367,6 +546,16 @@ Respond with ONLY the commit message. Nothing else."""
         if action == diff_action:
             dialog = DiffViewerDialog(rel_path, self.repo_path, self)
             dialog.exec()
+        elif action == blame_action:
+            if self.parent_window:
+                base = self.repo_path or QDir.currentPath()
+                full = os.path.join(base, rel_path)
+                self.parent_window.open_file_in_tab(full)
+                editor = self.parent_window.current_editor()
+                if editor and hasattr(editor, 'toggle_blame'):
+                    if not editor._blame_visible:
+                        editor.toggle_blame()
+                    self.blame_btn.setChecked(True)
         elif action == discard_action:
             reply = QMessageBox.question(
                 self, "Discard Changes",
@@ -446,8 +635,6 @@ Respond with ONLY the commit message. Nothing else."""
         if rel_path:
             base = self.repo_path if self.repo_path else QDir.currentPath()
             self.file_double_clicked.emit(os.path.join(base, rel_path))
-
-    # ── Cleanup ───────────────────────────────────────────────────────────
 
     def closeEvent(self, event):
         try:
