@@ -29,120 +29,116 @@ When you do want cloud power (Claude, GPT-4, OpenRouter), you switch with one cl
 
 ---
 
+## Installation
+
+### AppImage (Linux — easiest)
+
+Download the latest AppImage from the [Releases](../../releases) page:
+
+```bash
+chmod +x QuillAI-*.AppImage
+./QuillAI-*.AppImage
+```
+
+> **NixOS users:** AppImages require `appimage-run` or system-level support.
+> ```bash
+> nix run nixpkgs#appimage-run -- ./QuillAI-*.AppImage
+> ```
+> Or add to `configuration.nix` for double-click support:
+> ```nix
+> programs.appimage = { enable = true; binfmt = true; };
+> ```
+
+### Nix / NixOS
+
+```bash
+# Run directly
+nix run github:GSSparks/quillai
+
+# Or install to your profile
+nix profile install github:GSSparks/quillai
+```
+
+### From source
+
+```bash
+git clone https://github.com/GSSparks/quillai
+cd quillai
+pip install PyQt6 requests pyyaml markdown chardet
+python main.py
+```
+
+For Nix development:
+```bash
+nix develop
+python main.py
+```
+
+---
+
 ## Features
 
 ### Privacy-first AI backends
-- **🏠 Local (llama.cpp)** — FIM (fill-in-middle) completions via a local llama.cpp server. Zero latency, zero cost, zero data sharing. Recommended: Qwen2.5-Coder for chat, any FIM-capable model for inline completions.
+- **🏠 Local (llama.cpp)** — FIM completions via a local llama.cpp server. Zero latency, zero cost, zero data sharing. Recommended: Qwen2.5-Coder.
 - **☁️ OpenAI / compatible** — any OpenAI-style API including OpenRouter, LM Studio, Ollama, and others
 - **🟠 Anthropic (Claude)** — native Claude API with separate models for chat and inline completions
 
 Switch backends at any time with the mode button in the status bar.
 
 ### Intent-aware inline completions
-Completions aren't just based on what's at the cursor — they're informed by your whole session:
-- Recent chat exchanges
-- Pinned memory facts ("I always use type hints", "this project uses FastAPI")
-- Files you've been editing
-- Functions and classes you've been working in
-
-Ghost text appears at natural pause points. **`Tab`** to accept, **`Ctrl+Right`** for word-by-word, **`Ctrl+Space`** to trigger manually.
+Completions are informed by your whole session — recent chat exchanges, pinned memory facts, files you've been editing, and functions you've been working in. Ghost text appears at natural pause points. **`Tab`** to accept, **`Ctrl+Right`** for word-by-word, **`Ctrl+Space`** to trigger manually.
 
 ### Project-aware AI chat
-The chat panel knows about your entire project:
-- Active file (head + tail for large files)
-- All open tabs
-- Direct and transitive imports (up to 3 levels deep)
-- Project file tree
-- Your memory facts and past conversation context
-
-Responses stream live with syntax highlighting and markdown rendering. Code blocks have a one-click copy button.
+The chat panel knows about your entire project: active file, all open tabs, direct and transitive imports (up to 3 levels deep), project file tree, and your memory facts. Responses stream live with syntax highlighting and markdown rendering. Code blocks have a one-click copy button.
 
 ### Memory system
 QuillAI remembers things across sessions:
-- **Global facts** — preferences that apply to all your work ("I prefer async functions", "always add type hints")
+- **Global facts** — preferences that apply to all your work
 - **Project facts** — things specific to the current codebase
-- **Conversation history** — past chat exchanges, searchable, clickable to restore
+- **Conversation history** — past exchanges, searchable, clickable to restore
 
 Facts are auto-extracted from your chat messages. Everything is stored locally at `~/.config/quillai/`.
 
+### Command palette
+**`Ctrl+P`** — fuzzy search across open tabs, all project files, and editor actions in a unified list. Arrow keys or Tab to navigate, Enter to open, Esc to dismiss.
+
+### Embedded terminal
+**`Ctrl+\``** — toggle a full terminal docked at the bottom. Uses `qtermwidget` for a full PTY experience when available, with a QProcess-driven interactive shell as fallback. Working directory follows the open project automatically.
+
 ### Session management
-- Each project remembers which files you had open and where your cursor was
-- Switching projects restores that project's tabs, chat history, and memory
-- Recent Projects menu with tab count for each project
+Each project remembers which files you had open and where your cursor was. Switching projects restores that project's tabs, chat history, and memory. Recent Projects menu with tab count for each entry.
 
 ### Editor
 - Syntax highlighting for Python, HTML, Ansible/YAML, Nix, Bash, and Markdown
 - Line numbers with live git diff indicators (green = added, amber = modified)
 - Minimap with click-to-navigate and viewport highlight
-- Indent guides
-- Auto-closing brackets, quotes, and braces
-- Smart auto-indent on Enter
-- `Ctrl+E` — AI rewrite of selected code with side-by-side diff preview
+- Indent guides, auto-closing brackets, smart auto-indent
+- `Ctrl+E` — AI rewrite of selection with side-by-side diff preview
 - `Ctrl+I` — inline chat popup at the cursor
-- `Ctrl+G` — jump to line
-- `Ctrl+D` — duplicate line or selection
-- `Ctrl+/` — toggle comment (language-aware)
+- `Ctrl+G` — jump to line, `Ctrl+D` — duplicate line, `Ctrl+/` — toggle comment
 
 ### Sliding panel
-Chat, Memory, and settings live in a sliding panel on the right edge. Hover to expand, pin to keep open, drag the left edge to resize. Width persists across sessions.
+Chat and Memory live in a sliding panel on the right edge. Hover to expand, pin to keep open, drag the left edge to resize. Width persists across sessions.
 
 ### Markdown preview
-Opens automatically when editing `.md` files. Live preview with syntax-highlighted code blocks, tables, and full CommonMark support. Floatable — drag it wherever you want on screen.
+Opens automatically when editing `.md` files. Live preview with full CommonMark support. Floatable — drag it wherever you want on screen.
 
 ### Source control (Git)
-- Changed files tree with status indicators
-- Selective staging with checkboxes
-- Inline diff viewer with syntax-coloured additions and removals
-- Commit, push, and discard from within the editor
+Changed files tree, selective staging with checkboxes, inline diff viewer, commit/push/discard — plus AI-generated commit messages from your staged diff.
 
 ### Find & Replace / Find in Files
 - **`Ctrl+F`** — live find/replace with match count
 - **`Ctrl+Shift+F`** — search across the entire project
 
 ### Run & Debug
-- **`F5`** — run the current Python script
-- Output panel with stdout/stderr
-- **💡 Explain Error** — sends the traceback and active file to the AI chat
+**`F5`** — run the current Python script. Output panel with stdout/stderr and a **💡 Explain Error** button that sends the traceback to the AI chat.
 
 ### Snippet palette
-- **`Ctrl+Shift+Space`** — fuzzy search across built-in snippets
-- Snippets for Python, Ansible, Nix, and Bash
-- User-editable at `~/.config/quillai/snippets.json`
+**`Ctrl+Shift+Space`** — fuzzy search across built-in snippets for Python, Ansible, Nix, and Bash. User-editable at `~/.config/quillai/snippets.json`.
 
 ---
 
-## Requirements
-```
-Python 3.10+
-PyQt6
-requests
-markdown
-```
-
-Optional but recommended:
-```
-pyyaml      # YAML/Ansible linting
-chardet     # Encoding detection
-shellcheck  # Bash linting (install via your package manager)
-```
-
-For local LLM support you need a running [llama.cpp](https://github.com/ggerganov/llama.cpp) server or any OpenAI-compatible local server (LM Studio, Ollama, etc.).
-
----
-
-## Installation
-```bash
-git clone https://github.com/yourname/quillai
-cd quillai
-pip install PyQt6 requests pyyaml markdown chardet
-python main.py
-```
-
----
-
-## Local LLM setup (recommended)
-
-For the full privacy-first experience, run a local inference server:
+## Local LLM setup
 
 **llama.cpp:**
 ```bash
@@ -150,7 +146,6 @@ For the full privacy-first experience, run a local inference server:
 ```
 
 Then in QuillAI settings (`Ctrl+,`):
-- Backend: Local
 - Server URL: `http://localhost:11434/v1/chat/completions`
 
 **Recommended models:**
@@ -161,17 +156,17 @@ Then in QuillAI settings (`Ctrl+,`):
 
 ## Configuration
 
-Open **File → Settings** (`Ctrl+,`) to configure:
+Open **File → Settings** (`Ctrl+,`):
 
 | Section | Setting | Description |
 |---|---|---|
-| Local LLM | Server URL | llama.cpp or compatible server endpoint |
-| Local LLM | Inline model | Fast model for ghost text completions |
-| Local LLM | Chat model | Larger model for chat responses |
-| OpenAI | API URL | Defaults to `api.openai.com`, supports any compatible endpoint |
-| OpenAI | API Key | `sk-...` key |
+| Local LLM | Server URL | llama.cpp or compatible endpoint |
+| Local LLM | Inline model | Fast model for ghost text |
+| Local LLM | Chat model | Larger model for chat |
+| OpenAI | API URL | Defaults to `api.openai.com` |
+| OpenAI | API Key | `sk-...` |
 | OpenAI | Chat model | e.g. `gpt-4o` |
-| Anthropic | API Key | `sk-ant-...` from console.anthropic.com |
+| Anthropic | API Key | `sk-ant-...` |
 | Anthropic | Chat model | e.g. `claude-sonnet-4-6` |
 | Anthropic | Inline model | e.g. `claude-haiku-4-5-20251001` |
 
@@ -183,6 +178,7 @@ All settings stored locally at `~/.config/quillai/settings.json`.
 
 | Key | Action |
 |---|---|
+| `Ctrl+P` | Command palette |
 | `Ctrl+Space` | Trigger inline AI completion |
 | `Tab` | Accept full ghost text suggestion |
 | `Ctrl+Right` | Accept next word of suggestion |
@@ -190,6 +186,7 @@ All settings stored locally at `~/.config/quillai/settings.json`.
 | `Ctrl+E` | AI rewrite of selection (with diff preview) |
 | `Ctrl+I` | Inline chat at cursor |
 | `Ctrl+Return` | Send chat message |
+| `Ctrl+\`` | Toggle terminal |
 | `Ctrl+G` | Go to line |
 | `Ctrl+D` | Duplicate line or selection |
 | `Ctrl+/` | Toggle comment |
@@ -205,6 +202,26 @@ All settings stored locally at `~/.config/quillai/settings.json`.
 | `Ctrl+Shift+S` | Save as |
 | `Ctrl+,` | Settings |
 | `F5` | Run script |
+
+---
+
+## Requirements
+
+```
+Python 3.10+
+PyQt6
+requests
+markdown
+```
+
+Optional but recommended:
+```
+pyyaml             # YAML/Ansible linting
+chardet            # Encoding detection
+python-lsp-server  # LSP hover docs, go-to-definition, diagnostics
+pyqtermwidget      # Full PTY terminal (Linux/macOS)
+shellcheck         # Bash linting (via system package manager)
+```
 
 ---
 
@@ -224,10 +241,12 @@ quillai/
 │   ├── nix_plugin.py
 │   ├── bash_plugin.py
 │   ├── markdown_plugin.py
-│   └── git_plugin.py          # Git dock — status, diff, commit, push
+│   └── git_plugin.py
 └── ui/
     ├── menu.py                # File menu and recent projects
     ├── chat_renderer.py       # Chat rendering, streaming, syntax highlighting
+    ├── command_palette.py     # Ctrl+P command palette
+    ├── terminal.py            # Embedded terminal dock
     ├── sliding_chat_panel.py  # Sliding panel with Chat and Memory tabs
     ├── memory_manager.py      # Per-project memory, facts, conversations
     ├── memory_panel.py        # Memory panel UI
@@ -256,18 +275,23 @@ All user data is stored locally:
 | Sessions | `~/.config/quillai/sessions/` |
 | Snippets | `~/.config/quillai/snippets.json` |
 
-When using a local backend, no data is transmitted anywhere. When using a cloud backend, only the content you explicitly send in a chat message or the code context you've configured is transmitted to that provider — nothing else.
+When using a local backend, no data is transmitted anywhere. When using a cloud backend, only the content you explicitly send is transmitted to that provider — nothing else.
 
 ---
 
 ## Roadmap
 
-- [ ] Code timeline — per-file local history without git
-- [ ] Embedded terminal
-- [ ] Command palette (`Ctrl+P`)
-- [ ] TODO/FIXME panel
-- [ ] Session debrief — AI summary of what changed each session
-- [ ] Passive code review — background suggestions without interrupting flow
+- [ ] LSP support — hover docs, go-to-definition, rename symbol
+- [ ] Multi-cursor editing
+- [ ] Breadcrumb bar (file › class › method)
+- [ ] Symbol outline panel
+- [ ] Git blame in gutter
+- [ ] Split editor panes
+- [ ] Crash session restore (periodic autosave)
+- [ ] Smooth scrolling
+- [ ] Bracket match highlight
+- [ ] Code folding
+- [ ] Markdown preview scroll sync
 
 ---
 
