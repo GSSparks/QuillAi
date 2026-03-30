@@ -100,6 +100,23 @@ class SettingsDialog(QDialog):
         claude_form.addRow("Inline model:", self.claude_inline_model)
         claude_form.addRow("", self._key_hint)
 
+        # ── Terminal ──────────────────────────────────────────────
+        terminal_group = QGroupBox("Terminal")
+        terminal_form = QFormLayout(terminal_group)
+        terminal_form.setSpacing(8)
+
+        from PyQt6.QtWidgets import QCheckBox
+        self.terminal_clean_shell = QCheckBox("Clean shell  (skip .bashrc / .zshrc)")
+        self.terminal_clean_shell.setChecked(
+            bool(self.sm.get("terminal_clean_shell"))
+        )
+        self.terminal_clean_shell.setToolTip(
+            "Start the terminal with --login --norc instead of -i.\n"
+            "Loads /etc/profile for PATH but skips your shell config.\n"
+            "Useful if your .bashrc is slow or produces unwanted output."
+        )
+        terminal_form.addRow("", self.terminal_clean_shell)
+
         # ── Appearance ────────────────────────────────────────────
         theme_group = QGroupBox("Appearance")
         theme_form = QFormLayout(theme_group)
@@ -137,6 +154,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(local_group)
         layout.addWidget(openai_group)
         layout.addWidget(claude_group)
+        layout.addWidget(terminal_group)
         layout.addWidget(theme_group)
         layout.addLayout(btns)
 
@@ -154,12 +172,13 @@ class SettingsDialog(QDialog):
         self.reject()
 
     def save_and_close(self):
-        self.sm.set("local_llm_url",     self.local_url.text().strip())
-        self.sm.set("active_model",      self.local_model.text().strip())
-        self.sm.set("cloud_llm_url",     self.cloud_url.text().strip())
-        self.sm.set("cloud_api_key",     self.openai_key.text().strip())
-        self.sm.set("chat_model",        self.openai_model.text().strip())
-        self.sm.set("anthropic_api_key", self.anthropic_key.text().strip())
+        self.sm.set("local_llm_url",         self.local_url.text().strip())
+        self.sm.set("active_model",           self.local_model.text().strip())
+        self.sm.set("cloud_llm_url",          self.cloud_url.text().strip())
+        self.sm.set("cloud_api_key",          self.openai_key.text().strip())
+        self.sm.set("chat_model",             self.openai_model.text().strip())
+        self.sm.set("anthropic_api_key",      self.anthropic_key.text().strip())
+        self.sm.set("terminal_clean_shell",   self.terminal_clean_shell.isChecked())
 
         if self.sm.get_backend() == "claude":
             self.sm.set("active_model", self.claude_inline_model.text().strip())

@@ -56,15 +56,15 @@ class FallbackTerminal(QWidget):
     """
     A simple interactive shell using QProcess.
     Not a full VTE — no ANSI cursor movement — but handles stdin/stdout/stderr
-    and preserves a scrollback buffer.  Good enough for running scripts,
-    git commands, pip installs, etc.
+    and preserves a scrollback buffer.
     """
 
-    def __init__(self, cwd: str = None, parent=None):
+    def __init__(self, cwd: str = None, clean_shell: bool = False, parent=None):
         super().__init__(parent)
         self.setObjectName("terminalContainer")
-        self._cwd = cwd or os.path.expanduser("~")
-        self._history: list[str] = []
+        self._cwd        = cwd or os.getcwd()
+        self._clean_shell = clean_shell
+        self._history:   list[str] = []
         self._history_idx: int = -1
 
         self._setup_ui()
@@ -120,11 +120,19 @@ class FallbackTerminal(QWidget):
         self._process.finished.connect(self._on_finished)
 
         shell = os.environ.get("SHELL", "/bin/bash")
-        # -i = interactive so aliases/functions are loaded
-        # -s = read from stdin
-        self._process.start(shell, ["-i", "-s"])
+        if self._clean_shell:
+            # --login loads /etc/profile (PATH, env vars) but skips .bashrc/.zshrc
+            args = ["--login", "--norc"] if "bash" in shell else ["--login", "--no-rcs"]
+        else:
+            # -i = interactive, loads .bashrc/.zshrc; -s = read from stdin
+            args = ["-i", "-s"]
 
-        self._append(f"QuillAI Terminal  ({shell})\n", "#888888")
+        self._process.start(shell, args)
+        self._append(
+            f"QuillAI Terminal  ({shell}"
+            f"{' — clean shell' if self._clean_shell else ''})\n",
+            "#888888"
+        )
 
     def _send_command(self):
         cmd = self.input_line.text()
@@ -222,17 +230,24 @@ class FallbackTerminal(QWidget):
 class QtermWidget(QWidget):
     """Thin wrapper around QTermWidget that follows the same interface."""
 
-    def __init__(self, cwd: str = None, parent=None):
+    def __init__(self, cwd: str = None, clean_shell: bool = False, parent=None):
         super().__init__(parent)
-        self._cwd = cwd or os.path.expanduser("~")
+        self._cwd = cwd or os.getcwd()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        self._term = QTermWidget(1, self)   # 1 = start shell immediately
+        self._term = QTermWidget(1, self)
         self._term.setWorkingDirectory(self._cwd)
         self._term.setScrollBarPosition(QTermWidget.ScrollBarPosition.ScrollBarRight)
         self._term.setColorScheme("Linux")
         self._term.setTerminalFont(QFont(QFONT_CODE, 10))
+
+        if clean_shell:
+            shell = os.environ.get("SHELL", "/bin/bash")
+            self._term.setShellProgram(shell)
+            args = ["--login", "--norc"] if "bash" in shell else ["--login", "--no-rcs"]
+            self._term.setArgs(args)
+
         layout.addWidget(self._term)
 
     def set_cwd(self, path: str):
@@ -293,12 +308,13 @@ class TerminalDock(QDockWidget):
         self.parent_window = parent
 
         self._cwd = self._infer_cwd()
+        clean_shell = self._read_clean_shell_setting()
 
         # Pick backend
         if HAS_QTERM:
-            self._terminal = QtermWidget(cwd=self._cwd, parent=self)
+            self._terminal = QtermWidget(cwd=self._cwd, clean_shell=clean_shell, parent=self)
         else:
-            self._terminal = FallbackTerminal(cwd=self._cwd, parent=self)
+            self._terminal = FallbackTerminal(cwd=self._cwd, clean_shell=clean_shell, parent=self)
 
         self.setWidget(self._terminal)
         self.setFeatures(
@@ -322,8 +338,14 @@ class TerminalDock(QDockWidget):
 
     # ── Helpers ───────────────────────────────────────────────────────────
 
+    def _read_clean_shell_setting(self) -> bool:
+        mw = self.parent_window
+        if mw and hasattr(mw, 'settings_manager'):
+            return bool(mw.settings_manager.get("terminal_clean_shell"))
+        return False
+
     def _infer_cwd(self) -> str:
-        """Use the git repo path or project root if available."""
+        """Use the project root — fall back to cwd, then home."""
         mw = self.parent_window
         if mw and hasattr(mw, 'git_dock') and mw.git_dock.repo_path:
             return mw.git_dock.repo_path
@@ -331,7 +353,7 @@ class TerminalDock(QDockWidget):
             root = mw.file_model.filePath(mw.tree_view.rootIndex())
             if root and os.path.isdir(root):
                 return root
-        return os.path.expanduser("~")
+        return os.getcwd()
 
     def set_cwd(self, path: str):
         """Called by the main window when the project root changes."""
