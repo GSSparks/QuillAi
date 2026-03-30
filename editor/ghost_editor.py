@@ -189,6 +189,7 @@ class GhostEditor(QPlainTextEdit):
 
         self.current_line_selection = []
         self.lint_selections = []
+        self.bracket_selections = []
         self.current_syntax_error = None
 
         self.line_number_area = LineNumberArea(self)
@@ -203,6 +204,7 @@ class GhostEditor(QPlainTextEdit):
 
         self.cursorPositionChanged.connect(self.highlight_current_line)
         self.cursorPositionChanged.connect(self._track_cursor_symbol)
+        self.cursorPositionChanged.connect(self._highlight_matching_bracket)
         self.highlight_current_line()
 
         self._setup_color_swatch()
@@ -744,7 +746,83 @@ Answer concisely. If you include code, use a single fenced code block."""
         self.update_extra_selections()
 
     def update_extra_selections(self):
-        self.setExtraSelections(self.current_line_selection + self.lint_selections)
+        self.setExtraSelections(
+            self.current_line_selection +
+            self.lint_selections +
+            self.bracket_selections
+        )
+
+    # ── Bracket matching ──────────────────────────────────────────────────
+
+    _OPEN  = {'{': '}', '(': ')', '[': ']'}
+    _CLOSE = {'}': '{', ')': '(', ']': '['}
+
+    def _highlight_matching_bracket(self):
+        self.bracket_selections = []
+        cursor = self.textCursor()
+        doc    = self.document()
+        pos    = cursor.position()
+
+        # Use doc.characterAt() which works in document position space,
+        # not string index space (they diverge due to block separators).
+        bracket_pos = None
+        bracket_ch  = None
+
+        for check_pos in (pos - 1, pos):
+            if check_pos < 0:
+                continue
+            ch = doc.characterAt(check_pos)
+            if ch in self._OPEN or ch in self._CLOSE:
+                bracket_pos = check_pos
+                bracket_ch  = ch
+                break
+
+        if bracket_pos is None:
+            self.update_extra_selections()
+            return
+
+        # Build the full text using document positions for matching.
+        # We walk using doc.characterAt() to stay in document space.
+        match_pos = self._find_match_doc(doc, bracket_pos, bracket_ch)
+
+        color = QColor(self._t.get('accent', '#fabd2f'))
+        bg    = QColor(self._t.get('bg2',    '#504945'))
+        for p in (bracket_pos, match_pos):
+            if p is None:
+                continue
+            sel = QTextEdit.ExtraSelection()
+            sel.format.setForeground(color)
+            sel.format.setFontWeight(700)
+            sel.format.setBackground(bg)
+            c = QTextCursor(doc)
+            c.setPosition(p)
+            c.setPosition(p + 1, QTextCursor.MoveMode.KeepAnchor)
+            sel.cursor = c
+            self.bracket_selections.append(sel)
+
+        self.update_extra_selections()
+
+    def _find_match_doc(self, doc, pos: int, ch: str):
+        """Walk document character positions to find the matching bracket."""
+        doc_len = doc.characterCount()
+
+        if ch in self._OPEN:
+            target = self._OPEN[ch]
+            rng    = range(pos + 1, doc_len)
+        else:
+            target = self._CLOSE[ch]
+            rng    = range(pos - 1, -1, -1)
+
+        depth = 1
+        for i in rng:
+            c = doc.characterAt(i)
+            if c == ch:
+                depth += 1
+            elif c == target:
+                depth -= 1
+                if depth == 0:
+                    return i
+        return None
 
     def _draw_error_squiggle(self, line_idx, col_offset, error_msg, end_offset=None):
         self.current_syntax_error = {'msg': error_msg, 'lineno': line_idx + 1, 'offset': col_offset}
