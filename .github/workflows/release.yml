@@ -52,20 +52,28 @@ jobs:
 
       - name: Add Qt tools to PATH
         run: |
-          # Build qt6.qtbase and add its bin to PATH so qmake is available
-          # to the build script outside of a nix shell
           nix build nixpkgs#qt6.qtbase --out-link /tmp/qt6base
-          QT_BIN=$(find /tmp/qt6base -name "qmake" -type f | head -n1 | xargs dirname)
+          QMAKE_BIN=$(find /tmp/qt6base/bin -name "qmake" -type f 2>/dev/null | head -n1)
+          if [ -z "$QMAKE_BIN" ]; then
+            QMAKE_BIN=$(find /tmp/qt6base -name "qmake" -type f 2>/dev/null | head -n1)
+          fi
+          if [ -z "$QMAKE_BIN" ]; then
+            echo "❌ qmake not found in qt6base output"
+            find /tmp/qt6base -type f -name "qmake*" || echo "No qmake files found"
+            exit 1
+          fi
+          echo "✅ qmake found at: $QMAKE_BIN"
+          QT_BIN="$(dirname $QMAKE_BIN)"
           echo "$QT_BIN" >> "$GITHUB_PATH"
-          echo "QMAKE=$(find /tmp/qt6base -name qmake -type f | head -n1)" >> "$GITHUB_ENV"
+          echo "QMAKE=$QMAKE_BIN" >> "$GITHUB_ENV"
 
       - name: Build AppImage
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
-          chmod +x build-appimage.sh
-          bash build-appimage.sh
+          chmod +x scripts/build-appimage.sh
+          bash scripts/build-appimage.sh
 
       - name: Find built AppImage
         id: find_appimage
