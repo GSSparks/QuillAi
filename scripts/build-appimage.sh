@@ -25,6 +25,8 @@ chmod -R u+w "$APPDIR"
 
 echo "📁 Ensuring AppDir structure..."
 mkdir -p "$APPDIR/usr/bin"
+mkdir -p "$APPDIR/usr/lib"
+mkdir -p "$APPDIR/usr/plugins"
 mkdir -p "$APPDIR/usr/share/applications"
 mkdir -p "$APPDIR/usr/share/icons/hicolor/scalable/apps"
 
@@ -39,66 +41,89 @@ Type=Application
 Categories=Development;IDE;TextEditor;
 EOL
 
-# Copy icon
 if [ -f "images/quillai_logo_min.svg" ]; then
     cp images/quillai_logo_min.svg \
         "$APPDIR/usr/share/icons/hicolor/scalable/apps/${APP_ID}.svg"
 fi
 
+# ── Copy Qt libraries from Nix closure ───────────────────────────────────────
+# linuxdeploy-plugin-qt can't detect Qt in Python wrappers, so we copy
+# Qt libs directly from the Nix store closure of our package.
+echo "🔗 Copying Qt libraries from Nix closure..."
+
+# Get the full closure — every Nix store path our package depends on
+CLOSURE=$(nix-store -qR result 2>/dev/null || nix path-info -r ".#default" 2>/dev/null || true)
+
+if [ -z "$CLOSURE" ]; then
+    echo "⚠️  Could not read closure, falling back to store search..."
+    CLOSURE=$(find /nix/store -maxdepth 1 -name '*qt6*' -o -name '*pyqt6*' -o -name '*PyQt6*' 2>/dev/null || true)
+fi
+
+# Copy Qt shared libraries and plugins
+echo "$CLOSURE" | tr ' ' '\n' | grep -iE 'qt6|pyqt' | sort -u | while read qt_path; do
+    [ -d "$qt_path" ] || continue
+
+    # Shared libraries
+    if [ -d "$qt_path/lib" ]; then
+        find "$qt_path/lib" \( -name 'libQt6*.so*' -o -name 'libpython3*.so*' \) 2>/dev/null | \
+        while read lib; do
+            cp -Pn "$lib" "$APPDIR/usr/lib/" 2>/dev/null || true
+        done
+    fi
+
+    # Qt plugins (platforms, xcb, wayland, imageformats, etc.)
+    for plugin_dir in \
+        "$qt_path/plugins" \
+        "$qt_path/lib/qt6/plugins" \
+        "$qt_path"/*/*/plugins; do
+        [ -d "$plugin_dir" ] && \
+            rsync -a --copy-links "$plugin_dir/" "$APPDIR/usr/plugins/" 2>/dev/null || true
+    done
+done
+
+LIB_COUNT=$(ls "$APPDIR/usr/lib/"libQt6*.so* 2>/dev/null | wc -l || echo 0)
+echo "   Qt libs bundled: $LIB_COUNT"
+
+# ── AppRun wrapper ────────────────────────────────────────────────────────────
+echo "📝 Creating AppRun..."
+cat > "$APPDIR/AppRun" <<'APPRUN'
+#!/usr/bin/env bash
+HERE="$(dirname "$(readlink -f "${0}")")"
+
+export QT_PLUGIN_PATH="$HERE/usr/plugins${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"
+export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PYTHONPATH="$HERE/usr/share/quillai${PYTHONPATH:+:$PYTHONPATH}"
+
+exec "$HERE/usr/bin/quillai" "$@"
+APPRUN
+chmod +x "$APPDIR/AppRun"
+
+# ── Download linuxdeploy (base only — no Qt plugin needed) ───────────────────
 echo "⬇️ Downloading linuxdeploy (if needed)..."
 LINUXDEPLOY="linuxdeploy-x86_64.AppImage"
-QT_PLUGIN="linuxdeploy-plugin-qt-x86_64.AppImage"
 
 if [ ! -f "$LINUXDEPLOY" ]; then
     wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/$LINUXDEPLOY
-    chmod +x $LINUXDEPLOY
+    chmod +x "$LINUXDEPLOY"
 fi
 
-if [ ! -f "$QT_PLUGIN" ]; then
-    wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/$QT_PLUGIN
-    chmod +x $QT_PLUGIN
-fi
-
-echo "🔍 Locating qmake..."
-if [ -n "${QMAKE:-}" ] && [ -x "$QMAKE" ]; then
-    echo "✅ Using QMAKE from environment: $QMAKE"
-elif command -v qmake &>/dev/null; then
-    QMAKE="$(command -v qmake)"
-    echo "✅ Found qmake on PATH: $QMAKE"
-else
-    echo "🔍 Searching Nix store for qmake (this may take a moment)..."
-    QMAKE=$(find /nix/store -maxdepth 5 -name "qmake" -type f 2>/dev/null | head -n1 || true)
-    if [ -z "$QMAKE" ]; then
-        echo "❌ qmake not found. Set QMAKE env var or add qt6.qtbase to PATH."
-        exit 1
-    fi
-    echo "✅ Found in Nix store: $QMAKE"
-fi
-export QMAKE
-export PATH="$(dirname "$QMAKE"):$PATH"
-echo "   Qt bin dir: $(dirname "$QMAKE")"
-
+# ── Build AppImage ────────────────────────────────────────────────────────────
 echo "⚙️ Building AppImage..."
-./$LINUXDEPLOY \
+APPIMAGE_EXTRACT_AND_RUN=1 ./"$LINUXDEPLOY" \
     --appdir "$APPDIR" \
     --desktop-file "$DESKTOP_FILE" \
     --icon-file "$APPDIR/usr/share/icons/hicolor/scalable/apps/${APP_ID}.svg" \
-    --plugin qt \
     --output appimage
 
+# ── Rename output ─────────────────────────────────────────────────────────────
 echo "🏷️ Renaming output..."
-APPIMAGE=$(ls *.AppImage | grep -v linuxdeploy | head -n 1)
+APPIMAGE=$(ls ./*.AppImage | grep -v linuxdeploy | head -n 1)
 
-if [ -n "${GITHUB_REF_NAME:-}" ]; then
-    VERSION="$GITHUB_REF_NAME"
-else
-    VERSION="local"
-fi
-
+VERSION="${GITHUB_REF_NAME:-local}"
 FINAL_NAME="${APP_NAME}-${VERSION}-x86_64.AppImage"
 mv "$APPIMAGE" "$FINAL_NAME"
 
 echo ""
 echo "✅ Done!"
-echo "📦 Output: $FINAL_NAME"
+echo "📦 Output: $FINAL_NAME ($(du -h "$FINAL_NAME" | cut -f1))"
 echo ""
