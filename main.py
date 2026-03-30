@@ -171,9 +171,9 @@ class CodeEditor(QMainWindow, ChatRenderer):
         QShortcut(QKeySequence("Ctrl+Shift+F"), self).activated.connect(self.show_project_search)
         QShortcut(QKeySequence("Ctrl+Space"),   self).activated.connect(self.request_manual_completion)
 
-        self.timer = QTimer()
-        self.timer.setSingleShot(True)
-        self.timer.timeout.connect(self.ask_ai)
+        #self.timer = QTimer()
+        #self.timer.setSingleShot(True)
+        #self.timer.timeout.connect(self.ask_ai)
 
         setup_file_menu(self)
         self.setup_run_menu()
@@ -682,7 +682,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         editor.highlighter = registry.get_highlighter(editor.document(), ext)
 
         editor.cursorPositionChanged.connect(self.update_status_bar)
-        editor.textChanged.connect(self.update_status_bar)
+        #editor.textChanged.connect(self.update_status_bar)
         editor.textChanged.connect(self.on_text_changed)
         editor.ai_started.connect(self.show_loading_indicator)
         editor.ai_finished.connect(self.hide_loading_indicator)
@@ -1243,11 +1243,11 @@ Instructions:
             action.triggered.connect(fn)
             view_menu.addAction(action)
 
-        toggle_completion = QAction("Toggle In-line Completion", self)
-        toggle_completion.setCheckable(True)
-        toggle_completion.setChecked(True)
-        toggle_completion.toggled.connect(self.toggle_inline_completion)
-        view_menu.addAction(toggle_completion)
+        #toggle_completion = QAction("Toggle In-line Completion", self)
+        #toggle_completion.setCheckable(True)
+        #toggle_completion.setChecked(True)
+        #toggle_completion.toggled.connect(self.toggle_inline_completion)
+        #view_menu.addAction(toggle_completion)
 
     def setup_help_menu(self):
         help_menu = self.menuBar().addMenu("Help")
@@ -1479,9 +1479,9 @@ Instructions:
             elif not editor.is_dirty() and current_title.endswith("*"):
                 self.tabs.setTabText(index, current_title[:-1])
 
-        self.timer.start(500)
         editor.clear_ghost_text()
-
+        
+        # Cancel any in-flight completion (user is typing → invalidate it)
         if self.last_worker:
             self.last_worker.cancel()
 
