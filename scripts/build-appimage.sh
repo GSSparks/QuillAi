@@ -59,12 +59,32 @@ if [ ! -f "$QT_PLUGIN" ]; then
     chmod +x $QT_PLUGIN
 fi
 
-echo "🔍 Locating qmake..."
-if ! command -v qmake &> /dev/null; then
-    echo "❌ qmake not found. Make sure qt6.qtbase is in your environment."
+echo "🔍 Locating qmake from Nix store..."
+# The Nix build result has Qt in its closure — find qmake from there
+QMAKE_PATH=$(find /nix/store -name "qmake" -type f 2>/dev/null | grep qt6 | head -n 1)
+
+if [ -z "$QMAKE_PATH" ]; then
+    # Fallback: try to get it via nix shell
+    QMAKE_PATH=$(nix shell nixpkgs#qt6.qtbase -c which qmake 2>/dev/null || true)
+fi
+
+if [ -z "$QMAKE_PATH" ]; then
+    echo "❌ qmake not found in Nix store. Trying nix build approach..."
+    nix build nixpkgs#qt6.qtbase --out-link /tmp/qt6base
+    QMAKE_PATH=$(find /tmp/qt6base -name "qmake" -type f | head -n 1)
+fi
+
+if [ -z "$QMAKE_PATH" ]; then
+    echo "❌ Could not locate qmake. Aborting."
     exit 1
 fi
-export QMAKE="$(which qmake)"
+
+echo "✅ Found qmake at: $QMAKE_PATH"
+export QMAKE="$QMAKE_PATH"
+
+# Also add Qt bin dir to PATH so linuxdeploy-plugin-qt can find other Qt tools
+QT_BIN_DIR="$(dirname $QMAKE_PATH)"
+export PATH="$QT_BIN_DIR:$PATH"
 
 echo "⚙️ Building AppImage..."
 ./$LINUXDEPLOY \

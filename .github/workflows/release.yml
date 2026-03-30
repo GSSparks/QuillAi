@@ -50,13 +50,22 @@ jobs:
           sudo chmod 666 /dev/fuse || true
           sudo chown root:$USER /dev/fuse || true
 
+      - name: Add Qt tools to PATH
+        run: |
+          # Build qt6.qtbase and add its bin to PATH so qmake is available
+          # to the build script outside of a nix shell
+          nix build nixpkgs#qt6.qtbase --out-link /tmp/qt6base
+          QT_BIN=$(find /tmp/qt6base -name "qmake" -type f | head -n1 | xargs dirname)
+          echo "$QT_BIN" >> "$GITHUB_PATH"
+          echo "QMAKE=$(find /tmp/qt6base -name qmake -type f | head -n1)" >> "$GITHUB_ENV"
+
       - name: Build AppImage
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
-          chmod +x scripts/build-appimage.sh
-          bash scripts/build-appimage.sh
+          chmod +x build-appimage.sh
+          bash build-appimage.sh
 
       - name: Find built AppImage
         id: find_appimage
