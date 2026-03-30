@@ -1,37 +1,83 @@
-name: Build AppImage Release
+name: Build AppImage
 
 on:
   push:
     tags:
-      - "v*"
+      - 'v*'
+
+permissions:
+  contents: write   # needed to create the release and upload assets
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-
-    permissions:
-      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install Nix
-        uses: cachix/install-nix-action@v25
+        uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
 
-      - name: Enable flakes
+      - name: Cache Nix store
+        uses: actions/cache@v4
+        with:
+          path: /nix/store
+          key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+          restore-keys: |
+            nix-${{ runner.os }}-
+
+      - name: Install system dependencies
         run: |
-          mkdir -p ~/.config/nix
-          echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            rsync \
+            wget \
+            fuse \
+            libfuse2 \
+            file \
+            desktop-file-utils \
+            libglib2.0-bin
+
+      - name: Allow FUSE (needed by AppImage tools)
+        run: |
+          sudo modprobe fuse || true
+          sudo chmod 666 /dev/fuse || true
+          sudo chown root:$USER /dev/fuse || true
 
       - name: Build AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+          GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
-          chmod +x scripts/build-appimage.sh
-          ./scripts/build-appimage.sh
+          chmod +x build-appimage.sh
+          bash build-appimage.sh
 
-      - name: Upload release
+      - name: Find built AppImage
+        id: find_appimage
+        run: |
+          APPIMAGE=$(ls QuillAI-*.AppImage 2>/dev/null | head -n1)
+          if [ -z "$APPIMAGE" ]; then
+            echo "❌ No AppImage found after build"
+            exit 1
+          fi
+          echo "path=$APPIMAGE" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename $APPIMAGE)" >> "$GITHUB_OUTPUT"
+          echo "✅ Found: $APPIMAGE ($(du -h $APPIMAGE | cut -f1))"
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ./*.AppImage
+          tag_name: ${{ github.ref_name }}
+          name: QuillAI ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: ${{ steps.find_appimage.outputs.path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
