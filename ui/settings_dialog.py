@@ -1,6 +1,9 @@
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QLineEdit, QPushButton, QFormLayout,
-                             QGroupBox, QComboBox, QApplication)
+                             QGroupBox, QComboBox, QApplication,
+                             QWidget, QScrollArea, QCheckBox)
+from PyQt6.QtCore import Qt
+
 from ui.theme import (theme_names, get_theme, apply_theme, theme_signals,
                       build_settings_dialog_stylesheet,
                       build_hint_label_stylesheet)
@@ -11,18 +14,16 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.sm = settings_manager
         self.setWindowTitle("QuillAI Settings")
-        self.setFixedWidth(500)
+        self.resize(520, 560)
 
-        # Capture original theme so cancel can revert
         self._original_theme = self.sm.get('theme') or 'gruvbox_dark'
 
         self._setup_ui()
         self.apply_styles(get_theme())
 
-        # Stay in sync when _preview_theme fires apply_theme (which emits the signal)
         theme_signals.theme_changed.connect(self._on_theme_changed)
 
-    # ── Theme handling ────────────────────────────────────────────────────
+    # ── Theme ─────────────────────────────────────────────────────────────
 
     def _on_theme_changed(self, t: dict):
         self.apply_styles(t)
@@ -36,8 +37,22 @@ class SettingsDialog(QDialog):
     # ── UI Setup ──────────────────────────────────────────────────────────
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ── Scrollable content (Git panel style) ──────────────────────────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(14)
+
+        scroll.setWidget(container)
+        root.addWidget(scroll)
 
         # ── Local LLM ────────────────────────────────────────────
         local_group = QGroupBox("Local LLM  (llama.cpp)")
@@ -72,26 +87,23 @@ class SettingsDialog(QDialog):
         openai_form.addRow("API Key:", self.openai_key)
         openai_form.addRow("Chat model:", self.openai_model)
 
-        # ── Anthropic / Claude ────────────────────────────────────
+        # ── Anthropic ────────────────────────────────────────────
         claude_group = QGroupBox("Anthropic  (Claude)")
         claude_form = QFormLayout(claude_group)
         claude_form.setSpacing(8)
 
         self.anthropic_key = QLineEdit(self.sm.get("anthropic_api_key"))
         self.anthropic_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self.anthropic_key.setPlaceholderText("sk-ant-...")
 
         self.claude_chat_model = QLineEdit(
             self.sm.get("chat_model") if self.sm.get_backend() == "claude"
             else "claude-sonnet-4-6"
         )
-        self.claude_chat_model.setPlaceholderText("claude-sonnet-4-6")
 
         self.claude_inline_model = QLineEdit(
             self.sm.get("active_model") if self.sm.get_backend() == "claude"
             else "claude-haiku-4-5-20251001"
         )
-        self.claude_inline_model.setPlaceholderText("claude-haiku-4-5-20251001")
 
         self._key_hint = QLabel("Get your key at console.anthropic.com")
 
@@ -105,16 +117,11 @@ class SettingsDialog(QDialog):
         terminal_form = QFormLayout(terminal_group)
         terminal_form.setSpacing(8)
 
-        from PyQt6.QtWidgets import QCheckBox
         self.terminal_clean_shell = QCheckBox("Clean shell  (skip .bashrc / .zshrc)")
         self.terminal_clean_shell.setChecked(
             bool(self.sm.get("terminal_clean_shell"))
         )
-        self.terminal_clean_shell.setToolTip(
-            "Start the terminal with --login --norc instead of -i.\n"
-            "Loads /etc/profile for PATH but skips your shell config.\n"
-            "Useful if your .bashrc is slow or produces unwanted output."
-        )
+
         terminal_form.addRow("", self.terminal_clean_shell)
 
         # ── Appearance ────────────────────────────────────────────
@@ -124,13 +131,12 @@ class SettingsDialog(QDialog):
 
         self.theme_combo = QComboBox()
         current_theme = self.sm.get('theme') or 'gruvbox_dark'
+
         for key, name in theme_names():
             self.theme_combo.addItem(name, key)
             if key == current_theme:
                 self.theme_combo.setCurrentText(name)
 
-        # Live preview — fires apply_theme which emits theme_signals.theme_changed,
-        # which then calls _on_theme_changed on this dialog automatically.
         self.theme_combo.currentIndexChanged.connect(self._preview_theme)
 
         self._theme_hint = QLabel("Theme change previews live; Cancel reverts.")
@@ -138,56 +144,66 @@ class SettingsDialog(QDialog):
         theme_form.addRow("Theme:", self.theme_combo)
         theme_form.addRow("", self._theme_hint)
 
-        # ── Buttons ───────────────────────────────────────────────
-        btns = QHBoxLayout()
-        save_btn = QPushButton("Save")
-        save_btn.clicked.connect(self.save_and_close)
-
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.setObjectName("cancelBtn")
-        cancel_btn.clicked.connect(self._on_cancel)
-
-        btns.addStretch()
-        btns.addWidget(cancel_btn)
-        btns.addWidget(save_btn)
-
+        # ── Add sections ──────────────────────────────────────────
         layout.addWidget(local_group)
         layout.addWidget(openai_group)
         layout.addWidget(claude_group)
         layout.addWidget(terminal_group)
         layout.addWidget(theme_group)
-        layout.addLayout(btns)
+        layout.addStretch()
+
+        # ── Footer (Git panel style) ──────────────────────────────
+        self.footer = QWidget()
+        footer_layout = QHBoxLayout(self.footer)
+        footer_layout.setContentsMargins(12, 8, 12, 8)
+
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color: gray;")
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setObjectName("cancelBtn")
+        cancel_btn.clicked.connect(self._on_cancel)
+
+        save_btn = QPushButton("Save")
+        save_btn.setObjectName("saveBtn")
+        save_btn.clicked.connect(self.save_and_close)
+
+        footer_layout.addWidget(self.status_label)
+        footer_layout.addStretch()
+        footer_layout.addWidget(cancel_btn)
+        footer_layout.addWidget(save_btn)
+
+        root.addWidget(self.footer)
 
     # ── Actions ───────────────────────────────────────────────────────────
 
     def _preview_theme(self):
-        """Apply the selected theme live. The signal will update this dialog too."""
         selected = self.theme_combo.currentData()
         apply_theme(QApplication.instance(), selected)
 
     def _on_cancel(self):
-        """Revert to the original theme if the user previewed a different one."""
         if self.theme_combo.currentData() != self._original_theme:
             apply_theme(QApplication.instance(), self._original_theme)
         self.reject()
 
     def save_and_close(self):
-        self.sm.set("local_llm_url",         self.local_url.text().strip())
-        self.sm.set("active_model",           self.local_model.text().strip())
-        self.sm.set("cloud_llm_url",          self.cloud_url.text().strip())
-        self.sm.set("cloud_api_key",          self.openai_key.text().strip())
-        self.sm.set("chat_model",             self.openai_model.text().strip())
-        self.sm.set("anthropic_api_key",      self.anthropic_key.text().strip())
-        self.sm.set("terminal_clean_shell",   self.terminal_clean_shell.isChecked())
+        self.sm.set("local_llm_url", self.local_url.text().strip())
+        self.sm.set("active_model", self.local_model.text().strip())
+        self.sm.set("cloud_llm_url", self.cloud_url.text().strip())
+        self.sm.set("cloud_api_key", self.openai_key.text().strip())
+        self.sm.set("chat_model", self.openai_model.text().strip())
+        self.sm.set("anthropic_api_key", self.anthropic_key.text().strip())
+        self.sm.set("terminal_clean_shell", self.terminal_clean_shell.isChecked())
 
         if self.sm.get_backend() == "claude":
             self.sm.set("active_model", self.claude_inline_model.text().strip())
-            self.sm.set("chat_model",   self.claude_chat_model.text().strip())
+            self.sm.set("chat_model", self.claude_chat_model.text().strip())
 
         selected_theme = self.theme_combo.currentData()
         self.sm.set('theme', selected_theme)
         apply_theme(QApplication.instance(), selected_theme)
 
+        self.status_label.setText("Saved ✓")
         self.accept()
 
     # ── Cleanup ───────────────────────────────────────────────────────────

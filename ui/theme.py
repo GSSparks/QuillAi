@@ -193,20 +193,180 @@ THEMES = {
 
     "solarized_dark": {
         "name": "Solarized Dark",
+    
+        # Backgrounds: shift towards grays with subtle blue-green tint
+        "bg0_hard":   "#1b2227",  # darker grayish blue-black
+        "bg0":        "#262c30",  # dark gray
+        "bg1":        "#2f3539",  # medium dark gray
+        "bg2":        "#4a5055",  # gray for selections
+        "bg3":        "#5f656a",  # inactive tab gray
+        "bg4":        "#7a8085",  # muted gray
+    
+        # Foregrounds: softer, more gray than yellow-beige
+        "fg0":        "#d7d9db",  # light gray
+        "fg1":        "#c8cacd",
+        "fg2":        "#9ea1a4",
+        "fg3":        "#8a8e91",
+        "fg4":        "#73777a",
+    
+        # Accent colors: slightly muted and grayish versions
+        "red":        "#dc322f",
+        "green":      "#6e7b48",  # muted olive green
+        "yellow":     "#b58900",
+        "blue":       "#4a6b82",  # muted grayish blue
+        "purple":     "#6c71c4",
+        "aqua":       "#5a7e77",  # muted grayish teal
+        "orange":     "#cb4b16",
+    
+        # Dim accent colors
+        "red_dim":    "#a32422",
+        "green_dim":  "#505a36",
+        "yellow_dim": "#896800",
+        "blue_dim":   "#395369",
+        "purple_dim": "#4f5491",
+        "aqua_dim":   "#43645e",
+        "orange_dim": "#9a380f",
+    
+        # Semantic mappings
+        "accent":           "#4a6b82",  # use muted blue for accent
+        "accent_alt":       "#5a7e77",  # muted aqua
+        "highlight":        "#2f3539",
+        "border":           "#2f3539",
+        "border_focus":     "#4a6b82",
+        "status_bar":       "#2f3539",
+        "tab_active_bar":   "#4a6b82",
+        "scrollbar":        "#4a5055",
+        "scrollbar_hover":  "#5f656a",
+        "chat_user_bubble": "#4a6b82",
+        "chat_ai_label":    "#6c71c4",
+        "ghost_text":       "#4a5055",
+        "error":            "#dc322f",
+        "warning":          "#b58900",
+        "success":          "#6e7b48",
+        "added_line":       "#6e7b48",
+        "modified_line":    "#b58900",
+    },
+    
+    "one_dark": {
+        "name": "One Dark",
 
-        "bg0_hard":   "#00212b",
-        "bg0":        "#002b36",
-        "bg1":        "#073642",
-        "bg2":        "#586e75",
-        "bg3":        "#657b83",
-        "bg4":        "#839496",
+        "bg0_hard":   "#21252b",
+        "bg0":        "#282c34",
+        "bg1":        "#2c313c",
+        "bg2":        "#3a3f4b",
+        "bg3":        "#4b5060",
+        "bg4":        "#5c6370",
 
-        "fg0":        "#fdf6e3",
-        "fg1":        "#eee8d5",
-        "fg2":        "#93a1a1",
+        "fg0":        "#ffffff",
+        "fg1":        "#abb2bf",
+        "fg2":        "#828997",
+        "fg3":        "#5c6370",
+        "fg4":        "#3e4452",
+
+        "red":        "#e06c75",
+        "green":      "#98c379",
+        "yellow":     "#e5c07b",
+        "blue":       "#61afef",
+        "purple":     "#c678dd",
+        "aqua":       "#56b6c2",
+        "orange":     "#d19a66",
+
+        "red_dim":    "#be5046",
+        "green_dim":  "#7fba00",
+        "yellow_dim": "#d19a66",
+        "blue_dim":   "#3b8eea",
+        "purple_dim": "#a074c4",
+        "aqua_dim":   "#2aa198",
+        "orange_dim": "#d1843a",
+
+        "accent":           "#61afef",
+        "accent_alt":       "#56b6c2",
+        "highlight":        "#3e4452",
+        "border":           "#2c313c",
+        "border_focus":     "#61afef",
+        "status_bar":       "#21252b",
+        "tab_active_bar":   "#61afef",
+        "scrollbar":        "#3a3f4b",
+        "scrollbar_hover":  "#4b5060",
+        "chat_user_bubble": "#61afef",
+        "chat_ai_label":    "#c678dd",
+        "ghost_text":       "#5c6370",
+        "error":            "#e06c75",
+        "warning":          "#e5c07b",
+        "success":          "#98c379",
+        "added_line":       "#98c379",
+        "modified_line":    "#e5c07b",
+    },
+
+    "dracula": {
+        "name": "Dracula",
+
+        "bg0_hard":   "#282a36",
+        "bg0":        "#44475a",
+        "bg1":        "#373844",
+        "bg2":        "#6272a4",
+        "bg3":        "#6272a4",
+        "bg4":        "#bd93f9",
+
+        "fg0":        "#f8f8f2",
+        "fg1":        "#f8f8f2",
+        "fg2":        "#f1fa8c",
+        "fg3":        "#50fa7b",
+        "fg4":        "#8be9fd",
+
+        "red":        "#ff5555",
+        "green":      "#50fa7b",
+        "yellow":     "#f1fa8c",
+        "blue":       "#6272a4",
+        "purple":     "#bd93f9",
+        "aqua":       "#8be9fd",
+        "orange":     "#ffb86c",
+
+        "red_dim":    "#ff6e6e",
+        "green_dim":  "#69ff94",
+        "yellow_dim": "#ffffa5",
+        "blue_dim":   "#7f8cdb",
+        "purple_dim": "#d6acff",
+        "aqua_dim":   "#9aedfe",
+        "orange_dim": "#ffcb6b",
+
+        "accent":           "#ff79c6",
+        "accent_alt":       "#8be9fd",
+        "highlight":        "#44475a",
+        "border":           "#373844",
+        "border_focus":     "#ff79c6",
+        "status_bar":       "#282a36",
+        "tab_active_bar":   "#ff79c6",
+        "scrollbar":        "#373844",
+        "scrollbar_hover":  "#6272a4",
+        "chat_user_bubble": "#8be9fd",
+        "chat_ai_label":    "#bd93f9",
+        "ghost_text":       "#6272a4",
+        "error":            "#ff5555",
+        "warning":          "#f1fa8c",
+        "success":          "#50fa7b",
+        "added_line":       "#50fa7b",
+        "modified_line":    "#f1fa8c",
+    },
+    
+    "solarized_light": {
+        "name": "Solarized Light",
+    
+        # Changed from #fdf6e3 and #eee8d5 to light grays
+        "bg0_hard":   "#e0e0e0",  # light gray, instead of bright cream
+        "bg0":        "#e0e0e0",
+        "bg1":        "#cfcfcf",  # slightly darker gray for panels, sidebars
+        "bg2":        "#a8a8a8",  # selection, hover
+        "bg3":        "#8c8c8c",  # inactive tabs
+        "bg4":        "#707070",  # comments, muted borders
+    
+        # Foregrounds can stay similar for readability on gray backgrounds
+        "fg0":        "#073642",
+        "fg1":        "#586e75",
+        "fg2":        "#657b83",
         "fg3":        "#839496",
         "fg4":        "#657b83",
-
+    
         "red":        "#dc322f",
         "green":      "#859900",
         "yellow":     "#b58900",
@@ -214,7 +374,7 @@ THEMES = {
         "purple":     "#6c71c4",
         "aqua":       "#2aa198",
         "orange":     "#cb4b16",
-
+    
         "red_dim":    "#a32422",
         "green_dim":  "#647300",
         "yellow_dim": "#896800",
@@ -222,29 +382,188 @@ THEMES = {
         "purple_dim": "#4f5491",
         "aqua_dim":   "#1f7a72",
         "orange_dim": "#9a380f",
-
+    
         "accent":           "#268bd2",
         "accent_alt":       "#2aa198",
-        "highlight":        "#073642",
-        "border":           "#073642",
+        "highlight":        "#cfcfcf",   # lighter gray highlight instead of bright cream
+        "border":           "#a8a8a8",
         "border_focus":     "#268bd2",
-        "status_bar":       "#073642",
+        "status_bar":       "#e0e0e0",
         "tab_active_bar":   "#268bd2",
-        "scrollbar":        "#586e75",
-        "scrollbar_hover":  "#657b83",
+        "scrollbar":        "#8c8c8c",
+        "scrollbar_hover":  "#707070",
         "chat_user_bubble": "#268bd2",
         "chat_ai_label":    "#6c71c4",
-        "ghost_text":       "#586e75",
+        "ghost_text":       "#a8a8a8",
         "error":            "#dc322f",
         "warning":          "#b58900",
         "success":          "#859900",
         "added_line":       "#859900",
         "modified_line":    "#b58900",
     },
+
+    "nord": {
+        "name": "Nord",
+
+        "bg0_hard":   "#2e3440",
+        "bg0":        "#3b4252",
+        "bg1":        "#434c5e",
+        "bg2":        "#4c566a",
+        "bg3":        "#616e88",
+        "bg4":        "#81a1c1",
+
+        "fg0":        "#eceff4",
+        "fg1":        "#d8dee9",
+        "fg2":        "#e5e9f0",
+        "fg3":        "#8fbcbb",
+        "fg4":        "#88c0d0",
+
+        "red":        "#bf616a",
+        "green":      "#a3be8c",
+        "yellow":     "#ebcb8b",
+        "blue":       "#81a1c1",
+        "purple":     "#b48ead",
+        "aqua":       "#88c0d0",
+        "orange":     "#d08770",
+
+        "red_dim":    "#a54242",
+        "green_dim":  "#8fbcbb",
+        "yellow_dim": "#d7af87",
+        "blue_dim":   "#5e81ac",
+        "purple_dim": "#946ea3",
+        "aqua_dim":   "#5e81ac",
+        "orange_dim": "#b0725a",
+
+        "accent":           "#81a1c1",
+        "accent_alt":       "#88c0d0",
+        "highlight":        "#434c5e",
+        "border":           "#4c566a",
+        "border_focus":     "#81a1c1",
+        "status_bar":       "#2e3440",
+        "tab_active_bar":   "#81a1c1",
+        "scrollbar":        "#434c5e",
+        "scrollbar_hover":  "#616e88",
+        "chat_user_bubble": "#81a1c1",
+        "chat_ai_label":    "#b48ead",
+        "ghost_text":       "#616e88",
+        "error":            "#bf616a",
+        "warning":          "#ebcb8b",
+        "success":          "#a3be8c",
+        "added_line":       "#a3be8c",
+        "modified_line":    "#ebcb8b",
+    },
+
+    "palenight": {
+        "name": "Palenight",
+
+        "bg0_hard":   "#292d3e",
+        "bg0":        "#292d3e",
+        "bg1":        "#323550",
+        "bg2":        "#3f415e",
+        "bg3":        "#5c5f77",
+        "bg4":        "#676c7f",
+
+        "fg0":        "#e6e1cf",
+        "fg1":        "#a6accd",
+        "fg2":        "#bfbfef",
+        "fg3":        "#828bb8",
+        "fg4":        "#5c5f77",
+
+        "red":        "#ff5370",
+        "green":      "#c3e88d",
+        "yellow":     "#ffcb6b",
+        "blue":       "#82aaff",
+        "purple":     "#c792ea",
+        "aqua":       "#89ddff",
+        "orange":     "#f78c6c",
+
+        "red_dim":    "#e53950",
+        "green_dim":  "#8fbcbb",
+        "yellow_dim": "#f2b642",
+        "blue_dim":   "#6b9afc",
+        "purple_dim": "#ab47bc",
+        "aqua_dim":   "#66c2ff",
+        "orange_dim": "#e57373",
+
+        "accent":           "#82aaff",
+        "accent_alt":       "#89ddff",
+        "highlight":        "#3f415e",
+        "border":           "#323550",
+        "border_focus":     "#82aaff",
+        "status_bar":       "#292d3e",
+        "tab_active_bar":   "#82aaff",
+        "scrollbar":        "#3f415e",
+        "scrollbar_hover":  "#5c5f77",
+        "chat_user_bubble": "#82aaff",
+        "chat_ai_label":    "#c792ea",
+        "ghost_text":       "#5c5f77",
+        "error":            "#ff5370",
+        "warning":          "#ffcb6b",
+        "success":          "#c3e88d",
+        "added_line":       "#c3e88d",
+        "modified_line":    "#ffcb6b",
+    },
+    
+    "quillai": {
+        "name": "QuillAi",
+    
+        # Base backgrounds (warm, soft grays and light browns)
+        "bg0_hard":   "#2b2a28",  # editor background - dark but warm
+        "bg0":        "#3c3b38",  # main background
+        "bg1":        "#4e4c49",  # panels, sidebars
+        "bg2":        "#65625f",  # selection, hover
+        "bg3":        "#7e7b77",  # inactive tabs
+        "bg4":        "#9a9793",  # comments, muted borders
+    
+        # Foregrounds (soft off-whites and light grays)
+        "fg0":        "#f0ebe3",  # brightest text
+        "fg1":        "#ded9d0",  # main text
+        "fg2":        "#c6c1b8",  # secondary text
+        "fg3":        "#aaa59f",  # muted text
+        "fg4":        "#8f8b87",  # very muted
+    
+        # Accent colors (pastel, low saturation)
+        "red":        "#e07a78",
+        "green":      "#98bb98",
+        "yellow":     "#d9c99b",
+        "blue":       "#8ca6db",
+        "purple":     "#b39ddb",
+        "aqua":       "#7fbfc0",
+        "orange":     "#eab07a",
+    
+        # Accent colors (dimmed variants)
+        "red_dim":    "#b45e5c",
+        "green_dim":  "#6f8b6f",
+        "yellow_dim": "#b3a87a",
+        "blue_dim":   "#6b85b0",
+        "purple_dim": "#8f74b0",
+        "aqua_dim":   "#5f8d8e",
+        "orange_dim": "#b37b52",
+    
+        # Semantic mappings
+        "accent":           "#8ca6db",  # calm pastel blue as primary accent
+        "accent_alt":       "#7fbfc0",  # pastel aqua as secondary accent
+        "highlight":        "#65625f",  # subtle selection highlight
+        "border":           "#4e4c49",
+        "border_focus":     "#8ca6db",
+        "status_bar":       "#3c3b38",
+        "tab_active_bar":   "#8ca6db",
+        "scrollbar":        "#4e4c49",
+        "scrollbar_hover":  "#65625f",
+        "chat_user_bubble": "#7fbfc0",
+        "chat_ai_label":    "#b39ddb",
+        "ghost_text":       "#9a9793",
+        "error":            "#e07a78",
+        "warning":          "#d9c99b",
+        "success":          "#98bb98",
+        "added_line":       "#98bb98",
+        "modified_line":    "#d9c99b",
+    }
+
 }
 
 # Default theme
-DEFAULT_THEME = "gruvbox_dark"
+DEFAULT_THEME = "quillai"
 
 # Tracks whichever theme is currently active so get_theme() with no args
 # always returns the live palette rather than always falling back to the default.
@@ -1046,69 +1365,141 @@ def build_about_dialog_parts(t: dict) -> dict:
 
 
 def build_settings_dialog_stylesheet(t: dict) -> str:
-    """Stylesheet for SettingsDialog."""
+    """Settings dialog styled like git panel — flat, layered, minimal."""
     return f"""
+        /* ── Dialog Base ───────────────────────────────────────────── */
         QDialog {{
             background-color: {t['bg1']};
             color: {t['fg1']};
         }}
+
+        /* ── Labels ───────────────────────────────────────────────── */
         QLabel {{
-            color: {t['fg1']};
-            font-size: 10pt;
+            color: {t['fg2']};
+            font-size: 9pt;
+            background: transparent;
         }}
-        QLineEdit {{
-            background-color: {t['bg0_hard']};
-            color: {t['fg1']};
-            border: 1px solid {t['border']};
-            border-radius: 4px;
-            padding: 5px 8px;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 10pt;
-        }}
-        QLineEdit:focus {{
-            border: 1px solid {t['border_focus']};
-        }}
+
+        /* Section titles (QGroupBox title) */
         QGroupBox {{
             color: {t['fg4']};
             font-weight: bold;
             font-size: 9pt;
             border: 1px solid {t['border']};
             border-radius: 6px;
-            margin-top: 10px;
-            padding-top: 8px;
+            margin-top: 12px;
+            padding: 10px;
+            background-color: {t['bg1']};
         }}
+
         QGroupBox::title {{
             subcontrol-origin: margin;
+            subcontrol-position: top left;
+            padding: 0 6px;
             left: 10px;
-            padding: 0 4px;
+            color: {t['fg4']};
         }}
-        QComboBox {{
+
+        /* ── Inputs (Git panel style) ─────────────────────────────── */
+        QLineEdit {{
             background-color: {t['bg0_hard']};
-            color: {t['fg1']};
+            color: {t['fg0']};
             border: 1px solid {t['border']};
             border-radius: 4px;
-            padding: 5px 8px;
+            padding: 6px 10px;
+            font-family: 'JetBrains Mono', monospace;
             font-size: 10pt;
         }}
-        QComboBox:focus {{ border: 1px solid {t['border_focus']}; }}
+
+        QLineEdit:focus {{
+            border: 1px solid {t['border_focus']};
+        }}
+
+        QComboBox {{
+            background-color: {t['bg0_hard']};
+            color: {t['fg0']};
+            border: 1px solid {t['border']};
+            border-radius: 4px;
+            padding: 6px 10px;
+            font-size: 10pt;
+        }}
+
+        QComboBox:focus {{
+            border: 1px solid {t['border_focus']};
+        }}
+
+        QComboBox::drop-down {{
+            border: none;
+        }}
+
         QComboBox QAbstractItemView {{
             background-color: {t['bg1']};
             color: {t['fg1']};
             selection-background-color: {t['highlight']};
             border: 1px solid {t['border']};
         }}
-        QPushButton {{
+
+        /* ── Buttons (Git panel style hierarchy) ──────────────────── */
+
+        /* Primary action */
+        QPushButton#saveBtn {{
             background-color: {t['accent']};
             color: {t['bg0_hard']};
-            border: none; border-radius: 4px;
-            padding: 6px 16px; font-weight: bold;
+            border: none;
+            border-radius: 4px;
+            padding: 6px 18px;
+            font-weight: bold;
         }}
-        QPushButton:hover  {{ background-color: {t['yellow']}; }}
-        QPushButton#cancelBtn {{
+
+        QPushButton#saveBtn:hover {{
+            background-color: {t['yellow']};
+        }}
+
+        /* Secondary buttons */
+        QPushButton {{
             background-color: {t['bg2']};
             color: {t['fg1']};
+            border: 1px solid {t['border']};
+            border-radius: 4px;
+            padding: 6px 14px;
+            font-weight: normal;
         }}
-        QPushButton#cancelBtn:hover {{ background-color: {t['bg3']}; }}
+
+        QPushButton:hover {{
+            background-color: {t['bg3']};
+            border-color: {t['border_focus']};
+        }}
+
+        /* Cancel = subtle */
+        QPushButton#cancelBtn {{
+            background-color: transparent;
+            color: {t['fg4']};
+            border: none;
+            padding: 6px 10px;
+        }}
+
+        QPushButton#cancelBtn:hover {{
+            color: {t['fg2']};
+        }}
+
+        /* ── Checkboxes ───────────────────────────────────────────── */
+        QCheckBox {{
+            color: {t['fg1']};
+            spacing: 8px;
+        }}
+
+        QCheckBox::indicator {{
+            width: 14px;
+            height: 14px;
+            border-radius: 3px;
+            border: 1px solid {t['border']};
+            background-color: {t['bg0_hard']};
+        }}
+
+        QCheckBox::indicator:checked {{
+            background-color: {t['accent']};
+            border-color: {t['accent']};
+        }}
     """
 
 
