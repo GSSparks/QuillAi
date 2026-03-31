@@ -48,6 +48,7 @@
           pyyaml
           requests
           markdown
+          pygments
         ];
 
         buildInputs = [

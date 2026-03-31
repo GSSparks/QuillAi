@@ -1,5 +1,12 @@
 import re
 import base64
+import markdown
+from markdown.extensions.fenced_code import FencedCodeExtension
+from markdown.extensions.tables import TableExtension
+from pygments import highlight
+from pygments.lexers import get_lexer_by_name, guess_lexer, TextLexer
+from pygments.formatters import HtmlFormatter
+from pygments.util import ClassNotFound
 from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import QApplication
@@ -114,312 +121,88 @@ class ChatRenderer:
 
     # ── Markdown rendering ────────────────────────────────────────────────
 
-    def _apply_inline_markdown(self, text: str, s: dict) -> str:
-        """Apply inline markdown (code, bold, italic). Requires styles dict."""
-        text = re.sub(
-            r'`([^`]+)`',
-            lambda m: f'<code style="{s["inline_code"]}">{m.group(1)}</code>',
-            text
-        )
-        text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
-        text = re.sub(r'__(.+?)__',     r'<strong>\1</strong>', text)
-        text = re.sub(r'\*(.+?)\*',     r'<em>\1</em>', text)
-        text = re.sub(r'_(.+?)_',       r'<em>\1</em>', text)
-        return text
-
-    def _render_markdown_text(self, text: str, s: dict) -> str:
-        """Render a prose block to HTML. Requires pre-built styles dict."""
-        lines = text.split('\n')
-        html_lines = []
-        in_ul = False
-        in_ol = False
-
-        for line in lines:
-            stripped = line.strip()
-
-            # Unordered list item
-            if re.match(r'^[-*+]\s+', stripped):
-                if not in_ul:
-                    if in_ol:
-                        html_lines.append('</ol>')
-                        in_ol = False
-                    html_lines.append(f'<ul style="{s["ul"]}">')
-                    in_ul = True
-                content = re.sub(r'^[-*+]\s+', '', stripped)
-                html_lines.append(
-                    f'<li style="{s["prose_li"]}">'
-                    f'{self._apply_inline_markdown(content, s)}</li>'
-                )
-                continue
-
-            # Ordered list item
-            if re.match(r'^\d+\.\s+', stripped):
-                if not in_ol:
-                    if in_ul:
-                        html_lines.append('</ul>')
-                        in_ul = False
-                    html_lines.append(f'<ol style="{s["ol"]}">')
-                    in_ol = True
-                content = re.sub(r'^\d+\.\s+', '', stripped)
-                html_lines.append(
-                    f'<li style="{s["prose_li"]}">'
-                    f'{self._apply_inline_markdown(content, s)}</li>'
-                )
-                continue
-
-            # Close any open list
-            if in_ul:
-                html_lines.append('</ul>')
-                in_ul = False
-            if in_ol:
-                html_lines.append('</ol>')
-                in_ol = False
-
-            # Headings
-            if re.match(r'^#{1,3}\s', stripped):
-                level   = len(re.match(r'^(#+)', stripped).group(1))
-                content = re.sub(r'^#+\s+', '', stripped)
-                key     = f"heading_{level}" if level <= 3 else "heading_3"
-                html_lines.append(
-                    f'<p style="{s[key]}">'
-                    f'{self._apply_inline_markdown(content, s)}</p>'
-                )
-                continue
-
-            # Horizontal rule
-            if re.match(r'^[-*_]{3,}\s*$', stripped):
-                html_lines.append(f'<hr style="{s["hr"]}"/>')
-                continue
-
-            # Blank line
-            if not stripped:
-                html_lines.append('<p style="margin:4px 0;">&nbsp;</p>')
-                continue
-
-            # Normal paragraph
-            html_lines.append(
-                f'<p style="{s["prose_p"]}">'
-                f'{self._apply_inline_markdown(stripped, s)}</p>'
-            )
-
-        if in_ul:
-            html_lines.append('</ul>')
-        if in_ol:
-            html_lines.append('</ol>')
-
-        return ''.join(html_lines)
-
     def _render_ai_response(self, text: str) -> str:
-        # One theme lookup per render — passed down to all helpers
         s = build_chat_styles(get_theme())
-
-        parts = re.split(r'(```(?:[\w]*)\n.*?```)', text, flags=re.DOTALL)
-        html_parts = []
-
-        for part in parts:
-            if part.startswith('```'):
-                lang_match = re.match(r'```([\w]*)\n?', part)
-                lang       = lang_match.group(1).lower() if lang_match else ""
-                code       = re.sub(r'^```[\w]*\n?', '', part)
-                code       = re.sub(r'\n?```$', '', code)
-
-                highlighted = self._highlight_code_block(code, lang)
-                encoded     = base64.b64encode(code.encode('utf-8')).decode('utf-8')
-                lang_label  = lang.upper() if lang else "CODE"
-
-                html_parts.append(
-                    f'<table width="100%" cellpadding="0" cellspacing="0" '
-                    f'style="margin:8px 0;">'
-                    f'<tr><td width="100%" style="{s["code_header_td"]}">'
-                    f'<span style="{s["lang_label"]}">{lang_label}</span>'
-                    f'&nbsp;&nbsp;'
-                    f'<a href="copy:{encoded}" style="{s["copy_link"]}">⎘ Copy</a>'
-                    f'</td></tr>'
-                    f'<tr><td width="100%" style="{s["code_body_td"]}">'
-                    f'<pre style="{s["code_pre"]}">{highlighted}</pre>'
-                    f'</td></tr></table>'
-                )
-            else:
-                if not part.strip():
-                    continue
-                escaped = (part.replace("&", "&amp;")
-                               .replace("<", "&lt;")
-                               .replace(">", "&gt;"))
-                html_parts.append(self._render_markdown_text(escaped, s))
-
-        inner = ''.join(html_parts)
+    
+        # Post-process the HTML to inject QuillAI's theme styles
+        # and add copy buttons to code blocks
+        md = markdown.Markdown(extensions=[
+            FencedCodeExtension(),
+            TableExtension(),
+            "markdown.extensions.nl2br",
+            "markdown.extensions.sane_lists",
+        ])
+    
+        raw_html = md.convert(text)
+    
+        # Inject copy buttons + theme styles into code blocks
+        def replace_code_block(m):
+            inner      = m.group(1)
+            lang_match = re.search(r'class="language-(\w+)"', m.group(0))
+            lang       = lang_match.group(1).lower() if lang_match else ""
+            lang_label = lang.upper() if lang else "CODE"
+    
+            highlighted = self._highlight_code_block(inner, lang)
+            encoded     = base64.b64encode(inner.encode("utf-8")).decode("utf-8")
+    
+            return (
+                f'<table width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0;">'
+                f'<tr><td style="{s["code_header_td"]}">'
+                f'<span style="{s["lang_label"]}">{lang_label}</span>'
+                f'&nbsp;&nbsp;'
+                f'<a href="copy:{encoded}" style="{s["copy_link"]}">⎘ Copy</a>'
+                f'</td></tr>'
+                f'<tr><td style="{s["code_body_td"]}">'
+                f'<pre style="{s["code_pre"]}">{highlighted}</pre>'
+                f'</td></tr></table>'
+            )
+    
+        raw_html = re.sub(
+            r'<code[^>]*>(.*?)</code>',
+            replace_code_block,
+            raw_html,
+            flags=re.DOTALL
+        )
+    
+        # Wrap prose elements with theme styles
+        raw_html = re.sub(r'<p>',          f'<p style="{s["prose_p"]}">',    raw_html)
+        raw_html = re.sub(r'<ul>',         f'<ul style="{s["ul"]}">',        raw_html)
+        raw_html = re.sub(r'<ol>',         f'<ol style="{s["ol"]}">',        raw_html)
+        raw_html = re.sub(r'<li>',         f'<li style="{s["prose_li"]}">',  raw_html)
+        raw_html = re.sub(r'<h1>',         f'<p style="{s["heading_1"]}">',  raw_html)
+        raw_html = re.sub(r'</h1>',        '</p>',                           raw_html)
+        raw_html = re.sub(r'<h2>',         f'<p style="{s["heading_2"]}">',  raw_html)
+        raw_html = re.sub(r'</h2>',        '</p>',                           raw_html)
+        raw_html = re.sub(r'<h3>',         f'<p style="{s["heading_3"]}">',  raw_html)
+        raw_html = re.sub(r'</h3>',        '</p>',                           raw_html)
+        raw_html = re.sub(r'<hr\s*/>',     f'<hr style="{s["hr"]}"/>',       raw_html)
+        raw_html = re.sub(
+            r'<code>([^<]+)</code>',
+            lambda m: f'<code style="{s["inline_code"]}">{m.group(1)}</code>',
+            raw_html
+        )
+    
         return (
             f'<table width="100%" cellpadding="0" cellspacing="0" '
             f'style="margin:0 0 12px 0;">'
-            f'<tr><td width="100%" style="padding:0;">'
-            f'{inner}'
-            f'</td></tr></table>'
+            f'<tr><td style="padding:0;">{raw_html}</td></tr></table>'
         )
 
     # ── Syntax highlighting ───────────────────────────────────────────────
 
     def _highlight_code_block(self, code: str, lang: str = "") -> str:
-        escaped = (code.replace("&", "&amp;")
-                       .replace("<", "&lt;")
-                       .replace(">", "&gt;"))
-
-        # Auto-detect language if not provided
-        if not lang:
-            if re.search(r'\bdef \w+|import \w+|class \w+:', escaped):
-                lang = "python"
-            elif re.search(r'\bfunction\b|\bconst\b|\blet\b|\bvar\b', escaped):
-                lang = "javascript"
-            elif re.search(r'^\s*-\s+\w+:|hosts:|tasks:', escaped, re.MULTILINE):
-                lang = "yaml"
-            elif re.search(r'#!/.*bash|echo\b|\bfi\b|\bdone\b', escaped):
-                lang = "bash"
-            elif re.search(r'nixpkgs|mkShell|buildInputs', escaped):
-                lang = "nix"
-
-        if lang in ("python", "py"):
-            keywords = (r'\b(def|class|import|from|return|if|elif|else|for|while|'
-                        r'in|and|or|not|True|False|None|pass|try|except|with|as|'
-                        r'async|await|lambda|yield|raise|break|continue|global|'
-                        r'nonlocal|del|assert|is)\b')
-            builtins = (r'\b(print|len|range|str|int|float|list|dict|set|tuple|'
-                        r'bool|type|isinstance|hasattr|getattr|setattr|open|'
-                        r'enumerate|zip|map|filter|any|all|sum|min|max|abs|'
-                        r'round|sorted|reversed|super|self)\b')
-
-            string_map = {}
-            counter = [0]
-
-            def protect_string(m):
-                key = f"\x00STR{counter[0]}\x00"
-                counter[0] += 1
-                string_map[key] = (
-                    f'<span style="color:#E6DB74;">{m.group(0)}</span>'
-                )
-                return key
-
-            escaped = re.sub(r'""".*?"""|\'\'\'.*?\'\'\'',
-                             protect_string, escaped, flags=re.DOTALL)
-            escaped = re.sub(r'"[^"\n]*"|\'[^\'\n]*\'', protect_string, escaped)
-
-            def protect_comment(m):
-                key = f"\x00CMT{counter[0]}\x00"
-                counter[0] += 1
-                string_map[key] = (
-                    f'<span style="color:#75715E;font-style:italic;">'
-                    f'{m.group(0)}</span>'
-                )
-                return key
-
-            escaped = re.sub(r'#[^\n]*', protect_comment, escaped)
-            escaped = re.sub(r'(@\w+)',
-                             r'<span style="color:#A6E22E;">\1</span>', escaped)
-            escaped = re.sub(keywords,
-                             r'<span style="color:#F92672;font-weight:bold;">\1</span>',
-                             escaped)
-            escaped = re.sub(builtins,
-                             r'<span style="color:#66D9EF;font-style:italic;">\1</span>',
-                             escaped)
-            escaped = re.sub(r'\b(\d+\.?\d*)\b',
-                             r'<span style="color:#AE81FF;">\1</span>', escaped)
-            escaped = re.sub(
-                r'(def|class)\s+(<span[^>]*>)?(\w+)',
-                lambda m: (
-                    f'{m.group(1)} '
-                    f'<span style="color:#A6E22E;font-weight:bold;">'
-                    f'{m.group(3)}</span>'
-                ),
-                escaped,
-            )
-            for key, value in string_map.items():
-                escaped = escaped.replace(key, value)
-
-        elif lang in ("javascript", "js", "typescript", "ts"):
-            keywords = (r'\b(function|const|let|var|return|if|else|for|while|'
-                        r'class|import|export|from|new|this|typeof|instanceof|'
-                        r'async|await|try|catch|throw|true|false|null|undefined|'
-                        r'switch|case|break|continue|default|of|in)\b')
-            escaped = re.sub(
-                r'"[^"\n]*"|\'[^\'\n]*\'|`[^`]*`',
-                lambda m: f'<span style="color:#E6DB74;">{m.group(0)}</span>',
-                escaped,
-            )
-            escaped = re.sub(
-                r'//[^\n]*',
-                lambda m: (f'<span style="color:#75715E;font-style:italic;">'
-                           f'{m.group(0)}</span>'),
-                escaped,
-            )
-            escaped = re.sub(keywords,
-                             r'<span style="color:#F92672;font-weight:bold;">\1</span>',
-                             escaped)
-            escaped = re.sub(r'\b(\d+\.?\d*)\b',
-                             r'<span style="color:#AE81FF;">\1</span>', escaped)
-
-        elif lang in ("bash", "sh"):
-            escaped = re.sub(
-                r'#[^\n]*',
-                lambda m: (f'<span style="color:#75715E;font-style:italic;">'
-                           f'{m.group(0)}</span>'),
-                escaped,
-            )
-            escaped = re.sub(
-                r'"[^"\n]*"|\'[^\'\n]*\'',
-                lambda m: f'<span style="color:#E6DB74;">{m.group(0)}</span>',
-                escaped,
-            )
-            escaped = re.sub(
-                r'\$\{?\w+\}?',
-                lambda m: f'<span style="color:#AE81FF;">{m.group(0)}</span>',
-                escaped,
-            )
-            escaped = re.sub(
-                r'\b(if|then|else|elif|fi|for|while|do|done|case|esac|'
-                r'function|return|export|local|echo|source)\b',
-                r'<span style="color:#F92672;font-weight:bold;">\1</span>',
-                escaped,
-            )
-
-        elif lang in ("yaml", "yml", "ansible"):
-            lines = escaped.split('\n')
-            result = []
-            for line in lines:
-                line = re.sub(
-                    r'^(\s*)(\w[\w\s]*?)(:)',
-                    r'\1<span style="color:#66D9EF;">\2</span>\3',
-                    line,
-                )
-                line = re.sub(
-                    r'(#[^\n]*)',
-                    r'<span style="color:#75715E;font-style:italic;">\1</span>',
-                    line,
-                )
-                line = re.sub(
-                    r':\s*(["\'].*?["\'])',
-                    lambda m: f': <span style="color:#E6DB74;">{m.group(1)}</span>',
-                    line,
-                )
-                result.append(line)
-            escaped = '\n'.join(result)
-
-        elif lang in ("nix",):
-            escaped = re.sub(
-                r'#[^\n]*',
-                lambda m: (f'<span style="color:#75715E;font-style:italic;">'
-                           f'{m.group(0)}</span>'),
-                escaped,
-            )
-            escaped = re.sub(
-                r'"[^"\n]*"',
-                lambda m: f'<span style="color:#E6DB74;">{m.group(0)}</span>',
-                escaped,
-            )
-            escaped = re.sub(
-                r'\b(let|in|with|rec|if|then|else|import|inherit|true|false|null)\b',
-                r'<span style="color:#F92672;font-weight:bold;">\1</span>',
-                escaped,
-            )
-
-        return escaped
+        try:
+            lexer = get_lexer_by_name(lang) if lang else guess_lexer(code)
+        except ClassNotFound:
+            lexer = TextLexer()
+    
+        formatter = HtmlFormatter(
+            nowrap=True,        # no wrapping <div>, just the spans
+            noclasses=True,     # inline styles, no external CSS needed
+            style="monokai",    # closest to your current Gruvbox-ish palette
+        )
+    
+        return highlight(code, lexer, formatter)
 
     # ── Memory & conversation ─────────────────────────────────────────────
 
