@@ -103,6 +103,7 @@ class ChatRenderer:
         self.chat_history.ensureCursorVisible()
 
         if full_response.strip():
+            self.memory_manager.add_turn("assistant", full_response) 
             self._summarize_conversation_to_memory(full_response)
 
         self.memory_manager.save_chat_history(self.chat_history.toHtml())

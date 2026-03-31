@@ -24,81 +24,87 @@ class ContextEngine:
             used += self.estimate_tokens(memory_ctx)
 
         # ── Intent ────────────────────────────────────────────────
+        # Intent is used to adjust context strategy, not just labelled
         intent = self.detect_intent(user_text)
-        parts.append(f"[User Intent]\n{intent}")
 
-        # ── Active File ───────────────────────────────────
+        # ── Active File ───────────────────────────────────────────
         cursor_line = self.get_cursor_line(active_code, cursor_pos) if cursor_pos else None
-        
+
         symbol_ctx = ""
         called_ctx = ""
-        cross_ctx = ""
-        
+        cross_ctx  = ""
+
         if cursor_line:
             symbol = self.get_symbol_with_parent(active_code, cursor_line)
             symbol_ctx = self.extract_symbol_code(active_code, symbol)
-        
-            # expand context
-            called_ctx = self.expand_with_called_functions(active_code, symbol)
-            
-            # Cross-file calls
-            cross_ctx = self.expand_cross_file_calls(
-                active_code,
-                symbol,
-                file_path
-            )
-        
-        # fallback to query-based matching
+
+            if symbol_ctx:
+                # For debug intent: pull in more of the call stack
+                if intent == "debug":
+                    called_ctx = self.expand_with_called_functions(active_code, symbol)
+                    cross_ctx  = self.expand_cross_file_calls(active_code, symbol, file_path)
+
+                # For refactor: include the full parent class if we're inside a method
+                elif intent == "refactor":
+                    parent, _ = symbol if (isinstance(symbol, tuple) and len(symbol) == 2) else (None, None)
+                    if parent:
+                        pname, pstart, pend = parent
+                        lines = active_code.splitlines()
+                        symbol_ctx = f"# class {pname} (full)\n" + "\n".join(lines[pstart - 1:pend])
+                    called_ctx = self.expand_with_called_functions(active_code, symbol)
+
+                # Default: local called functions + cross-file
+                else:
+                    called_ctx = self.expand_with_called_functions(active_code, symbol)
+                    cross_ctx  = self.expand_cross_file_calls(active_code, symbol, file_path)
+
+        # ── Query-based fallback ───────────────────────────────────
         if not symbol_ctx:
             symbols = self.get_relevant_symbols(active_code, user_text)
             if symbols:
                 symbol_ctx = self.extract_code_blocks(active_code, symbols)
-        
-        # final fallback
-        if not symbol_ctx:
-            symbol_ctx = self.get_cursor_window(active_code)
 
-        # ── Combine all context layers ─────────────────────────────
-        
-        combined_ctx = ""
-        
-        if symbol_ctx:
-            combined_ctx += symbol_ctx
-        
+        # ── Cursor window final fallback ───────────────────────────
+        if not symbol_ctx:
+            symbol_ctx = self.get_cursor_window(active_code, cursor_pos=cursor_pos)
+
+        # ── Combine context layers ─────────────────────────────────
+        combined_ctx = symbol_ctx
+
         if called_ctx:
             combined_ctx += "\n\n# Called Functions (Local)\n" + called_ctx
-        
+
         if cross_ctx:
             combined_ctx += "\n\n# Called Functions (External)\n" + cross_ctx
-        
-        # safety fallback (should rarely hit now)
-        if not combined_ctx:
-            combined_ctx = self.get_cursor_window(active_code)
-        
-        # ── Append to prompt ───────────────────────────────────────
-        
-        parts.append(f"[Active Code]\n```python\n{combined_ctx}\n```")
-        used += self.estimate_tokens(combined_ctx)
 
-        # ── Imports (filtered) ────────────────────────────────────
+        active_block = f"[Active Code ({intent})]\n```python\n{combined_ctx}\n```"
+        parts.append(active_block)
+        used += self.estimate_tokens(active_block)
+
+        # ── Imports ───────────────────────────────────────────────
+        # All top-level imports are included — filtered imports dropped too much signal
         if used < TOKEN_BUDGET:
-            import_ctx = self.get_relevant_imports(active_code, user_text)
+            import_ctx = self.get_all_imports(active_code)
             if import_ctx:
-                parts.append("[Relevant Imports]\n" + import_ctx)
-                used += self.estimate_tokens(import_ctx)
+                import_block = "[Imports]\n" + import_ctx
+                parts.append(import_block)
+                used += self.estimate_tokens(import_block)
 
         # ── Related Project Code ──────────────────────────────────
         if used < TOKEN_BUDGET and file_path:
-            related = self.search_project(file_path, user_text)
+            related = self.search_project(file_path, user_text, active_code=active_code)
             if related:
-                parts.append("[Related Code]\n" + related)
-                used += self.estimate_tokens(related)
+                related_block = "[Related Code]\n" + related
+                parts.append(related_block)
+                used += self.estimate_tokens(related_block)
 
         # ── Open Tabs ─────────────────────────────────────────────
         if used < TOKEN_BUDGET and open_tabs:
             tabs_ctx = self.get_tabs_context(open_tabs, user_text)
             if tabs_ctx:
-                parts.append("[Open Tabs]\n" + tabs_ctx)
+                tabs_block = "[Open Tabs]\n" + tabs_ctx
+                parts.append(tabs_block)
+                used += self.estimate_tokens(tabs_block)
 
         return "\n\n".join(parts)
 
@@ -108,11 +114,11 @@ class ContextEngine:
 
     def detect_intent(self, text: str) -> str:
         t = text.lower()
-        if any(x in t for x in ["error", "bug", "traceback", "exception"]):
+        if any(x in t for x in ["error", "bug", "traceback", "exception", "why is", "broken"]):
             return "debug"
-        if "refactor" in t:
+        if any(x in t for x in ["refactor", "clean up", "restructure", "simplify"]):
             return "refactor"
-        if any(x in t for x in ["add", "create", "implement"]):
+        if any(x in t for x in ["add", "create", "implement", "write a", "new"]):
             return "feature"
         return "general"
 
@@ -121,20 +127,24 @@ class ContextEngine:
     # ─────────────────────────────────────────────────────────────
 
     def get_relevant_symbols(self, code: str, query: str):
+        """
+        Match function/class names against query words.
+        Uses AST symbol names rather than raw text to avoid noise.
+        """
         try:
             tree = ast.parse(code)
         except Exception:
             return []
-    
+
         matches = []
         q = query.lower()
-    
+
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
                 if node.name.lower() in q:
                     end = getattr(node, "end_lineno", node.lineno + 20)
                     matches.append((node.name, node.lineno, end))
-                    
+
         return matches
 
     def extract_code_blocks(self, code: str, blocks):
@@ -142,82 +152,89 @@ class ContextEngine:
         chunks = []
 
         for name, start, end in blocks:
-            chunk = "\n".join(lines[start-1:end])
+            chunk = "\n".join(lines[start - 1:end])
             chunks.append(f"# {name}\n{chunk}")
 
         return "\n\n".join(chunks)
-        
-    # ─────────────────────────────────────────────
-    # Cursor + AST helpers
-    # ─────────────────────────────────────────────
+
+    # ─────────────────────────────────────────────────────────────
+    # Cursor + AST Helpers
+    # ─────────────────────────────────────────────────────────────
 
     def get_cursor_line(self, code: str, cursor_pos: int) -> int:
         return code[:cursor_pos].count("\n") + 1
 
-    def get_symbol_with_parent(self, code, cursor_line):
+    def get_symbol_with_parent(self, code: str, cursor_line: int):
+        """
+        Walk the full AST (not just tree.body) to handle nested functions
+        and classes inside conditionals or other scopes.
+        Returns (parent, child) where each is (name, start, end) or None.
+        """
         try:
             tree = ast.parse(code)
-        except:
+        except Exception:
             return None, None
-    
+
         parent = None
-        child = None
-    
-        for node in tree.body:
+        child  = None
+
+        # Walk all nodes, not just tree.body, for robustness
+        for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
-                if node.lineno <= cursor_line <= node.end_lineno:
+                if hasattr(node, "end_lineno") and node.lineno <= cursor_line <= node.end_lineno:
                     parent = (node.name, node.lineno, node.end_lineno)
-    
+
                     for sub in node.body:
                         if isinstance(sub, ast.FunctionDef):
-                            if sub.lineno <= cursor_line <= sub.end_lineno:
+                            if hasattr(sub, "end_lineno") and sub.lineno <= cursor_line <= sub.end_lineno:
                                 child = (sub.name, sub.lineno, sub.end_lineno)
-    
+
             elif isinstance(node, ast.FunctionDef):
-                if node.lineno <= cursor_line <= node.end_lineno:
-                    child = (node.name, node.lineno, node.end_lineno)
-    
+                if hasattr(node, "end_lineno") and node.lineno <= cursor_line <= node.end_lineno:
+                    # Only set as child if not already claimed by a class method walk above
+                    if child is None:
+                        child = (node.name, node.lineno, node.end_lineno)
+
         return parent, child
 
     def extract_symbol_code(self, code: str, symbol):
         if not symbol:
             return ""
-    
+
         lines = code.splitlines()
-    
-        # Case 1: (parent, child)
+
+        # Case 1: (parent, child) tuple from get_symbol_with_parent
         if isinstance(symbol, tuple) and len(symbol) == 2:
             parent, child = symbol
             chunks = []
-    
+
             if parent:
                 pname, pstart, pend = parent
-                pchunk = "\n".join(lines[pstart-1:pend])
+                pchunk = "\n".join(lines[pstart - 1:pend])
                 chunks.append(f"# class {pname}\n{pchunk}")
-    
+
             if child:
                 cname, cstart, cend = child
-                cchunk = "\n".join(lines[cstart-1:cend])
+                cchunk = "\n".join(lines[cstart - 1:cend])
                 chunks.append(f"# function {cname}\n{cchunk}")
-    
+
             return "\n\n".join(chunks)
-    
-        # Case 2: single symbol (fallback compatibility)
+
+        # Case 2: single (name, start, end) tuple
         if isinstance(symbol, tuple) and len(symbol) == 3:
             name, start, end = symbol
-            chunk = "\n".join(lines[start-1:end])
+            chunk = "\n".join(lines[start - 1:end])
             return f"# {name}\n{chunk}"
-    
+
         return ""
- 
+
     def get_called_functions(self, code: str, symbol):
         """
-        Given a function/class symbol, return function names it calls.
+        Return names of functions called within the target symbol's body.
         """
         if not symbol:
             return []
-    
-        # Handle (parent, child)
+
         if isinstance(symbol, tuple) and len(symbol) == 2:
             _, child = symbol
             if not child:
@@ -225,185 +242,199 @@ class ContextEngine:
             _, start, end = child
         else:
             _, start, end = symbol
-    
-        lines = code.splitlines()
-        snippet = "\n".join(lines[start-1:end])
-    
+
+        lines   = code.splitlines()
+        snippet = "\n".join(lines[start - 1:end])
+
         try:
             tree = ast.parse(snippet)
-        except:
+        except Exception:
             return []
-    
+
         calls = set()
-    
+
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
                 if isinstance(node.func, ast.Name):
                     calls.add(node.func.id)
                 elif isinstance(node.func, ast.Attribute):
                     calls.add(node.func.attr)
-    
-        return list(calls)       
-        
+
+        return list(calls)
+
     def find_functions_by_name(self, code: str, names: list):
         try:
             tree = ast.parse(code)
-        except:
+        except Exception:
             return []
-    
+
         matches = []
-    
+
         for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef):
-                if node.name in names:
-                    end = getattr(node, "end_lineno", node.lineno + 20)
-                    matches.append((node.name, node.lineno, end))
-    
+            if isinstance(node, ast.FunctionDef) and node.name in names:
+                end = getattr(node, "end_lineno", node.lineno + 20)
+                matches.append((node.name, node.lineno, end))
+
         return matches
-    
+
     def expand_with_called_functions(self, code: str, symbol):
         called = self.get_called_functions(code, symbol)
-    
         if not called:
             return ""
-    
+
         matches = self.find_functions_by_name(code, called)
-    
         if not matches:
             return ""
-    
-        return self.extract_code_blocks(code, matches)    
-        
+
+        return self.extract_code_blocks(code, matches)
+
     # ─────────────────────────────────────────────────────────────
     # Cursor Window (fallback)
     # ─────────────────────────────────────────────────────────────
 
-    def get_cursor_window(self, code: str, window=200) -> str:
+    def get_cursor_window(self, code: str, cursor_pos=None, window=100) -> str:
+        """
+        Return a window of lines centered on the cursor position.
+        Falls back to the last `window` lines if no cursor is available.
+        """
         lines = code.splitlines()
-        return "\n".join(lines[-window:])  # simple fallback for now
+
+        if cursor_pos is None:
+            return "\n".join(lines[-window:])
+
+        mid   = code[:cursor_pos].count("\n")
+        start = max(0, mid - window // 2)
+        end   = min(len(lines), mid + window // 2)
+
+        return "\n".join(lines[start:end])
 
     # ─────────────────────────────────────────────────────────────
     # Imports
     # ─────────────────────────────────────────────────────────────
 
-    def get_relevant_imports(self, code: str, query: str) -> str:
-        lines = code.splitlines()
-        q_words = query.lower().split()
-
-        imports = [
-            l for l in lines
-            if l.strip().startswith("import") or l.strip().startswith("from")
-        ]
-
-        filtered = [
-            l for l in imports
-            if any(word in l.lower() for word in q_words)
-        ]
-
-        return "\n".join(filtered)
-
-    def parse_imports(self, code: str):
+    def get_all_imports(self, code: str) -> str:
         """
-        Returns: {symbol_name: file_path}
+        Return all top-level import statements.
+        Replaces the old query-filtered version which dropped too much signal —
+        imports are cheap tokens and always relevant context.
+        """
+        lines = code.splitlines()
+        return "\n".join(
+            l for l in lines
+            if l.strip().startswith(("import", "from"))
+        )
+
+    def parse_imports(self, code: str) -> dict:
+        """
+        Returns: {symbol_name: relative_file_path}
         """
         try:
             tree = ast.parse(code)
-        except:
+        except Exception:
             return {}
-    
+
         imports = {}
-    
+
         for node in ast.walk(tree):
-            # from x import y
             if isinstance(node, ast.ImportFrom):
                 module = node.module
                 if not module:
                     continue
-    
                 for alias in node.names:
                     name = alias.asname or alias.name
                     imports[name] = module.replace(".", "/") + ".py"
-    
-            # import x
+
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     name = alias.asname or alias.name
                     imports[name] = alias.name.replace(".", "/") + ".py"
-    
+
         return imports
-        
-    def resolve_import_path(self, base_file, relative_path):
-        base_dir = os.path.dirname(base_file)
+
+    def resolve_import_path(self, base_file: str, relative_path: str):
+        base_dir  = os.path.dirname(base_file)
         full_path = os.path.join(base_dir, relative_path)
-    
-        if os.path.exists(full_path):
-            return full_path
-    
-        return None
-        
-    def find_function_in_file(self, file_path, func_name):
+        return full_path if os.path.exists(full_path) else None
+
+    def find_function_in_file(self, file_path: str, func_name: str):
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 code = f.read()
-        except:
+        except Exception:
             return None
-    
+
         try:
             tree = ast.parse(code)
-        except:
+        except Exception:
             return None
-    
+
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef) and node.name == func_name:
-                end = getattr(node, "end_lineno", node.lineno + 20)
+                end   = getattr(node, "end_lineno", node.lineno + 20)
                 lines = code.splitlines()
-                chunk = "\n".join(lines[node.lineno-1:end])
+                chunk = "\n".join(lines[node.lineno - 1:end])
                 return f"# {func_name} ({os.path.basename(file_path)})\n{chunk}"
-    
+
         return None
-    
+
     def expand_cross_file_calls(self, code: str, symbol, file_path: str):
         if not file_path:
             return ""
-    
+
         called = self.get_called_functions(code, symbol)
         if not called:
             return ""
-    
+
         imports = self.parse_imports(code)
         results = []
-    
+
         for func in called:
             if func not in imports:
                 continue
-    
-            rel_path = imports[func]
-            full_path = self.resolve_import_path(file_path, rel_path)
-    
+
+            full_path = self.resolve_import_path(file_path, imports[func])
             if not full_path:
                 continue
-    
+
             found = self.find_function_in_file(full_path, func)
             if found:
                 results.append(found)
-    
+
         return "\n\n".join(results)
-        
+
     # ─────────────────────────────────────────────────────────────
-    # Project Search (basic v1)
+    # Project Search
     # ─────────────────────────────────────────────────────────────
 
-    def search_project(self, current_file, query, max_results=3):
-        root = os.path.dirname(current_file)
+    def search_project(self, current_file: str, query: str, active_code: str = "", max_results: int = 3) -> str:
+        """
+        Score candidate files by AST symbol name matches against the query,
+        rather than raw keyword frequency against full file text.
+        Falls back to raw word matching only when AST parsing fails.
+        Also uses currently-extracted symbol names from active_code as
+        additional query signal.
+        """
+        root    = os.path.dirname(current_file)
+        q_words = set(query.lower().split())
+
+        # Augment query with symbol names visible in the active file
+        if active_code:
+            try:
+                tree = ast.parse(active_code)
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                        q_words.add(node.name.lower())
+            except Exception:
+                pass
+
         results = []
-        q_words = query.lower().split()
 
         for dirpath, _, filenames in os.walk(root):
-            for f in filenames:
-                if not f.endswith(".py"):
+            for fname in filenames:
+                if not fname.endswith(".py"):
                     continue
 
-                full = os.path.join(dirpath, f)
+                full = os.path.join(dirpath, fname)
                 if full == current_file:
                     continue
 
@@ -413,10 +444,11 @@ class ContextEngine:
                 except Exception:
                     continue
 
-                score = sum(word in content.lower() for word in q_words)
+                score = self._score_file(content, q_words)
                 if score > 0:
-                    snippet = content[:800]
-                    results.append((score, f, snippet))
+                    # Build a meaningful snippet: top-level definitions rather than raw head
+                    snippet = self._extract_definitions_snippet(content, max_chars=800)
+                    results.append((score, fname, snippet))
 
         results.sort(reverse=True)
 
@@ -426,25 +458,72 @@ class ContextEngine:
 
         return "\n\n".join(formatted)
 
+    def _score_file(self, content: str, q_words: set) -> int:
+        """
+        Score a file by how many query words appear as AST symbol names.
+        Falls back to raw word frequency if AST parsing fails.
+        """
+        try:
+            tree    = ast.parse(content)
+            symbols = {
+                node.name.lower()
+                for node in ast.walk(tree)
+                if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+            }
+            return len(q_words & symbols)
+        except Exception:
+            # Fallback: raw word match
+            low = content.lower()
+            return sum(w in low for w in q_words)
+
+    def _extract_definitions_snippet(self, content: str, max_chars: int = 800) -> str:
+        """
+        Extract top-level class/function signatures instead of raw file head.
+        This gives the LLM a better structural overview of what's in the file.
+        """
+        try:
+            tree  = ast.parse(content)
+            lines = content.splitlines()
+            parts = []
+
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                    # Just the def/class line plus its docstring if present
+                    sig = lines[node.lineno - 1]
+                    doc = ast.get_docstring(node)
+                    entry = sig + (f'\n    """{doc[:80]}"""' if doc else "")
+                    parts.append(entry)
+
+                    if sum(len(p) for p in parts) >= max_chars:
+                        break
+
+            if parts:
+                return "\n".join(parts)
+        except Exception:
+            pass
+
+        # Fallback to raw head
+        return content[:max_chars]
+
     # ─────────────────────────────────────────────────────────────
     # Tabs Context
     # ─────────────────────────────────────────────────────────────
 
-    def get_tabs_context(self, tabs, query):
+    def get_tabs_context(self, tabs, query: str) -> str:
         q_words = query.lower().split()
-        parts = []
-    
+        parts   = []
+
         for tab in tabs:
             try:
                 text = tab.toPlainText()
             except Exception:
                 continue
-    
+
             if not text.strip():
                 continue
-    
+
             if any(word in text.lower() for word in q_words):
                 snippet = text[:500]
                 parts.append(snippet)
-    
+
         return "\n\n".join(parts)

@@ -1098,6 +1098,7 @@ Instructions:
     def _on_chat_message(self, user_text: str):
         self._last_user_message = user_text
         self._append_user_message(user_text)
+        self.memory_manager.add_turn("user", user_text)
 
         editor = self.current_editor()
         active_code = editor.toPlainText() if editor else ""
