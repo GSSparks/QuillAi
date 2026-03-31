@@ -17,6 +17,7 @@ from PyQt6.QtGui import (QFileSystemModel, QAction, QKeySequence, QTextCursor,
 
 from editor.ghost_editor import GhostEditor
 from ai.worker import AIWorker
+from ai.context_engine import ContextEngine
 
 from ui.theme import (apply_theme, get_theme, theme_signals,
                       build_status_bar_stylesheet,
@@ -980,59 +981,6 @@ Instructions:
     def estimate_tokens(self, text: str) -> int:
         return len(text) // 4
 
-    def build_chat_context(self, user_text: str, active_code: str) -> str:
-        TOKEN_BUDGET = 28000
-        used = self.estimate_tokens(user_text)
-
-        memory_ctx = self.memory_manager.build_memory_context(query=user_text)
-        used += self.estimate_tokens(memory_ctx)
-
-        active_budget = 6000
-        active_chars  = active_budget * 4
-        if len(active_code) > active_chars:
-            head = active_code[:active_chars // 3]
-            tail = active_code[-(active_chars * 2 // 3):]
-            active_code_ctx = head + "\n...(truncated)...\n" + tail
-        else:
-            active_code_ctx = active_code
-        used += self.estimate_tokens(active_code_ctx)
-
-        import_ctx = ""
-        if used < TOKEN_BUDGET:
-            import_budget = TOKEN_BUDGET - used - 8000
-            raw_imports   = self.resolve_local_imports(active_code, _max_depth=1)
-            import_chars  = import_budget * 4
-            import_ctx = (raw_imports[:import_chars] + "\n...(imports truncated)..."
-                          if len(raw_imports) > import_chars else raw_imports)
-            used += self.estimate_tokens(import_ctx)
-
-        tabs_ctx = ""
-        if used < TOKEN_BUDGET:
-            tabs_budget = TOKEN_BUDGET - used - 2000
-            tabs_chars  = tabs_budget * 4
-            raw_tabs    = self.get_open_tabs_context()
-            tabs_ctx    = (raw_tabs[:tabs_chars] + "\n...(tabs truncated)..."
-                           if len(raw_tabs) > tabs_chars else raw_tabs)
-            used += self.estimate_tokens(tabs_ctx)
-
-        tree_ctx = ""
-        if used < TOKEN_BUDGET:
-            tree_ctx = self.get_project_tree()
-            if self.estimate_tokens(tree_ctx) + used > TOKEN_BUDGET:
-                tree_ctx = ""
-
-        parts = []
-        if memory_ctx:
-            parts.append(memory_ctx)
-        parts.append(f"[Active File]\n```python\n{active_code_ctx}\n```")
-        if import_ctx:
-            parts.append(import_ctx)
-        if tabs_ctx:
-            parts.append(tabs_ctx)
-        if tree_ctx:
-            parts.append(tree_ctx)
-        return "\n\n".join(parts)
-
     def get_project_tree(self):
         root = self.file_model.filePath(self.tree_view.rootIndex())
         if not root or not os.path.isdir(root):
@@ -1050,23 +998,19 @@ Instructions:
                     lines.append(f"{indent}  {f}")
         return "[Project Structure]\n" + "\n".join(lines)
 
-    def get_open_tabs_context(self):
-        context = []
-        current_editor = self.current_editor()
+    def get_open_editors(self):
+        editors = []
+        current = self.current_editor()
+    
         for i in range(self.tabs.count()):
             editor = self.tabs.widget(i)
             if not editor or not hasattr(editor, 'file_path'):
                 continue
-            if editor is current_editor or not editor.file_path:
+            if editor is current or not editor.file_path:
                 continue
-            content = editor.toPlainText()
-            if not content.strip():
-                continue
-            if len(content) > 1500:
-                content = content[:500] + "\n...(truncated)...\n" + content[-1000:]
-            rel_path = os.path.relpath(editor.file_path)
-            context.append(f"--- Open tab: {rel_path} ---\n```python\n{content}\n```")
-        return "[Other Open Files]\n" + "\n\n".join(context) if context else ""
+            editors.append(editor)
+    
+        return editors
 
     def resolve_local_imports(self, code_text, _visited=None, _depth=0, _max_depth=3):
         if _visited is None:
@@ -1157,7 +1101,20 @@ Instructions:
 
         editor = self.current_editor()
         active_code = editor.toPlainText() if editor else ""
-        context = self.build_chat_context(user_text, active_code)
+        if not hasattr(self, "context_engine"):
+            from ai.context_engine import ContextEngine
+            self.context_engine = ContextEngine(
+                memory_manager=self.memory_manager,
+                estimate_tokens_fn=self.estimate_tokens
+            )
+        
+        context = self.context_engine.build(
+            user_text=user_text,
+            active_code=active_code,
+            file_path=getattr(editor, "file_path", None),
+            open_tabs=self.get_open_editors(),
+            cursor_pos=editor.textCursor().position()
+        )
         prompt_with_context = f"{user_text}\n\n{context}"
 
         self._ai_response_buffer = ""
