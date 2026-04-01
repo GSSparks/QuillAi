@@ -23,6 +23,7 @@ from ui.theme import (
     build_color_swatch_stylesheet,
     QFONT_CODE,
 )
+from ui.lsp_editor import LspEditorMixin
 
 # ==========================================
 # Professional Snippet Manager
@@ -138,11 +139,12 @@ class MinimapArea(QPlainTextEdit):
 # ==========================================
 # Main Ghost Editor
 # ==========================================
-class GhostEditor(QPlainTextEdit):
+class GhostEditor(LspEditorMixin, QPlainTextEdit):
     ai_started = pyqtSignal()
     ai_finished = pyqtSignal()
     error_help_requested = pyqtSignal(str, str, int)
     send_to_chat_requested = pyqtSignal(str)
+    goto_file_requested = pyqtSignal(str, int, int)
 
     def __init__(self, settings_manager=None, intent_tracker=None):
         super().__init__()
@@ -191,6 +193,7 @@ class GhostEditor(QPlainTextEdit):
         self.current_line_selection = []
         self.lint_selections = []
         self.bracket_selections = []
+        self.lsp_selections = []
         self.current_syntax_error = None
 
         # Git blame
@@ -755,7 +758,8 @@ Answer concisely. If you include code, use a single fenced code block."""
         self.setExtraSelections(
             self.current_line_selection +
             self.lint_selections +
-            self.bracket_selections
+            self.bracket_selections +
+            self.lsp_selections
         )
 
     def toggle_blame(self):

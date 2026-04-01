@@ -49,6 +49,7 @@
           requests
           markdown
           pygments
+          python-lsp-server
         ];
 
         buildInputs = [
@@ -73,7 +74,7 @@
           makeWrapper ${python.interpreter} $out/bin/quillai \
             --add-flags "$out/share/quillai/main.py" \
             --set PYTHONPATH "$PYTHONPATH:$out/share/quillai" \
-            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.git python pkgs.shellcheck ]}
+            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.git python pkgs.shellcheck pythonPackages.python-lsp-server ]}
         
           runHook postInstall
         '';
@@ -85,5 +86,36 @@
         type = "app";
         program = "${self.packages.${system}.default}/bin/quillai";
       };
+      
+      # ── Dev shell ──────────────────────────────────────────────────
+      devShells.${system}.default = pkgs.mkShell {
+        buildInputs = [
+          # Python with all deps in one interpreter
+          (python.withPackages (ps: with ps; [
+            pyqt6
+            pyyaml
+            requests
+            markdown
+            pygments
+            python-lsp-server 
+          ]))
+        
+          # System tools
+          pkgs.qt6.qtbase
+          pkgs.qt6.qtwayland
+          pkgs.shellcheck
+          pkgs.git
+          pkgs.inter
+          pkgs.jetbrains-mono
+        ];
+        
+        shellHook = ''
+          export PYTHONPATH="$PWD:$PYTHONPATH"
+          export QT_QPA_PLATFORM=wayland
+          echo "QuillAI dev shell ready — python $(python --version)"
+          echo "pylsp: $(pylsp --version)"
+        '';
+      };
     };
+    
 }

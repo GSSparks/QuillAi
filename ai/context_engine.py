@@ -11,7 +11,14 @@ class ContextEngine:
     # Public API
     # ─────────────────────────────────────────────────────────────
 
-    def build(self, user_text: str, active_code: str, file_path=None, open_tabs=None, cursor_pos=None):
+    def build(self, user_text: str, active_code: str, file_path=None,
+              open_tabs=None, cursor_pos=None, lsp_context: dict = None):
+        """
+        lsp_context: optional dict with keys:
+            "hover"       — LSP hover string (signature + docstring)
+            "diagnostics" — LSP diagnostic string (errors/warnings)
+        Provided by LSPContextProvider.fetch() in the editor layer.
+        """
         TOKEN_BUDGET = 28000
         used = self.estimate_tokens(user_text)
 
@@ -26,6 +33,24 @@ class ContextEngine:
         # ── Intent ────────────────────────────────────────────────
         # Intent is used to adjust context strategy, not just labelled
         intent = self.detect_intent(user_text)
+
+        # ── LSP Context (injected early — high signal, low token cost) ──
+        # Hover gives the model the type signature and docstring for the
+        # symbol under the cursor without re-parsing source.
+        # Diagnostics are prioritised for debug intent.
+        if lsp_context:
+            hover_str = (lsp_context.get("hover") or "").strip()
+            diag_str  = (lsp_context.get("diagnostics") or "").strip()
+
+            if hover_str and used < TOKEN_BUDGET:
+                parts.append(hover_str)
+                used += self.estimate_tokens(hover_str)
+
+            if diag_str and used < TOKEN_BUDGET:
+                # Always include errors; only include warnings/hints for debug
+                if intent == "debug" or "ERROR" in diag_str:
+                    parts.append(diag_str)
+                    used += self.estimate_tokens(diag_str)
 
         # ── Active File ───────────────────────────────────────────
         cursor_line = self.get_cursor_line(active_code, cursor_pos) if cursor_pos else None
