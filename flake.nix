@@ -41,6 +41,7 @@
           pkgs.inter
           pkgs.jetbrains-mono
           pkgs.wget
+          pkgs.nodePackages.ansible-language-server
         ];
 
         propagatedBuildInputs = with pythonPackages; [
@@ -74,7 +75,8 @@
           makeWrapper ${python.interpreter} $out/bin/quillai \
             --add-flags "$out/share/quillai/main.py" \
             --set PYTHONPATH "$PYTHONPATH:$out/share/quillai" \
-            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.git python pkgs.shellcheck pythonPackages.python-lsp-server ]}
+            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.git python pkgs.shellcheck pythonPackages.python-lsp-server pkgs.nodePackages.ansible-language-server
+ ]}
         
           runHook postInstall
         '';
