@@ -291,8 +291,9 @@ class LSPClient(QObject):
         self.initialized.emit()
 
     def _on_stderr(self):
-        # pylsp writes logs to stderr — suppress in production, useful for debug
-        pass  # data = self._process.readAllStandardError()
+        data = bytes(self._process.readAllStandardError()).decode("utf-8", errors="replace")
+        if data.strip():
+            print(f"[pylsp stderr] {data.strip()}")
 
     def _on_process_error(self, error):
         messages = {

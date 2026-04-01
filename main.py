@@ -18,6 +18,8 @@ from PyQt6.QtGui import (QFileSystemModel, QAction, QKeySequence, QTextCursor,
 from editor.ghost_editor import GhostEditor
 from ai.worker import AIWorker
 from ai.context_engine import ContextEngine
+from ai.lsp_client import LSPClient
+from ai.lsp_context import LSPContextProvider
 
 from ui.theme import (apply_theme, get_theme, theme_signals,
                       build_status_bar_stylesheet,
@@ -119,8 +121,13 @@ class CodeEditor(QMainWindow, ChatRenderer):
         # 2. Load memory
         self.memory_manager = MemoryManager()
         self.intent_tracker = init_tracker(self.memory_manager)
+        
+        # 3. LSP (graceful — works fine if pylsp not installed)
+        self.lsp_client = None
+        self.lsp_context_provider = None
+        self._start_lsp()
 
-        # 3. Basic App State
+        # 4. Basic App State
         self.setWindowTitle("QuillAI")
         try:
             icon_path = os.path.join(
@@ -695,6 +702,9 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.tabs.setCurrentIndex(index)
         self._is_loading = False
 
+        # Wire LSP if ready and this is a Python file
+        self._wire_editor_lsp(editor)
+    
         return editor
 
     def handle_editor_error_help(self, error_msg, code, line_num):
@@ -740,6 +750,8 @@ Instructions:
         thread.start()
 
     def closeEvent(self, event):
+        if hasattr(self, "lsp_client") and self.lsp_client:
+            self.lsp_client.stop()
         unsaved = any(
             hasattr(self.tabs.widget(i), 'is_dirty') and self.tabs.widget(i).is_dirty()
             for i in range(self.tabs.count())
@@ -819,6 +831,8 @@ Instructions:
 
         widget = self.tabs.widget(index)
         if widget:
+            if hasattr(widget, "teardown_lsp"):
+                widget.teardown_lsp()
             widget.deleteLater()
         self.tabs.removeTab(index)
         if self.tabs.count() == 0:
@@ -931,6 +945,7 @@ Instructions:
                 self.git_dock.refresh_status()
             if hasattr(self, 'memory_manager'):
                 self.memory_manager.set_project(saved_project)
+                self._start_lsp(project_root=saved_project)
             if hasattr(self, 'update_git_branch'):
                 self.update_git_branch()
 
@@ -1094,50 +1109,115 @@ Instructions:
         self.chat_history = self.chat_panel.chat_history
         self.chat_input   = self.chat_panel.chat_input
         self.chat_history.anchorClicked.connect(self.handle_chat_link)
+            
+    def _start_lsp(self, project_root: str = None):
+        """
+        Launch pylsp for the given project root (or cwd as fallback).
+        Safe to call multiple times — stops any existing client first.
+        """
+        if self.lsp_client:
+            self.lsp_client.stop()
+    
+        root = (
+            project_root
+            or (self.git_dock.repo_path if hasattr(self, "git_dock") and self.git_dock.repo_path else None)
+            or os.getcwd()
+        )
+    
+        self.lsp_client = LSPClient(project_root=root)
+        self.lsp_client.initialized.connect(self._on_lsp_ready)
+        self.lsp_client.error.connect(
+            lambda msg: self.statusBar().showMessage(f"LSP: {msg}", 5000)
+        )
+        self.lsp_client.start()
+        self.lsp_context_provider = LSPContextProvider(self.lsp_client)
+    
+    
+    def _on_lsp_ready(self):
+        """Wire LSP into whatever editor is currently open."""
+        self.statusBar().showMessage("LSP ready", 2000)
+        editor = self.current_editor()
+        if editor:
+            self._wire_editor_lsp(editor)
+    
+    
+    def _wire_editor_lsp(self, editor):
+        """Attach LSP to a single editor instance."""
+        if not self.lsp_client or not self.lsp_client.is_ready:
+            return
+        if not getattr(editor, "file_path", None):
+            return
+        if not editor.file_path.endswith(".py"):
+            return
+        if hasattr(editor, "_lsp"):
+            return  # already wired
+        editor.setup_lsp(self.lsp_client)
+        editor.goto_file_requested.connect(self._goto_file)
+    
+    
+    def _goto_file(self, file_path: str, line: int, col: int):
+        """Handle cross-file go-to-definition from Ctrl+Click."""
+        self.open_file_in_tab(file_path)
+        editor = self.current_editor()
+        if editor and hasattr(editor, "lsp_jump_to"):
+            editor.lsp_jump_to(line, col)
 
     def _on_chat_message(self, user_text: str):
         self._last_user_message = user_text
         self._append_user_message(user_text)
         self.memory_manager.add_turn("user", user_text)
-
+    
         editor = self.current_editor()
         active_code = editor.toPlainText() if editor else ""
+        file_path   = getattr(editor, "file_path", None)
+    
         if not hasattr(self, "context_engine"):
             from ai.context_engine import ContextEngine
             self.context_engine = ContextEngine(
                 memory_manager=self.memory_manager,
                 estimate_tokens_fn=self.estimate_tokens
             )
-        
-        context = self.context_engine.build(
-            user_text=user_text,
-            active_code=active_code,
-            file_path=getattr(editor, "file_path", None),
-            open_tabs=self.get_open_editors(),
-            cursor_pos=editor.textCursor().position()
-        )
-        prompt_with_context = f"{user_text}\n\n{context}"
-
-        self._ai_response_buffer = ""
-        self.current_ai_raw_text = ""
-
-        thread = QThread()
-        self.chat_worker = self.create_worker(prompt=prompt_with_context, is_chat=True)
-        self.chat_worker.moveToThread(thread)
-        self.chat_worker.chat_update.connect(self.append_chat_stream)
-        self.chat_worker.finished.connect(self.chat_stream_finished)
-        self.chat_worker.finished.connect(thread.quit)
-        self.chat_worker.finished.connect(self.chat_worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        self.show_loading_indicator()
-        self.chat_worker.finished.connect(self.hide_loading_indicator)
-        self.active_threads.append(thread)
-        thread.finished.connect(
-            lambda: self.active_threads.remove(thread)
-            if thread in self.active_threads else None
-        )
-        thread.started.connect(self.chat_worker.run)
-        thread.start()
+    
+        def _launch(lsp_ctx):
+            context = self.context_engine.build(
+                user_text=user_text,
+                active_code=active_code,
+                file_path=file_path,
+                open_tabs=self.get_open_editors(),
+                cursor_pos=editor.textCursor().position() if editor else None,
+                lsp_context=lsp_ctx,
+            )
+            prompt_with_context = f"{user_text}\n\n{context}"
+    
+            self._ai_response_buffer = ""
+            self.current_ai_raw_text = ""
+    
+            thread = QThread()
+            self.chat_worker = self.create_worker(prompt=prompt_with_context, is_chat=True)
+            self.chat_worker.moveToThread(thread)
+            self.chat_worker.chat_update.connect(self.append_chat_stream)
+            self.chat_worker.finished.connect(self.chat_stream_finished)
+            self.chat_worker.finished.connect(thread.quit)
+            self.chat_worker.finished.connect(self.chat_worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            self.show_loading_indicator()
+            self.chat_worker.finished.connect(self.hide_loading_indicator)
+            self.active_threads.append(thread)
+            thread.finished.connect(
+                lambda: self.active_threads.remove(thread)
+                if thread in self.active_threads else None
+            )
+            thread.started.connect(self.chat_worker.run)
+            thread.start()
+    
+        # Fetch LSP hover+diagnostics async, then launch.
+        # Falls back immediately if LSP not available.
+        if (self.lsp_context_provider and editor
+                and file_path and file_path.endswith(".py")):
+            line, col = editor.cursor_lsp_position()
+            self.lsp_context_provider.fetch(file_path, line, col, callback=_launch)
+        else:
+            _launch({})
 
     def setup_memory_panel(self):
         self.memory_panel = MemoryPanel(self.memory_manager, self)
