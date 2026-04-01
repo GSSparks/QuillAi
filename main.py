@@ -1187,7 +1187,7 @@ Instructions:
                 memory_manager=self.memory_manager,
                 estimate_tokens_fn=self.estimate_tokens
             )
-    
+ 
         def _launch(lsp_ctx):
             context = self.context_engine.build(
                 user_text=user_text,
@@ -1202,10 +1202,10 @@ Instructions:
                 ),
             )
             prompt_with_context = f"{user_text}\n\n{context}"
-    
+
             self._ai_response_buffer = ""
             self.current_ai_raw_text = ""
-    
+
             thread = QThread()
             self.chat_worker = self.create_worker(prompt=prompt_with_context, is_chat=True)
             self.chat_worker.moveToThread(thread)
@@ -1223,9 +1223,14 @@ Instructions:
             )
             thread.started.connect(self.chat_worker.run)
             thread.start()
-    
-        # Fetch LSP hover+diagnostics async, then launch.
-        # Falls back immediately if LSP not available.
+
+        # Always compute line/col — falls back to 0,0 if no editor
+        line, col = (
+            editor.cursor_lsp_position()
+            if editor and hasattr(editor, "cursor_lsp_position")
+            else (0, 0)
+        )
+
         if (self.lsp_context_provider and editor and file_path
                 and self.lsp_manager and self.lsp_manager.is_supported(file_path)):
             self.lsp_context_provider.fetch(file_path, line, col, callback=_launch)
