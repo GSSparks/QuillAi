@@ -12,12 +12,17 @@ class ContextEngine:
     # ─────────────────────────────────────────────────────────────
 
     def build(self, user_text: str, active_code: str, file_path=None,
-              open_tabs=None, cursor_pos=None, lsp_context: dict = None):
+              open_tabs=None, cursor_pos=None, lsp_context: dict = None,
+              repo_map: str = None):
         """
         lsp_context: optional dict with keys:
             "hover"       — LSP hover string (signature + docstring)
             "diagnostics" — LSP diagnostic string (errors/warnings)
         Provided by LSPContextProvider.fetch() in the editor layer.
+
+        repo_map: optional pre-filtered repo map string from RepoMap.get_context().
+        Injected after memory and before active code so the model has
+        structural orientation before seeing implementation detail.
         """
         TOKEN_BUDGET = 28000
         used = self.estimate_tokens(user_text)
@@ -33,6 +38,14 @@ class ContextEngine:
         # ── Intent ────────────────────────────────────────────────
         # Intent is used to adjust context strategy, not just labelled
         intent = self.detect_intent(user_text)
+
+        # ── Repo Map (orientation before implementation) ──────────
+        # Filtered to files whose symbols overlap the query, capped at
+        # 4000 tokens. Gives the model a structural overview of the
+        # whole project without paying the cost of full source.
+        if repo_map and used < TOKEN_BUDGET:
+            parts.append(repo_map)
+            used += self.estimate_tokens(repo_map)
 
         # ── LSP Context (injected early — high signal, low token cost) ──
         # Hover gives the model the type signature and docstring for the

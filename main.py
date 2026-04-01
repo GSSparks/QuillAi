@@ -20,6 +20,7 @@ from ai.worker import AIWorker
 from ai.context_engine import ContextEngine
 from ai.lsp_client import LSPClient
 from ai.lsp_context import LSPContextProvider
+from ai.repo_map import RepoMap
 
 from ui.theme import (apply_theme, get_theme, theme_signals,
                       build_status_bar_stylesheet,
@@ -126,6 +127,8 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.lsp_client = None
         self.lsp_context_provider = None
         self._start_lsp()
+        self.repo_map = None
+        # Built after session restore when the project root is known
 
         # 4. Basic App State
         self.setWindowTitle("QuillAI")
@@ -893,6 +896,9 @@ Instructions:
 
             editor.set_original_state(code)
             editor._detected_ext = ''
+            # Invalidate repo map so next chat gets fresh structure
+            if self.repo_map and editor.file_path:
+                self.repo_map.invalidate(editor.file_path)
 
             current_text = self.tabs.tabText(index)
             if current_text.endswith("*"):
@@ -946,6 +952,7 @@ Instructions:
             if hasattr(self, 'memory_manager'):
                 self.memory_manager.set_project(saved_project)
                 self._start_lsp(project_root=saved_project)
+                self._init_repo_map(project_root=saved_project)
             if hasattr(self, 'update_git_branch'):
                 self.update_git_branch()
 
@@ -1161,6 +1168,11 @@ Instructions:
         editor = self.current_editor()
         if editor and hasattr(editor, "lsp_jump_to"):
             editor.lsp_jump_to(line, col)
+            
+    def _init_repo_map(self, project_root: str):
+        """Build or rebuild the repo map for a new project root."""
+        self.repo_map = RepoMap(project_root)
+        self.repo_map.build()  
 
     def _on_chat_message(self, user_text: str):
         self._last_user_message = user_text
@@ -1186,6 +1198,10 @@ Instructions:
                 open_tabs=self.get_open_editors(),
                 cursor_pos=editor.textCursor().position() if editor else None,
                 lsp_context=lsp_ctx,
+                repo_map=(
+                    self.repo_map.get_context(user_text)
+                    if self.repo_map else None
+                ),
             )
             prompt_with_context = f"{user_text}\n\n{context}"
     
