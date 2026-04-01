@@ -18,7 +18,7 @@ from PyQt6.QtGui import (QFileSystemModel, QAction, QKeySequence, QTextCursor,
 from editor.ghost_editor import GhostEditor
 from ai.worker import AIWorker
 from ai.context_engine import ContextEngine
-from ai.lsp_client import LSPClient
+from ai.lsp_manager import LSPManager
 from ai.lsp_context import LSPContextProvider
 from ai.repo_map import RepoMap
 
@@ -124,7 +124,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.intent_tracker = init_tracker(self.memory_manager)
         
         # 3. LSP (graceful — works fine if pylsp not installed)
-        self.lsp_client = None
+        self.lsp_manager = None
         self.lsp_context_provider = None
         self._start_lsp()
         self.repo_map = None
@@ -753,8 +753,8 @@ Instructions:
         thread.start()
 
     def closeEvent(self, event):
-        if hasattr(self, "lsp_client") and self.lsp_client:
-            self.lsp_client.stop()
+        if hasattr(self, "lsp_manager") and self.lsp_manager:
+                self.lsp_manager.stop()
         unsaved = any(
             hasattr(self.tabs.widget(i), 'is_dirty') and self.tabs.widget(i).is_dirty()
             for i in range(self.tabs.count())
@@ -1118,52 +1118,50 @@ Instructions:
         self.chat_history.anchorClicked.connect(self.handle_chat_link)
             
     def _start_lsp(self, project_root: str = None):
-        """
-        Launch pylsp for the given project root (or cwd as fallback).
-        Safe to call multiple times — stops any existing client first.
-        """
-        if self.lsp_client:
-            self.lsp_client.stop()
-    
+        """Start (or restart) all available language servers."""
         root = (
             project_root
-            or (self.git_dock.repo_path if hasattr(self, "git_dock") and self.git_dock.repo_path else None)
+            or (self.git_dock.repo_path
+                if hasattr(self, "git_dock") and self.git_dock.repo_path
+                else None)
             or os.getcwd()
         )
     
-        self.lsp_client = LSPClient(project_root=root)
-        self.lsp_client.initialized.connect(self._on_lsp_ready)
-        self.lsp_client.error.connect(
-            lambda msg: self.statusBar().showMessage(f"LSP: {msg}", 5000)
-        )
-        self.lsp_client.start()
-        self.lsp_context_provider = LSPContextProvider(self.lsp_client)
-    
-    
-    def _on_lsp_ready(self):
-        """Wire LSP into whatever editor is currently open."""
-        self.statusBar().showMessage("LSP ready", 2000)
-        editor = self.current_editor()
-        if editor:
-            self._wire_editor_lsp(editor)
-    
+        if self.lsp_manager:
+            self.lsp_manager.restart(root)
+        else:
+            self.lsp_manager = LSPManager(root, parent=self)
+            self.lsp_manager.server_ready.connect(self._on_lsp_ready)
+            self.lsp_manager.server_error.connect(
+                lambda name, msg: self.statusBar().showMessage(
+                    f"LSP [{name}]: {msg}", 5000
+                )
+            )
+            self.lsp_manager.start()
+            self.lsp_context_provider = LSPContextProvider(self.lsp_manager)
+        
+    def _on_lsp_ready(self, server_name: str):
+        self.statusBar().showMessage(f"LSP ready: {server_name}", 2000)
+        # Wire any open editors that support the newly-ready server
+        for i in range(self.tabs.count()):
+            editor = self.tabs.widget(i)
+            if editor:
+                self._wire_editor_lsp(editor)
     
     def _wire_editor_lsp(self, editor):
-        """Attach LSP to a single editor instance."""
-        if not self.lsp_client or not self.lsp_client.is_ready:
+        """Attach LSPManager to an editor if it supports the file type."""
+        if not self.lsp_manager:
             return
         if not getattr(editor, "file_path", None):
             return
-        if not editor.file_path.endswith(".py"):
+        if not self.lsp_manager.is_supported(editor.file_path):
             return
-        if hasattr(editor, "_lsp"):
-            return  # already wired
-        editor.setup_lsp(self.lsp_client)
+        if hasattr(editor, "_lsp_manager"):
+            return   # already wired
+        editor.setup_lsp(self.lsp_manager)
         editor.goto_file_requested.connect(self._goto_file)
     
-    
     def _goto_file(self, file_path: str, line: int, col: int):
-        """Handle cross-file go-to-definition from Ctrl+Click."""
         self.open_file_in_tab(file_path)
         editor = self.current_editor()
         if editor and hasattr(editor, "lsp_jump_to"):
@@ -1228,9 +1226,8 @@ Instructions:
     
         # Fetch LSP hover+diagnostics async, then launch.
         # Falls back immediately if LSP not available.
-        if (self.lsp_context_provider and editor
-                and file_path and file_path.endswith(".py")):
-            line, col = editor.cursor_lsp_position()
+        if (self.lsp_context_provider and editor and file_path
+                and self.lsp_manager and self.lsp_manager.is_supported(file_path)):
             self.lsp_context_provider.fetch(file_path, line, col, callback=_launch)
         else:
             _launch({})
