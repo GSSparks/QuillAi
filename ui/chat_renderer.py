@@ -24,13 +24,16 @@ _PYGMENTS_STYLE_MAP = {
 def _pygments_style_for_theme(theme_name: str) -> str:
     return _PYGMENTS_STYLE_MAP.get(theme_name, "monokai")
 
+def _safe_styles(t: dict) -> dict:
+    return {k: v.replace('"', "'") for k, v in t.items()}
+
 
 class ChatRenderer:
 
     # ── User message ──────────────────────────────────────────────────────
 
     def _append_user_message(self, text: str):
-        s = build_chat_styles(get_theme())
+        s = _safe_styles(build_chat_styles(get_theme()))
         escaped = (text.replace("&", "&amp;")
                        .replace("<", "&lt;")
                        .replace(">", "&gt;")
@@ -150,7 +153,7 @@ class ChatRenderer:
     # ── AI response rendering ─────────────────────────────────────────────
 
     def _render_ai_response(self, text: str) -> str:
-        s = build_chat_styles(get_theme())
+        s = _safe_styles(build_chat_styles(get_theme()))
         t = get_theme()
 
         md = markdown.Markdown(extensions=[
@@ -164,9 +167,15 @@ class ChatRenderer:
         # ── Fenced code blocks ────────────────────────────────────
         def replace_fenced(m):
             inner      = m.group(1)
-            lang_match = re.search(r'class="language-(\w+)"', m.group(0))
-            lang       = lang_match.group(1).lower() if lang_match else ""
-            lang_label = lang.upper() if lang else "CODE"
+            # Unescape HTML entities that markdown introduced into the code content
+            inner = (inner.replace("&amp;", "&")
+                          .replace("&lt;", "<")
+                          .replace("&gt;", ">")
+                          .replace("&quot;", '"')
+                          .replace("&#39;", "'"))
+            lang_match  = re.search(r'class="language-(\w+)"', m.group(0))
+            lang        = lang_match.group(1).lower() if lang_match else ""
+            lang_label  = lang.upper() if lang else "CODE"
             highlighted = self._highlight_code_block(inner, lang)
             encoded     = base64.b64encode(inner.encode("utf-8")).decode("utf-8")
             return (
