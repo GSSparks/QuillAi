@@ -2306,95 +2306,195 @@ QFONT_UI   = "Inter"
 
 
 def build_chat_styles(t: dict) -> dict:
-    """
-    Returns a dict of pre-built style strings for ChatRenderer.
-    Calling this once per render avoids repeated get_theme() lookups and
-    keeps all colour + font decisions in theme.py.
-
-    Keys
-    ----
-    prose_p        paragraph <p> style (sans-serif body text)
-    prose_li       list item <li> style
-    heading_1/2/3  <p> styles for markdown headings
-    inline_code    <code> style for `backtick` spans
-    code_header    style for the language label bar above a code block
-    code_body      style for the <td> wrapping a <pre> block
-    code_pre       style for the <pre> element itself
-    user_bubble    style for the user message <td>
-    user_label     style for the "You" timestamp label
-    ai_label_p     style for the "QuillAI" label paragraph
-    copy_link      style for the ⎘ Copy anchor
-    lang_label     style for the language name span in the code header
-    hr             style for horizontal rule
-    """
+ 
+    prose_font  = f"font-family: '{FONT_UI}', 'Inter', system-ui, sans-serif;"
+    code_font   = f"font-family: '{FONT_CODE}', 'JetBrains Mono', monospace;"
+    prose_size  = "font-size: 10.5pt;"
+    code_size   = "font-size: 9.5pt;"
+    prose_lh    = "line-height: 1.6;"
+    code_lh     = "line-height: 1.5;"
+ 
+    bg_code     = t.get("bg0_hard",  "#1d2021")
+    bg_user     = t.get("bg2",       "#504945")
+    fg_prose    = t.get("fg1",       "#ebdbb2")
+    fg_dim      = t.get("fg4",       "#a89984")
+    fg_label    = t.get("fg3",       "#bdae93")
+    accent      = t.get("accent",    "#fabd2f")
+    accent_dim  = t.get("yellow_dim", t.get("accent", "#fabd2f"))
+    border      = t.get("border",    "#3c3836")
+    border_code = t.get("bg2",       "#504945")
+    bg1         = t.get("bg1",       "#3c3836")
+    link_color  = t.get("blue",      "#83a598")
+ 
     return {
+ 
+        # ── User bubble ───────────────────────────────────────────
+        # <td> carries background — reliable in Qt
+        "user_bubble_td": (
+            f"background-color: {bg_user}; "
+            f"color: {fg_prose}; "
+            f"padding: 9px 14px; "
+            f"{prose_font} {prose_size} {prose_lh}"
+        ),
+ 
+        # "You" label cell — right-aligned, small, dim
+        "user_label_td": (
+            f"color: {fg_dim}; "
+            f"font-size: 8pt; "
+            f"padding: 2px 6px 0 0; "
+            f"{prose_font}"
+        ),
+ 
+        # ── QuillAI label ─────────────────────────────────────────
+        "ai_label_td": (
+            f"color: {accent_dim}; "
+            f"font-size: 8pt; "
+            f"font-weight: 600; "
+            f"padding: 0 0 4px 6px; "
+            f"{prose_font}"
+        ),
+ 
+        # ── Response content cell ─────────────────────────────────
+        # Outer <td> that wraps all response prose/code
+        "response_td": (
+            f"color: {fg_prose}; "
+            f"padding: 0 8px 0 8px; "
+            f"{prose_font} {prose_size} {prose_lh}"
+        ),
+ 
+        # ── Prose ─────────────────────────────────────────────────
         "prose_p": (
-            f"margin:2px 0; color:{t['fg1']}; "
-            f"font-family:{FONT_UI}; font-size:10pt; line-height:1.8;"
+            f"margin: 0 0 8px 0; padding: 0; "
+            f"color: {fg_prose}; {prose_font} {prose_size} {prose_lh}"
+        ),
+        "ul": (
+            f"margin: 0 0 8px 0; padding: 0 0 0 20px; "
+            f"color: {fg_prose}; {prose_font} {prose_size}"
+        ),
+        "ol": (
+            f"margin: 0 0 8px 0; padding: 0 0 0 20px; "
+            f"color: {fg_prose}; {prose_font} {prose_size}"
         ),
         "prose_li": (
-            f"color:{t['fg1']}; font-family:{FONT_UI}; "
-            f"font-size:10pt; line-height:1.8; margin:2px 0;"
+            f"margin: 2px 0; padding: 0; "
+            f"color: {fg_prose}; {prose_font} {prose_size} {prose_lh}"
         ),
-        "ul": "margin:4px 0 4px 16px; padding:0; list-style-type:disc;",
-        "ol": "margin:4px 0 4px 16px; padding:0;",
         "heading_1": (
-            f"margin:10px 0 4px 0; color:{t['blue']}; font-weight:bold; "
-            f"font-family:{FONT_UI}; font-size:14pt;"
+            f"margin: 12px 0 6px 0; padding: 0; "
+            f"color: {accent}; font-size: 13pt; font-weight: 700; {prose_font}"
         ),
         "heading_2": (
-            f"margin:10px 0 4px 0; color:{t['blue']}; font-weight:bold; "
-            f"font-family:{FONT_UI}; font-size:12pt;"
+            f"margin: 10px 0 5px 0; padding: 0; "
+            f"color: {accent}; font-size: 12pt; font-weight: 600; {prose_font}"
         ),
         "heading_3": (
-            f"margin:10px 0 4px 0; color:{t['blue']}; font-weight:bold; "
-            f"font-family:{FONT_UI}; font-size:11pt;"
+            f"margin: 8px 0 4px 0; padding: 0; "
+            f"color: {fg_label}; font-size: 11pt; font-weight: 600; {prose_font}"
         ),
+        "strong": f"color: {fg_prose}; font-weight: 700;",
+        "em":     f"color: {fg_prose}; font-style: italic;",
+        "hr":     f"border: none; border-top: 1px solid {border}; margin: 12px 0;",
+ 
+        # ── Inline code ───────────────────────────────────────────
         "inline_code": (
-            f"background:{t['bg2']}; color:{t['orange']}; "
-            f"padding:1px 5px; border-radius:3px; "
-            f"font-family:{FONT_CODE}; font-size:9pt;"
+            f"background-color: {bg_code}; "
+            f"color: {t.get('orange', '#fe8019')}; "
+            f"border: 1px solid {border_code}; "
+            f"border-radius: 3px; "
+            f"padding: 1px 5px; "
+            f"{code_font} font-size: 9pt;"
         ),
+ 
+        # ── Code block — header and body same bg ──────────────────
         "code_header_td": (
-            f"background-color:{t['bg1']}; "
-            f"border-radius:12px 12px 0 0; padding:4px 12px;"
-        ),
-        "code_body_td": (
-            f"background-color:{t['bg0_hard']}; "
-            f"border:1px solid {t['border']}; "
-            f"border-radius:0 0 12px 12px; padding:12px 16px;"
-        ),
-        "code_pre": (
-            f"margin:0; font-family:{FONT_CODE}; "
-            f"font-size:10pt; line-height:1.8; "
-            f"white-space:pre; color:{t['fg1']};"
+            f"background-color: {bg_code}; "
+            f"color: {fg_dim}; "
+            f"border: 1px solid {border_code}; "
+            f"border-bottom: 1px solid {border}; "
+            f"padding: 5px 12px; "
+            f"{prose_font} font-size: 8.5pt;"
         ),
         "lang_label": (
-            f"color:{t['fg4']}; font-family:{FONT_CODE}; font-size:8pt;"
+            f"color: {fg_label}; font-weight: 600; font-size: 8.5pt; "
+            f"{prose_font} letter-spacing: 0.04em;"
         ),
         "copy_link": (
-            f"color:{t['blue']}; font-family:{FONT_CODE}; "
-            f"font-size:8pt; text-decoration:none;"
+            f"color: {link_color}; text-decoration: none; font-size: 8.5pt; "
+            f"{prose_font}"
         ),
-        "user_bubble_td": (
-            f"background-color:{t['chat_user_bubble']}; "
-            f"border-radius:18px 18px 4px 18px; "
-            f"padding:10px 14px; color:{t['fg1']}; "
-            f"font-family:{FONT_UI}; font-size:10pt; line-height:1.5;"
+        "code_body_td": (
+            f"background-color: {bg_code}; "
+            f"border: 1px solid {border_code}; "
+            f"border-top: none; "
+            f"padding: 12px 14px;"
         ),
-        "user_label": (
-            f"padding:2px 4px 8px 0; color:{t['fg4']}; "
-            f"font-size:8pt; font-family:{FONT_UI};"
+        "code_pre": (
+            f"{code_font} {code_size} {code_lh} "
+            f"margin: 0; padding: 0; white-space: pre; color: {fg_prose};"
+        ),
+ 
+        # ── Markdown tables ───────────────────────────────────────
+        "md_table": (
+            f"border: 1px solid {border}; "
+            f"margin: 4px 0 10px 0;"
+        ),
+        "md_th": (
+            f"background-color: {bg1}; "
+            f"color: {fg_label}; "
+            f"font-weight: 600; "
+            f"border-bottom: 1px solid {border}; "
+            f"border-right: 1px solid {border}; "
+            f"padding: 6px 10px; "
+            f"{prose_font} {prose_size}"
+        ),
+        "md_td": (
+            f"color: {fg_prose}; "
+            f"border-bottom: 1px solid {border}; "
+            f"border-right: 1px solid {border}; "
+            f"padding: 5px 10px; "
+            f"{prose_font} {prose_size}"
+        ),
+        "md_tr": "",  # row-level styling handled via td
+ 
+        # ── Legacy keys (kept for compatibility) ──────────────────
+        "user_bubble": (
+            f"background-color: {bg_user}; color: {fg_prose}; "
+            f"padding: 9px 14px; {prose_font} {prose_size}"
+        ),
+        "user_row_p":  f"margin: 4px 8px 2px 48px; padding: 0; text-align: right;",
+        "user_label_p": (
+            f"margin: 2px 12px 12px 0; padding: 0; text-align: right; "
+            f"color: {fg_dim}; font-size: 8pt; {prose_font}"
         ),
         "ai_label_p": (
-            f"margin:8px 0 2px 4px; color:{t['chat_ai_label']}; "
-            f"font-size:8pt; font-family:{FONT_UI}; font-weight:bold;"
+            f"margin: 4px 0 6px 8px; padding: 0; "
+            f"color: {accent_dim}; font-size: 8pt; font-weight: 600; {prose_font}"
         ),
-        "hr": (
-            f"border:none; border-top:1px solid {t['border']}; margin:8px 0;"
+        "response_wrapper": (
+            f"margin: 0 8px 4px 8px; padding: 0; "
+            f"color: {fg_prose}; {prose_font} {prose_size} {prose_lh}"
+        ),
+        "code_header_span": (
+            f"background-color: {bg_code}; color: {fg_dim}; "
+            f"border: 1px solid {border_code}; padding: 5px 12px; "
+            f"{prose_font} font-size: 8.5pt;"
+        ),
+        "code_block": (
+            f"background-color: {bg_code}; color: {fg_prose}; "
+            f"border: 1px solid {border_code}; padding: 12px 14px; "
+            f"{code_font} {code_size} {code_lh} white-space: pre;"
+        ),
+        "user_label": f"color: {fg_dim}; font-size: 8pt; {prose_font}",
+        "code_body_td_legacy": (
+            f"background-color: {bg_code}; "
+            f"border: 1px solid {border_code}; border-top: none; "
+            f"border-radius: 0 0 6px 6px; padding: 12px 14px;"
+        ),
+        "code_pre_legacy": (
+            f"{code_font} {code_size} {code_lh} "
+            f"margin: 0; padding: 0; white-space: pre; color: {fg_prose};"
         ),
     }
-
 
 def build_menu_stylesheet(t: dict) -> str:
     """Themed QMenu stylesheet — used for the Recent Projects menu and context menus."""
