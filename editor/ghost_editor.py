@@ -145,6 +145,7 @@ class GhostEditor(LspEditorMixin, QPlainTextEdit):
     error_help_requested = pyqtSignal(str, str, int)
     send_to_chat_requested = pyqtSignal(str)
     goto_file_requested = pyqtSignal(str, int, int)
+    completion_accepted = pyqtSignal(str, str)  # accepted_text, context_before
 
     def __init__(self, settings_manager=None, intent_tracker=None):
         super().__init__()
@@ -1225,16 +1226,21 @@ Answer concisely. If you include code, use a single fenced code block."""
     def accept_full_completion(self):
         if not self.ghost_text:
             return
-        self.textCursor().insertText(self.ghost_text)
+        accepted_text = self.ghost_text
+        context_before = self.toPlainText()[:self.textCursor().position()]
+        self.textCursor().insertText(accepted_text)
+        self.completion_accepted.emit(accepted_text, context_before)
         self.clear_ghost_text()
 
     def accept_next_word(self):
         if not self.ghost_text:
             return
-        parts = self.ghost_text.lstrip().split(" ", 1)
-        word = parts[0]
-        remainder = parts[1] if len(parts) > 1 else ""
+        parts         = self.ghost_text.lstrip().split(" ", 1)
+        word          = parts[0]
+        remainder     = parts[1] if len(parts) > 1 else ""
+        context_before = self.toPlainText()[:self.textCursor().position()]
         self.textCursor().insertText(word + " ")
+        self.completion_accepted.emit(word, context_before)
         self.ghost_text = remainder
         self.viewport().update()
 

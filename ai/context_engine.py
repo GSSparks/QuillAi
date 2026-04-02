@@ -13,16 +13,13 @@ class ContextEngine:
 
     def build(self, user_text: str, active_code: str, file_path=None,
               open_tabs=None, cursor_pos=None, lsp_context: dict = None,
-              repo_map: str = None):
+              repo_map: str = None, vector_context=None):
         """
-        lsp_context: optional dict with keys:
-            "hover"       — LSP hover string (signature + docstring)
-            "diagnostics" — LSP diagnostic string (errors/warnings)
-        Provided by LSPContextProvider.fetch() in the editor layer.
-
-        repo_map: optional pre-filtered repo map string from RepoMap.get_context().
-        Injected after memory and before active code so the model has
-        structural orientation before seeing implementation detail.
+        lsp_context:    optional dict — LSP hover + diagnostics.
+        repo_map:       optional str  — structural project map.
+        vector_context: optional VectorContext — semantic search results
+                        from VectorIndex.query(). Injected after repo_map,
+                        before active code.
         """
         TOKEN_BUDGET = 28000
         used = self.estimate_tokens(user_text)
@@ -46,6 +43,16 @@ class ContextEngine:
         if repo_map and used < TOKEN_BUDGET:
             parts.append(repo_map)
             used += self.estimate_tokens(repo_map)
+
+        # ── Vector Context (semantic search across project history) ─────
+        # Runs alongside search_project — results are semantically similar
+        # code, past conversations, accepted completions, and co-edit pairs.
+        # Injected after repo_map so orientation comes before specifics.
+        if vector_context and used < TOKEN_BUDGET:
+            vc_str = vector_context.format()
+            if vc_str:
+                parts.append(vc_str)
+                used += self.estimate_tokens(vc_str)
 
         # ── LSP Context (injected early — high signal, low token cost) ──
         # Hover gives the model the type signature and docstring for the

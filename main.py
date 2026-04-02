@@ -21,6 +21,7 @@ from ai.context_engine import ContextEngine
 from ai.lsp_manager import LSPManager
 from ai.lsp_context import LSPContextProvider
 from ai.repo_map import RepoMap
+from ai.vector_index import VectorIndex
 
 from ui.theme import (apply_theme, get_theme, theme_signals,
                       build_status_bar_stylesheet,
@@ -127,6 +128,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.lsp_manager = None
         self.lsp_context_provider = None
         self._start_lsp()
+        self.vector_index = None
         self.repo_map = None
         # Built after session restore when the project root is known
 
@@ -685,27 +687,33 @@ class CodeEditor(QMainWindow, ChatRenderer):
         editor.setPlainText(content)
         editor.set_original_state(content)
         editor.file_path = path
-
+    
         if path:
             self.intent_tracker.record_file_edit(path)
-
+    
         ext = os.path.splitext(name)[1].lower() if path else ""
         editor.highlighter = registry.get_highlighter(editor.document(), ext)
-
+    
         editor.cursorPositionChanged.connect(self.update_status_bar)
-        #editor.textChanged.connect(self.update_status_bar)
         editor.textChanged.connect(self.on_text_changed)
         editor.ai_started.connect(self.show_loading_indicator)
         editor.ai_finished.connect(self.hide_loading_indicator)
         editor.error_help_requested.connect(self.handle_editor_error_help)
         editor.send_to_chat_requested.connect(self.load_snippet_to_chat)
         editor.textChanged.connect(lambda: self._refresh_markdown_preview(editor))
-
+    
+        # ── Vector index — accepted completions ──────────────────────
+        def _on_completion_accepted(text, ctx, e=editor):
+            if self.vector_index:
+                self.vector_index.index_completion(
+                    text, ctx, getattr(e, "file_path", "") or ""
+                )
+        editor.completion_accepted.connect(_on_completion_accepted)
+    
         index = self.tabs.addTab(editor, name)
         self.tabs.setCurrentIndex(index)
         self._is_loading = False
-
-        # Wire LSP if ready and this is a Python file
+    
         self._wire_editor_lsp(editor)
     
         return editor
@@ -899,6 +907,8 @@ Instructions:
             # Invalidate repo map so next chat gets fresh structure
             if self.repo_map and editor.file_path:
                 self.repo_map.invalidate(editor.file_path)
+            if self.vector_index and editor.file_path:
+                self.vector_index.index_file(editor.file_path)
 
             current_text = self.tabs.tabText(index)
             if current_text.endswith("*"):
@@ -953,6 +963,7 @@ Instructions:
                 self.memory_manager.set_project(saved_project)
                 self._start_lsp(project_root=saved_project)
                 self._init_repo_map(project_root=saved_project)
+                self._init_vector_index(project_root=saved_project)               
             if hasattr(self, 'update_git_branch'):
                 self.update_git_branch()
 
@@ -997,6 +1008,15 @@ Instructions:
         editor = self.tabs.widget(index)
         if editor and hasattr(editor, 'file_path') and editor.file_path:
             self.intent_tracker.record_file_edit(editor.file_path)
+            # Record co-edit pair with the previously active file
+            if (self.vector_index
+                    and hasattr(self, '_last_active_file')
+                    and self._last_active_file
+                    and self._last_active_file != editor.file_path):
+                self.vector_index.index_edit(
+                    self._last_active_file, editor.file_path
+                )
+            self._last_active_file = editor.file_path
 
     # ── Context building ──────────────────────────────────────────────────
 
@@ -1171,6 +1191,17 @@ Instructions:
         """Build or rebuild the repo map for a new project root."""
         self.repo_map = RepoMap(project_root)
         self.repo_map.build()  
+        
+    def _init_vector_index(self, project_root: str):
+        """Create or replace the vector index for a new project root."""
+        if self.vector_index:
+            self.vector_index.close()
+        self.vector_index = VectorIndex(
+            project_root    = project_root,
+            settings_manager = self.settings_manager,
+        )
+        # Full project scan in background — non-blocking
+        self.vector_index.index_project(project_root)
 
     def _on_chat_message(self, user_text: str):
         self._last_user_message = user_text
@@ -1189,17 +1220,29 @@ Instructions:
             )
  
         def _launch(lsp_ctx):
+            # Query vector index synchronously here — we're already
+            # inside the LSP callback which runs on the Qt thread,
+            # but the query is fast (<50ms). For safety, run it before
+            # building context rather than spawning another thread.
+            vector_ctx = None
+            if self.vector_index and self.vector_index.is_ready:
+                try:
+                    vector_ctx = self.vector_index.query(user_text)
+                except Exception as e:
+                    print(f"[vector] query error: {e}")
+    
             context = self.context_engine.build(
-                user_text=user_text,
-                active_code=active_code,
-                file_path=file_path,
-                open_tabs=self.get_open_editors(),
-                cursor_pos=editor.textCursor().position() if editor else None,
-                lsp_context=lsp_ctx,
-                repo_map=(
+                user_text      = user_text,
+                active_code    = active_code,
+                file_path      = file_path,
+                open_tabs      = self.get_open_editors(),
+                cursor_pos     = editor.textCursor().position() if editor else None,
+                lsp_context    = lsp_ctx,
+                repo_map       = (
                     self.repo_map.get_context(user_text)
                     if self.repo_map else None
                 ),
+                vector_context = vector_ctx,   # ← add this param
             )
             prompt_with_context = f"{user_text}\n\n{context}"
 

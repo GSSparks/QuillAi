@@ -13,8 +13,6 @@
       pythonPackages = python.pkgs;
 
       # ── Language servers ───────────────────────────────────────────
-      # Add new servers here — they'll be available in both the package
-      # and the dev shell automatically.
       lspServers = [
         pythonPackages.python-lsp-server
         pkgs.nodePackages.yaml-language-server
@@ -42,6 +40,7 @@
         version = "1.0.0";
         format  = "other";
         src     = ./.;
+        dontBuild = true;
 
         nativeBuildInputs = [
           pkgs.qt6.wrapQtAppsHook
@@ -60,6 +59,12 @@
           markdown
           pygments
           python-lsp-server
+          chromadb
+          sentence-transformers
+          # sentence-transformers and chromadb are optional —
+          # torch's build requirements conflict with the Nix sandbox.
+          # Install manually if you want vector indexing:
+          #   pip install sentence-transformers chromadb
         ];
 
         buildInputs = [
@@ -110,6 +115,8 @@
             markdown
             pygments
             python-lsp-server
+            sentence-transformers
+            chromadb
           ]))
           pkgs.qt6.qtbase
           pkgs.qt6.qtwayland
@@ -143,6 +150,10 @@
               echo "  ✗ $srv"
             fi
           done
+          echo ""
+          echo "Vector index:"
+          python -c "from sentence_transformers import SentenceTransformer; print('  ✓ sentence-transformers')" 2>/dev/null || echo "  ✗ sentence-transformers"
+          python -c "import chromadb; print('  ✓ chromadb')" 2>/dev/null || echo "  ✗ chromadb"
         '';
       };
     };

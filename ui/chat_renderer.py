@@ -110,8 +110,12 @@ class ChatRenderer:
         self.chat_history.ensureCursorVisible()
 
         if full_response.strip():
-            self.memory_manager.add_turn("assistant", full_response) 
+            self.memory_manager.add_turn("assistant", full_response)
             self._summarize_conversation_to_memory(full_response)
+            if self.vector_index:
+                self.vector_index.index_conversation(
+                    self._last_user_message, full_response
+                )
 
         self.memory_manager.save_chat_history(self.chat_history.toHtml())
         self.current_ai_raw_text = ""
