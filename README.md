@@ -89,28 +89,44 @@ Switch backends at any time with the mode button in the status bar.
 Completions are informed by your whole session — recent chat exchanges, pinned memory facts, files you've been editing, and functions you've been working in. Ghost text appears at natural pause points. **`Tab`** to accept, **`Ctrl+Right`** for word-by-word, **`Ctrl+Space`** to trigger manually.
 
 ### Project-aware AI chat
-The chat panel understands your entire project: active file and the symbol you're working in, all open tabs, direct and transitive imports (up to 3 levels deep), LSP hover docs and live diagnostics, a structural repo map of the whole codebase, and your memory facts. Responses stream live with syntax highlighting and markdown rendering. Code blocks have a one-click copy button.
+The chat panel understands your entire project: active file and the symbol you're working in, all open tabs, direct and transitive imports (up to 3 levels deep), LSP hover docs and live diagnostics, a structural repo map of the whole codebase, semantic search across your codebase history, and your memory facts. Responses stream live with syntax highlighting and markdown rendering. Code blocks have a one-click copy button.
 
-### LSP integration (python-lsp-server)
-QuillAI connects to `pylsp` automatically when it's installed, giving you IDE-grade code intelligence:
+### LSP integration
+QuillAI connects to language servers automatically when installed, giving you IDE-grade code intelligence across multiple languages:
 
 - **Hover tooltips** — signature and docstring for any symbol, shown on mouseover
 - **Ctrl+Click go-to-definition** — jump to where a function or class is defined, across files
-- **Diagnostic squiggles** — live error and warning underlines as you type, coexisting with QuillAI's own lint highlights
-- **Context-aware chat** — LSP hover info and diagnostics are automatically injected into every chat prompt so the AI knows exactly what the type checker knows
+- **Diagnostic squiggles** — live error and warning underlines as you type
+- **Context-aware chat** — LSP hover info and diagnostics are automatically injected into every chat prompt
 
-Install with:
-```bash
-pip install python-lsp-server
-# or in flake.nix: python-lsp-server is included in propagatedBuildInputs
-```
+Supported servers (all included in the Nix package):
 
-LSP degrades gracefully — everything works normally if `pylsp` isn't installed.
+| Language | Server |
+|---|---|
+| Python | `python-lsp-server` |
+| YAML / Ansible | `yaml-language-server` |
+| JavaScript / TypeScript | `typescript-language-server` |
+| Bash / Shell | `bash-language-server` |
+| HTML / CSS / JSON / Markdown | `vscode-langservers-extracted` |
+| Nix | `nil` |
+| Lua | `lua-language-server` |
+
+LSP degrades gracefully — everything works normally if a server is not installed.
 
 ### Repo map
-QuillAI builds a structural map of your entire project on open — every file, every class, every function signature and docstring — and injects a query-filtered slice of it into every chat prompt. The model gets a navigational overview of the whole codebase without the token cost of full source, so questions like "where is X configured" or "how does authentication flow through this app" get accurate answers even when the relevant code isn't in the active file.
+QuillAI builds a structural map of your entire project on open — every file, every class, every function signature and docstring — and injects a query-filtered slice of it into every chat prompt. The model gets a navigational overview of the whole codebase without the token cost of full source. Ansible playbooks and role imports are followed and included.
 
 The map is built in a background thread on project open, invalidated on file save, and filtered per-query so only structurally relevant files are included.
+
+### Vector index
+QuillAI builds a semantic search index over your entire project that grows smarter with use. Four collections are indexed and searched on every chat message:
+
+- **Code** — every function and class, chunked by AST symbol, searchable by meaning not just name
+- **Conversations** — past chat exchanges, so similar problems surface relevant history
+- **Completions** — ghost text you have accepted, building a model of your patterns over time
+- **Edit patterns** — files you edit together, surfaced when working in related areas
+
+Uses `sentence-transformers` locally (no API required) or OpenAI embeddings when in cloud mode. The longer you use QuillAI on a project, the more relevant its suggestions become.
 
 ### Memory system
 QuillAI remembers things across sessions:
@@ -120,6 +136,18 @@ QuillAI remembers things across sessions:
 - **Turn buffer** — recent messages are always included verbatim so the AI has genuine conversational continuity within a session, not just summaries
 
 Facts are auto-extracted from your chat messages. Everything is stored locally at `~/.config/quillai/`.
+
+### Multi-cursor editing
+Full multi-cursor support — every keystroke, deletion, and paste applies to all cursors simultaneously with atomic undo:
+
+- **`Ctrl+D`** — add cursor at next occurrence of selected word (press again to step through)
+- **`Ctrl+Shift+L`** — add cursors at all occurrences in the file
+- **`Ctrl+Alt+Up/Down`** — add cursor on line above/below (column mode)
+- **`Alt+Click`** — add cursor at any position (click again to remove)
+- **`Escape`** — clear all secondary cursors, return to single cursor
+
+### Crash recovery
+QuillAI autosaves every 2 minutes to `~/.config/quillai/autosave/`. If the app crashes, your work is silently restored on next launch — no dialog, no friction. Recovered tabs are marked with ↩ in their title until saved. On clean exit, autosave files are removed automatically.
 
 ### Command palette
 **`Ctrl+P`** — fuzzy search across open tabs, all project files, and editor actions in a unified list. Arrow keys or Tab to navigate, Enter to open, Esc to dismiss.
@@ -133,13 +161,14 @@ Each project remembers which files you had open and where your cursor was. Switc
 ### Editor
 - Syntax highlighting for Python, HTML, Ansible/YAML, Nix, Bash, and Markdown
 - Line numbers with live git diff indicators (green = added, amber = modified)
+- Double-click line number to select the entire line
 - Minimap with click-to-navigate and viewport highlight
 - Git blame in the gutter — toggle per-file to see commit hash and author per line
 - Bracket match highlighting
 - Indent guides, auto-closing brackets, smart auto-indent
 - `Ctrl+E` — AI rewrite of selection with side-by-side diff preview
 - `Ctrl+I` — inline chat popup at the cursor
-- `Ctrl+G` — jump to line, `Ctrl+D` — duplicate line, `Ctrl+/` — toggle comment
+- `Ctrl+G` — jump to line, `Ctrl+Shift+D` — duplicate line, `Ctrl+/` — toggle comment
 
 ### Sliding panel
 Chat and Memory live in a sliding panel on the right edge. Hover to expand, pin to keep open, drag the left edge to resize. Width persists across sessions.
@@ -212,8 +241,13 @@ All settings stored locally at `~/.config/quillai/settings.json`.
 | `Ctrl+Click` | Go to definition (LSP) |
 | `Ctrl+Return` | Send chat message |
 | `Ctrl+\`` | Toggle terminal |
+| `Ctrl+D` | Multi-cursor: add next occurrence |
+| `Ctrl+Shift+L` | Multi-cursor: add all occurrences |
+| `Ctrl+Alt+Up/Down` | Multi-cursor: add cursor above/below |
+| `Alt+Click` | Multi-cursor: add cursor at position |
+| `Escape` | Clear secondary cursors |
 | `Ctrl+G` | Go to line |
-| `Ctrl+D` | Duplicate line or selection |
+| `Ctrl+Shift+D` | Duplicate line or selection |
 | `Ctrl+/` | Toggle comment |
 | `Ctrl+]` | Indent selection |
 | `Ctrl+[` | Unindent selection |
@@ -242,11 +276,13 @@ pygments
 
 Optional but recommended:
 ```
-pyyaml             # YAML/Ansible linting
-chardet            # Encoding detection
-python-lsp-server  # LSP hover docs, go-to-definition, diagnostics
-pyqtermwidget      # Full PTY terminal (Linux/macOS)
-shellcheck         # Bash linting (via system package manager)
+pyyaml                 # YAML/Ansible linting
+chardet                # Encoding detection
+python-lsp-server      # LSP for Python
+sentence-transformers  # Local embeddings for vector index
+chromadb               # Vector index storage
+pyqtermwidget          # Full PTY terminal (Linux/macOS)
+shellcheck             # Bash linting (via system package manager)
 ```
 
 ---
@@ -257,12 +293,17 @@ quillai/
 ├── main.py                    # Main window and application entry point
 ├── ai/
 │   ├── worker.py              # AIWorker — all LLM backends and streaming
-│   ├── context_engine.py      # Context assembly — symbols, imports, LSP, repo map
-│   ├── lsp_client.py          # JSON-RPC client for python-lsp-server
+│   ├── context_engine.py      # Context assembly — symbols, imports, LSP, repo map, vector
+│   ├── lsp_client.py          # Generic JSON-RPC LSP client
+│   ├── lsp_manager.py         # Multi-server LSP registry and routing
 │   ├── lsp_context.py         # Formats LSP hover/diagnostics for chat context
-│   └── repo_map.py            # AST-based structural project map
+│   ├── repo_map.py            # AST-based structural project map (Python + Ansible)
+│   ├── embedder.py            # Embedding router (local sentence-transformers / OpenAI)
+│   ├── vector_store.py        # ChromaDB wrapper, per-project collections
+│   └── vector_index.py        # Semantic index orchestration and query
 ├── editor/
 │   ├── ghost_editor.py        # Editor with ghost text, minimap, inline chat, LSP
+│   ├── multi_cursor.py        # Multi-cursor editing logic
 │   └── highlighter.py         # Syntax highlighter registry
 ├── plugins/
 │   ├── python_plugin.py
@@ -281,6 +322,8 @@ quillai/
     ├── sliding_chat_panel.py  # Sliding panel with Chat and Memory tabs
     ├── memory_manager.py      # Per-project memory, facts, conversations, turns
     ├── memory_panel.py        # Memory panel UI
+    ├── autosave_manager.py    # Crash recovery and periodic autosave
+    ├── startup_progress.py    # Animated startup indicator
     ├── session_manager.py     # Per-project tab session save/restore
     ├── intent_tracker.py      # Session intent for smarter completions
     ├── find_replace.py
@@ -305,6 +348,8 @@ All user data is stored locally:
 | Chat history | `~/.config/quillai/memory/chat_*.html` |
 | Sessions | `~/.config/quillai/sessions/` |
 | Snippets | `~/.config/quillai/snippets.json` |
+| Vector index | `~/.config/quillai/vector/` |
+| Autosave | `~/.config/quillai/autosave/` |
 
 When using a local backend, no data is transmitted anywhere. When using a cloud backend, only the content you explicitly send is transmitted to that provider — nothing else.
 
@@ -312,11 +357,7 @@ When using a local backend, no data is transmitted anywhere. When using a cloud 
 
 ## Roadmap
 
-### In progress
-- [ ] Vector index — semantic search across the whole codebase for chat context (embeddings via local model, e.g. nomic-embed-text)
-
 ### Planned
-- [ ] Multi-cursor editing
 - [ ] Breadcrumb bar (file › class › method)
 - [ ] Symbol outline panel
 - [ ] Split editor panes
@@ -324,19 +365,23 @@ When using a local backend, no data is transmitted anywhere. When using a cloud 
 - [ ] LSP-powered completions (replace ghost text with semantically-aware suggestions)
 - [ ] Git diff context in chat — auto-inject recent changes for debug queries
 - [ ] Terminal stderr capture — pipe last error into chat context automatically
-- [ ] Crash session restore (periodic autosave)
 - [ ] Smooth scrolling
 - [ ] Code folding
 - [ ] Markdown preview scroll sync
+- [ ] Completion feedback loop — use acceptance data to influence suggestion ranking
 
 ### Completed
-- [x] LSP support — hover docs, Ctrl+Click go-to-definition, diagnostic squiggles, context injection
-- [x] Repo map — structural project index for codebase-aware chat
+- [x] Multi-cursor editing — Ctrl+D, Ctrl+Shift+L, Ctrl+Alt+Up/Down, Alt+Click
+- [x] Crash recovery — autosave every 2 minutes, silent restore on next launch
+- [x] Vector index — semantic search across code, conversations, completions, edit patterns
+- [x] LSP support — hover docs, Ctrl+Click go-to-definition, diagnostics, 7 languages
+- [x] Repo map — structural project index for codebase-aware chat (Python + Ansible)
 - [x] Git blame in gutter
 - [x] Bracket match highlight
 - [x] Embedded terminal
 - [x] Command palette (Ctrl+P)
 - [x] Memory system with turn buffer and session continuity
+- [x] Line number double-click to select line
 
 ---
 
