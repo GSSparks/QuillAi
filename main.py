@@ -51,6 +51,7 @@ from ui.terminal import TerminalDock
 from ui.command_palette import CommandPalette
 from ui.terminal import TerminalDock
 from ui.startup_progress import StartupProgress
+from ui.autosave_manager import AutosaveManager, AUTOSAVE_INTERVAL_MS
 
 from editor.highlighter import registry
 from ui.git_panel import GitDockWidget
@@ -156,6 +157,16 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.last_worker = None
         self.chat_worker = None
         self.active_threads = []
+        
+        # Autosave / crash recovery
+        self.autosave_manager = AutosaveManager(
+            get_editors_fn = self._get_all_editors_indexed,
+            status_fn      = lambda msg, ms: self.statusBar().showMessage(msg, ms),
+        )
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setInterval(AUTOSAVE_INTERVAL_MS)
+        self._autosave_timer.timeout.connect(self.autosave_manager.save_all)
+        self._autosave_timer.start()
 
         # Tab System
         self.tabs = QTabWidget()
@@ -688,6 +699,17 @@ class CodeEditor(QMainWindow, ChatRenderer):
 
     def current_editor(self):
         return self.tabs.currentWidget()
+        
+    def _open_recovered_tab(self, name: str, content: str,
+                            file_path, cursor_pos: int):
+        """Open a recovered autosave entry as a new tab."""
+        editor = self.add_new_tab(name, content, file_path)
+        # Mark dirty so the tab title shows * and user knows it needs saving
+        editor.original_text = ""
+        cursor = editor.textCursor()
+        cursor.setPosition(min(cursor_pos, len(content)))
+        editor.setTextCursor(cursor)
+        editor.ensureCursorVisible()
 
     def add_new_tab(self, name="Untitled", content="", path=None):
         editor = GhostEditor(settings_manager=self.settings_manager)
@@ -769,6 +791,8 @@ Instructions:
         thread.start()
 
     def closeEvent(self, event):
+        # Final autosave flush before checking for unsaved changes
+        self.autosave_manager.save_all()
         if hasattr(self, "lsp_manager") and self.lsp_manager:
                 self.lsp_manager.stop()
         unsaved = any(
@@ -799,6 +823,8 @@ Instructions:
             event.accept()
 
         if event.isAccepted():
+            # Clean exit — remove all autosave files
+            self.autosave_manager.clear_all()
             registry.deactivate_all_features()
             self._save_current_session()
             self.settings_manager.set(
@@ -852,6 +878,14 @@ Instructions:
         if widget:
             if hasattr(widget, "teardown_lsp"):
                 widget.teardown_lsp()
+        if widget:
+            file_path = getattr(widget, "file_path", None)
+            if file_path:
+                self.autosave_manager.clear(file_path)
+            else:
+                self.autosave_manager.clear_untitled(index)
+            if hasattr(widget, "teardown_lsp"):
+                widget.teardown_lsp()                
             widget.deleteLater()
         self.tabs.removeTab(index)
         if self.tabs.count() == 0:
@@ -930,6 +964,7 @@ Instructions:
                 self.git_dock.refresh_status()
 
             self.statusBar().showMessage(f"Saved: {editor.file_path}", 3000)
+            self.autosave_manager.clear(editor.file_path)
             return True
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Could not save file: {e}")
@@ -1004,6 +1039,8 @@ Instructions:
 
         self.update_status_bar()
         self.update_git_branch()
+        # Crash recovery — restore any autosaved files silently
+        self.autosave_manager.restore(self._open_recovered_tab) 
 
     def _close_all_tabs_for_switch(self):
         while self.tabs.count() > 0:
@@ -1028,6 +1065,15 @@ Instructions:
                     self._last_active_file, editor.file_path
                 )
             self._last_active_file = editor.file_path
+            
+    def _get_all_editors_indexed(self):
+        """Return list of (tab_index, editor) for all open tabs."""
+        result = []
+        for i in range(self.tabs.count()):
+            editor = self.tabs.widget(i)
+            if editor and hasattr(editor, "toPlainText"):
+                result.append((i, editor))
+        return result
 
     # ── Context building ──────────────────────────────────────────────────
 
