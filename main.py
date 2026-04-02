@@ -1583,7 +1583,10 @@ Instructions:
             theme_name=self.settings_manager.get('theme')
         )
         self.file_model.setRootPath(QDir.currentPath())
-
+        self.file_model.setFilter(
+            QDir.Filter.AllEntries | QDir.Filter.Hidden | QDir.Filter.NoDotAndDotDot
+        )
+        
         self.tree_view = QTreeView()
         self.tree_view.setModel(self.file_model)
         self.tree_view.setRootIndex(self.file_model.index(QDir.currentPath()))

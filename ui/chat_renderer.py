@@ -259,7 +259,9 @@ class ChatRenderer:
             formatter = HtmlFormatter(nowrap=True, noclasses=True, style=pygments_style)
         except Exception:
             formatter = HtmlFormatter(nowrap=True, noclasses=True, style="monokai")
-        return highlight(code, lexer, formatter)
+        result = highlight(code, lexer, formatter)
+        # Qt's rich text renderer displays &quot; literally — unescape it
+        return result.replace("&quot;", '"')
 
     # ── Memory & conversation ─────────────────────────────────────────────
 
