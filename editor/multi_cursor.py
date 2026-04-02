@@ -185,7 +185,6 @@ class MultiCursorManager:
 
     def clear(self):
         import traceback
-        print(f"[mc] clear() called with {len(self._cursors)} cursors")
         traceback.print_stack(limit=6)
         self._cursors.clear()
         self._render()
