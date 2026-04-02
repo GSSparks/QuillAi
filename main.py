@@ -4,13 +4,14 @@ import tempfile
 import ast
 import re
 import base64
+import threading
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QProgressBar, QLabel,
                              QDockWidget, QTreeView, QPlainTextEdit, QTextEdit,
                              QVBoxLayout, QWidget, QLineEdit, QTabWidget,
                              QPushButton, QHBoxLayout, QMessageBox, QFileDialog,
                              QTextBrowser, QSizePolicy)
-from PyQt6.QtCore import QTimer, QThread, Qt, QDir, QProcess, QUrl
+from PyQt6.QtCore import QTimer, QThread, Qt, QDir, QProcess, QUrl, pyqtSlot
 from PyQt6.QtGui import (QFileSystemModel, QAction, QKeySequence, QTextCursor,
                          QIcon, QPixmap, QPainter, QColor, QShortcut,
                          QSyntaxHighlighter, QTextCharFormat, QFont)
@@ -49,6 +50,7 @@ from ui.command_palette import CommandPalette
 from ui.terminal import TerminalDock
 from ui.command_palette import CommandPalette
 from ui.terminal import TerminalDock
+from ui.startup_progress import StartupProgress
 
 from editor.highlighter import registry
 from ui.git_panel import GitDockWidget
@@ -204,6 +206,8 @@ class CodeEditor(QMainWindow, ChatRenderer):
         sep = QLabel("|")
         sep.setStyleSheet("color: rgba(255,255,255,0.3); padding: 0 2px;")
         self.status_bar.addWidget(sep)
+        
+        self._startup = StartupProgress(self.status_bar, parent=self)
 
         self.filetype_label   = QLabel("")
         self.indent_label     = QLabel("")
@@ -271,6 +275,10 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self._lang_detect_timer.setSingleShot(True)
         self._lang_detect_timer.timeout.connect(self._fire_ai_lang_detect)
         self._lang_detect_running = False
+        
+    @pyqtSlot()
+    def _on_repo_map_ready(self):
+        self._startup.complete("Repo Map")
 
     # ── Theme handling ────────────────────────────────────────────────────
 
@@ -942,6 +950,9 @@ Instructions:
         save_session(tabs, self.tabs.currentIndex(), project_path)
 
     def _restore_session(self, project_path=None):
+        self._startup.register("LSP")
+        self._startup.register("Repo Map")
+        self._startup.register("Vector Index")
         if project_path is None and hasattr(self, 'git_dock') and self.git_dock.repo_path:
             project_path = self.git_dock.repo_path
 
@@ -1161,6 +1172,7 @@ Instructions:
             self.lsp_context_provider = LSPContextProvider(self.lsp_manager)
         
     def _on_lsp_ready(self, server_name: str):
+        self._startup.complete("LSP")
         self.statusBar().showMessage(f"LSP ready: {server_name}", 2000)
         # Wire any open editors that support the newly-ready server
         for i in range(self.tabs.count()):
@@ -1190,18 +1202,36 @@ Instructions:
     def _init_repo_map(self, project_root: str):
         """Build or rebuild the repo map for a new project root."""
         self.repo_map = RepoMap(project_root)
-        self.repo_map.build()  
-        
+        # Pass a callback that fires on the Qt thread when build completes
+        def _build_and_notify():
+            self.repo_map._build_all()   # run synchronously in this thread
+            # Use QMetaObject to safely call back onto the Qt thread
+            from PyQt6.QtCore import QMetaObject, Qt as _Qt
+            QMetaObject.invokeMethod(
+                self, "_on_repo_map_ready",
+                _Qt.ConnectionType.QueuedConnection,
+            )
+        threading.Thread(target=_build_and_notify, daemon=True).start()
+    def _check_vector_ready(self):
+        if self.vector_index and self.vector_index.is_ready:
+            self._vector_ready_timer.stop()
+            self._startup.complete("Vector Index")
+            
     def _init_vector_index(self, project_root: str):
         """Create or replace the vector index for a new project root."""
         if self.vector_index:
             self.vector_index.close()
         self.vector_index = VectorIndex(
-            project_root    = project_root,
+            project_root     = project_root,
             settings_manager = self.settings_manager,
         )
-        # Full project scan in background — non-blocking
         self.vector_index.index_project(project_root)
+    
+        # Poll until ready, then notify — avoids adding a signal to VectorIndex
+        self._vector_ready_timer = QTimer(self)
+        self._vector_ready_timer.setInterval(200)
+        self._vector_ready_timer.timeout.connect(self._check_vector_ready)
+        self._vector_ready_timer.start()
 
     def _on_chat_message(self, user_text: str):
         self._last_user_message = user_text
