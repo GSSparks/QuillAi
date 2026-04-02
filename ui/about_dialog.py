@@ -14,12 +14,19 @@ from ui.theme import (get_theme, theme_signals,
 def _get_dependency_versions() -> list:
     deps = []
     checks = [
-        ("Python",   None),
-        ("PyQt6",    "PyQt6"),
-        ("requests", "requests"),
-        ("markdown", "markdown"),
-        ("chardet",  "chardet"),
-        ("PyYAML",   "yaml"),
+        # Core
+        ("Python",              None),
+        ("PyQt6",               "PyQt6"),
+        ("requests",            "requests"),
+        ("markdown",            "markdown"),
+        ("pygments",            "pygments"),
+        ("chardet",             "chardet"),
+        ("PyYAML",              "yaml"),
+        # AI / context
+        ("sentence-transformers", "sentence_transformers"),
+        ("chromadb",            "chromadb"),
+        # LSP
+        ("python-lsp-server",   "pylsp"),
     ]
     for name, module in checks:
         if module is None:
@@ -27,10 +34,27 @@ def _get_dependency_versions() -> list:
             continue
         try:
             mod = __import__(module)
-            version = getattr(mod, '__version__', 'installed')
+            version = getattr(mod, "__version__", "installed")
             deps.append((name, version))
         except ImportError:
             deps.append((name, "not installed"))
+
+    # LSP servers — check binaries on PATH
+    import shutil
+    lsp_servers = [
+        ("pylsp",                          "python-lsp-server"),
+        ("yaml-language-server",           "yaml-language-server"),
+        ("typescript-language-server",     "typescript-language-server"),
+        ("bash-language-server",           "bash-language-server"),
+        ("vscode-html-language-server",    "vscode-html (HTML/CSS/JSON)"),
+        ("nil",                            "nil (Nix)"),
+        ("lua-language-server",            "lua-language-server"),
+    ]
+    deps.append(("── LSP servers ──", ""))
+    for binary, label in lsp_servers:
+        found = shutil.which(binary) is not None
+        deps.append((label, "✓" if found else "not found"))
+
     return deps
 
 
@@ -66,13 +90,21 @@ class AboutDialog(QDialog):
         self._version_label.setStyleSheet(p["version_label"])
         self._desc_label.setStyleSheet(p["desc_label"])
 
-        # Dep row labels — stored as (name_lbl, ver_lbl) pairs
         for name_lbl, ver_lbl in self._dep_rows:
+            # Section headers have no ver_lbl text
+            if ver_lbl is None:
+                name_lbl.setStyleSheet(p["deps_title"])
+                continue
             name_lbl.setStyleSheet(p["dep_name"])
-            is_missing = ver_lbl.text() == "not installed"
-            ver_lbl.setStyleSheet(p["dep_missing"] if is_missing else p["dep_ok"])
+            text = ver_lbl.text()
+            if text in ("not installed", "not found"):
+                ver_lbl.setStyleSheet(p["dep_missing"])
+            elif text == "✓":
+                ver_lbl.setStyleSheet(p["dep_ok"])
+            else:
+                ver_lbl.setStyleSheet(p["dep_ok"])
 
-        if hasattr(self, '_logo_fallback'):
+        if hasattr(self, "_logo_fallback"):
             self._logo_fallback.setStyleSheet(p["logo_fallback"])
 
     # ── UI Setup ──────────────────────────────────────────────────────────
@@ -132,26 +164,38 @@ class AboutDialog(QDialog):
         content_layout.setContentsMargins(32, 20, 32, 20)
         content_layout.setSpacing(12)
 
-        self._deps_title = QLabel("Dependencies")
+        self._deps_title = QLabel("Dependencies & Language Servers")
         content_layout.addWidget(self._deps_title)
 
         # Scrollable deps list
         self._deps_scroll = QScrollArea()
-        self._deps_scroll.setFixedHeight(200)
+        self._deps_scroll.setFixedHeight(260)
         self._deps_scroll.setWidgetResizable(True)
-        self._deps_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._deps_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._deps_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._deps_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
 
         self._deps_widget = QWidget()
         deps_layout = QVBoxLayout(self._deps_widget)
         deps_layout.setContentsMargins(12, 10, 12, 10)
-        deps_layout.setSpacing(10)
+        deps_layout.setSpacing(6)
 
-        self._dep_rows = []  # [(name_lbl, ver_lbl), ...]
+        self._dep_rows = []  # [(name_lbl, ver_lbl | None), ...]
         for name, version in _get_dependency_versions():
+            # Section header rows (e.g. "── LSP servers ──")
+            if version == "":
+                header_lbl = QLabel(name)
+                header_lbl.setContentsMargins(0, 6, 0, 2)
+                deps_layout.addWidget(header_lbl)
+                self._dep_rows.append((header_lbl, None))
+                continue
+
             row = QHBoxLayout()
             name_lbl = QLabel(name)
-            ver_lbl = QLabel(version)
+            ver_lbl  = QLabel(version)
             ver_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
             row.addWidget(name_lbl)
             row.addStretch()
