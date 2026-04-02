@@ -50,6 +50,22 @@ class LineNumberArea(QWidget):
     def paintEvent(self, event):
         self.codeEditor.line_number_area_paint_event(event)
 
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            # Map click Y to editor viewport Y, accounting for scroll
+            y = event.pos().y()
+            block = self.codeEditor.firstVisibleBlock()
+            offset = self.codeEditor.contentOffset()
+            while block.isValid():
+                geom = self.codeEditor.blockBoundingGeometry(block).translated(offset)
+                if geom.top() <= y <= geom.bottom():
+                    self.codeEditor.select_full_line(block.blockNumber())
+                    break
+                if geom.top() > y:
+                    break
+                block = block.next()
+            event.accept()
+
 
 # ==========================================
 # The "Microcode" Minimap
@@ -671,6 +687,21 @@ Answer concisely. If you include code, use a single fenced code block."""
         cursor.setPosition(block_start)
         cursor.setPosition(block_start + len(result), QTextCursor.MoveMode.KeepAnchor)
         self.setTextCursor(cursor)
+        
+    def select_full_line(self, block_number: int):
+        """Select the entire line at the given 0-indexed block number."""
+        doc    = self.document()
+        block  = doc.findBlockByNumber(block_number)
+        if not block.isValid():
+            return
+        cursor = QTextCursor(block)
+        cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        cursor.movePosition(
+            QTextCursor.MoveOperation.EndOfBlock,
+            QTextCursor.MoveMode.KeepAnchor,
+        )
+        self.setTextCursor(cursor)
+        self.setFocus()
 
     # ── Context menu ──────────────────────────────────────────────────────
 
