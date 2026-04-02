@@ -343,6 +343,13 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.cursor_label.setText(
             f"Ln {cursor.blockNumber() + 1}, Col {cursor.columnNumber() + 1}"
         )
+        
+        if editor and hasattr(editor, "multi_cursor") and editor.multi_cursor.active:
+            count = editor.multi_cursor.cursor_count()
+            self.cursor_label.setText(
+                f"Ln {cursor.blockNumber()+1}, Col {cursor.columnNumber()+1}"
+                f"  ·  {count} cursors"
+            )
 
         path = getattr(editor, 'file_path', None)
         if path:

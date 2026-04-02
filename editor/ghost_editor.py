@@ -15,6 +15,7 @@ except ImportError:
     HAS_YAML = False
 
 from ai.worker import AIWorker
+from editor.multi_cursor import MultiCursorManager
 from ui.theme import (
     get_theme, theme_signals,
     build_editor_stylesheet,
@@ -210,6 +211,9 @@ class GhostEditor(LspEditorMixin, QPlainTextEdit):
         self.current_line_selection = []
         self.lint_selections = []
         self.bracket_selections = []
+        self.mc_selections      = []
+        self.multi_cursor       = MultiCursorManager()
+        self.multi_cursor.setup(self)
         self.lsp_selections = []
         self.current_syntax_error = None
 
@@ -791,7 +795,8 @@ Answer concisely. If you include code, use a single fenced code block."""
             self.current_line_selection +
             self.lint_selections +
             self.bracket_selections +
-            self.lsp_selections
+            self.lsp_selections +
+            self.mc_selections
         )
 
     def toggle_blame(self):
@@ -1522,6 +1527,51 @@ Answer concisely. If you include code, use a single fenced code block."""
         if event.key() in (Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta):
             super().keyPressEvent(event)
             return
+            
+        key  = event.key()
+        mods = event.modifiers()            
+    
+        # ── Multi-cursor triggers ─────────────────────────────
+        # Ctrl+D — add next occurrence (or remove last if no new found)
+        if (key == Qt.Key.Key_D
+                and mods == Qt.KeyboardModifier.ControlModifier):
+            prev_count = len(self.multi_cursor._cursors)
+            self.multi_cursor.add_next_occurrence()
+            if len(self.multi_cursor._cursors) == prev_count and prev_count > 0:
+                # No new cursor added — remove last (toggle behaviour)
+                self.multi_cursor.remove_last_occurrence()
+            return
+    
+        # Ctrl+Shift+L — all occurrences
+        if (key == Qt.Key.Key_L
+                and mods == (Qt.KeyboardModifier.ControlModifier
+                             | Qt.KeyboardModifier.ShiftModifier)):
+            self.multi_cursor.add_all_occurrences()
+            return
+    
+        # Ctrl+Alt+Up — cursor above
+        if (key == Qt.Key.Key_Up
+                and mods == (Qt.KeyboardModifier.ControlModifier
+                             | Qt.KeyboardModifier.AltModifier)):
+            self.multi_cursor.add_cursor_above()
+            return
+    
+        # Ctrl+Alt+Down — cursor below
+        if (key == Qt.Key.Key_Down
+                and mods == (Qt.KeyboardModifier.ControlModifier
+                             | Qt.KeyboardModifier.AltModifier)):
+            self.multi_cursor.add_cursor_below()
+            return
+    
+        # ── Multi-cursor active: route keypresses ─────────────
+        if self.multi_cursor.active:
+            if self.multi_cursor.handle_key(event):
+                # _apply handled ALL cursors including primary — do NOT call super()
+                return
+            # Unhandled keys (Ctrl+S, Ctrl+Z etc.) — pass through normally
+            super().keyPressEvent(event)
+            return
+            
 
         if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Up, Qt.Key.Key_Down):
             self.ai_suggest_timer.stop()
@@ -1595,8 +1645,8 @@ Answer concisely. If you include code, use a single fenced code block."""
         if event.key() == Qt.Key.Key_G and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             self._show_jump_bar()
             return
-
-        if event.key() == Qt.Key.Key_D and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            
+        if (event.key() == Qt.Key.Key_D and event.modifiers() == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)):
             self.duplicate_line()
             return
 

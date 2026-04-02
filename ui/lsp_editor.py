@@ -122,6 +122,10 @@ class LspEditorMixin:
     # ─────────────────────────────────────────────────────────────
 
     def mousePressEvent(self, event: QMouseEvent):
+        # Multi-cursor: Alt+Click
+        if hasattr(self, "multi_cursor"):
+            if self.multi_cursor.handle_alt_click(event):
+                return
         if (event.modifiers() & Qt.KeyboardModifier.ControlModifier
                 and event.button() == Qt.MouseButton.LeftButton
                 and self._lsp_active()):
