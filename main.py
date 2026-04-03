@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QProgressBar, QLabel,
                              QDockWidget, QTreeView, QPlainTextEdit, QTextEdit,
                              QVBoxLayout, QWidget, QLineEdit, QTabWidget,
                              QPushButton, QHBoxLayout, QMessageBox, QFileDialog,
-                             QTextBrowser, QSizePolicy)
+                             QTextBrowser, QSizePolicy, QSplitter)
 from PyQt6.QtCore import QTimer, QThread, Qt, QDir, QProcess, QUrl, pyqtSlot
 from PyQt6.QtGui import (QFileSystemModel, QAction, QKeySequence, QTextCursor,
                          QIcon, QPixmap, QPainter, QColor, QShortcut,
@@ -52,6 +52,8 @@ from ui.command_palette import CommandPalette
 from ui.terminal import TerminalDock
 from ui.startup_progress import StartupProgress
 from ui.autosave_manager import AutosaveManager, AUTOSAVE_INTERVAL_MS
+from ui.split_container import SplitContainer, EditorPane
+
 
 from editor.highlighter import registry
 from ui.git_panel import GitDockWidget
@@ -169,14 +171,12 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self._autosave_timer.start()
 
         # Tab System
-        self.tabs = QTabWidget()
-        self.tabs.setTabsClosable(True)
-        self.tabs.tabCloseRequested.connect(self.close_tab)
-        self.tabs.currentChanged.connect(lambda _: self._refresh_markdown_preview())
-        self.tabs.currentChanged.connect(lambda _: self.update_status_bar())
-        self.tabs.currentChanged.connect(lambda _: self.update_git_branch())
-        self.tabs.currentChanged.connect(self._on_tab_changed)
-        self.tabs.setStyleSheet(build_tab_widget_stylesheet(get_theme()))
+        self.split_container = SplitContainer()
+        self.split_container.pane_activated.connect(self._on_active_pane_changed)
+        self.split_container.tab_close_requested.connect(self._on_pane_tab_close)
+        self.split_container.current_changed.connect(self._on_pane_current_changed)
+        # Compatibility shim — self.tabs always points to the active pane
+        self.tabs = self.split_container.active_pane()
 
         # Layout
         self.central_container = QWidget()
@@ -188,7 +188,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.find_replace_panel.hide()
 
         self.central_layout.addWidget(self.find_replace_panel)
-        self.central_layout.addWidget(self.tabs)
+        self.central_layout.addWidget(self.split_container)
         self.setCentralWidget(self.central_container)
 
         # Shortcuts
@@ -196,10 +196,24 @@ class CodeEditor(QMainWindow, ChatRenderer):
         QShortcut(QKeySequence("Ctrl+H"),       self).activated.connect(self.show_find_replace)
         QShortcut(QKeySequence("Ctrl+Shift+F"), self).activated.connect(self.show_project_search)
         QShortcut(QKeySequence("Ctrl+Space"),   self).activated.connect(self.request_manual_completion)
+        # Split pane shortcuts
+        QShortcut(QKeySequence("Ctrl+\\"),        self).activated.connect(
+            lambda: self._split_active(Qt.Orientation.Horizontal)
+        )
+        QShortcut(QKeySequence("Ctrl+Shift+\\"),  self).activated.connect(
+            lambda: self._split_active(Qt.Orientation.Vertical)
+        )
+        QShortcut(QKeySequence("Ctrl+Shift+W"),   self).activated.connect(
+            self._close_active_pane
+        )
+        # Ctrl+K, Ctrl+Left/Right — move focus between panes
+        QShortcut(QKeySequence("Ctrl+K, Left"),   self).activated.connect(
+            lambda: self._focus_adjacent_pane(-1)
+        )
+        QShortcut(QKeySequence("Ctrl+K, Right"),  self).activated.connect(
+            lambda: self._focus_adjacent_pane(1)
+        )
 
-        #self.timer = QTimer()
-        #self.timer.setSingleShot(True)
-        #self.timer.timeout.connect(self.ask_ai)
 
         setup_file_menu(self)
         self.setup_run_menu()
@@ -301,7 +315,8 @@ class CodeEditor(QMainWindow, ChatRenderer):
         All child dialogs/panels handle themselves via theme_signals.
         """
         self.status_bar.setStyleSheet(build_status_bar_stylesheet(t))
-        self.tabs.setStyleSheet(build_tab_widget_stylesheet(t))
+        for pane in self.split_container.all_panes():
+            pane.setStyleSheet(build_tab_widget_stylesheet(t))
         self.output_editor.setStyleSheet(build_output_panel_stylesheet(t))
         self.explain_error_btn.setStyleSheet(build_explain_error_btn_stylesheet(t))
         self.tree_view.setStyleSheet(build_tree_view_stylesheet(t))
@@ -320,10 +335,9 @@ class CodeEditor(QMainWindow, ChatRenderer):
         if hasattr(self, 'terminal_dock'):
             self.terminal_dock.apply_styles(t)
 
-        # Re-apply syntax highlighting to all open editors
-        for i in range(self.tabs.count()):
-            editor = self.tabs.widget(i)
-            if editor and hasattr(editor, 'file_path') and editor.file_path:
+        # Re-apply syntax highlighting across ALL panes:
+        for _, editor in self.split_container.all_editors():
+            if hasattr(editor, 'file_path') and editor.file_path:
                 ext = os.path.splitext(editor.file_path)[1].lower()
                 editor.highlighter = registry.get_highlighter(editor.document(), ext)
 
@@ -631,15 +645,22 @@ class CodeEditor(QMainWindow, ChatRenderer):
     def open_file_in_tab(self, file_path, line_number=None):
         if os.path.isdir(file_path):
             return
-
+ 
         editor_to_focus = None
-        for i in range(self.tabs.count()):
-            editor = self.tabs.widget(i)
-            if hasattr(editor, 'file_path') and editor.file_path == file_path:
-                self.tabs.setCurrentIndex(i)
-                editor_to_focus = editor
+ 
+        # Search ALL panes for already-open file
+        for pane in self.split_container.all_panes():
+            for i in range(pane.count()):
+                editor = pane.widget(i)
+                if hasattr(editor, 'file_path') and editor.file_path == file_path:
+                    self.split_container._set_active(pane)
+                    self.tabs = pane
+                    pane.setCurrentIndex(i)
+                    editor_to_focus = editor
+                    break
+            if editor_to_focus:
                 break
-
+ 
         if not editor_to_focus:
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
@@ -651,11 +672,13 @@ class CodeEditor(QMainWindow, ChatRenderer):
             except Exception as e:
                 print(f"Could not open file: {e}")
                 return
-
+ 
         if editor_to_focus and line_number is not None:
             cursor = editor_to_focus.textCursor()
             cursor.movePosition(QTextCursor.MoveOperation.Start)
-            cursor.movePosition(QTextCursor.MoveOperation.NextBlock, n=line_number - 1)
+            cursor.movePosition(
+                QTextCursor.MoveOperation.NextBlock, n=line_number - 1
+            )
             editor_to_focus.setTextCursor(cursor)
             editor_to_focus.ensureCursorVisible()
             editor_to_focus.setFocus()
@@ -708,7 +731,13 @@ class CodeEditor(QMainWindow, ChatRenderer):
     # ── Tab management ────────────────────────────────────────────────────
 
     def current_editor(self):
-        return self.tabs.currentWidget()
+        # Return focused editor across ALL panes, not just active tab
+        focused = QApplication.focusWidget()
+        from editor.ghost_editor import GhostEditor
+        if isinstance(focused, GhostEditor):
+            return focused
+        # Fall back to active pane's current tab
+        return self.split_container.active_pane().currentWidget()
         
     def _open_recovered_tab(self, name: str, content: str,
                             file_path, cursor_pos: int):
@@ -758,6 +787,89 @@ class CodeEditor(QMainWindow, ChatRenderer):
     
         return editor
 
+    def _on_active_pane_changed(self, pane: EditorPane):
+        """Called when a different pane becomes active."""
+        self.tabs = pane   # update shim
+        self.update_status_bar()
+        self.update_git_branch()
+        self._refresh_markdown_preview()
+        editor = pane.currentWidget()
+        if editor and hasattr(editor, 'file_path') and editor.file_path:
+            if hasattr(self, 'graph_dock'):
+                self.graph_dock.set_active_file(editor.file_path)
+ 
+    def _on_pane_tab_close(self, pane: EditorPane, index: int):
+        """Route tab close from any pane — collapse pane if it becomes empty."""
+        prev_active = self.split_container.active_pane()
+    
+        # Temporarily point self.tabs at this pane so close_tab works
+        self.tabs = pane
+        self.close_tab(index)
+    
+        # After closing, check if pane is now empty
+        all_panes = self.split_container.all_panes()
+        if pane.count() == 0 and len(all_panes) > 1:
+            self.split_container.close_pane(pane)
+    
+        # Update the shim to whoever is active now
+        self.tabs = self.split_container.active_pane()
+ 
+    def _on_pane_current_changed(self, pane: EditorPane, index: int):
+        """Called when tab selection changes in any pane."""
+        if pane is self.split_container.active_pane():
+            self._on_tab_changed(index)
+ 
+    def _split_active(self, orientation: Qt.Orientation):
+        """Split the active pane and open a new empty tab in the new pane."""
+        self.split_container.split_active(orientation)
+        # After split, the new pane is NOT yet active — activate it
+        panes = self.split_container.all_panes()
+        # The new pane is the one with 0 tabs
+        for pane in panes:
+            if pane.count() == 0:
+                self.split_container._set_active(pane)
+                self.tabs = pane
+                self.add_new_tab("Untitled", "")
+                break
+ 
+    def _close_active_pane(self):
+        """Close the active pane (must have 0 or 1 empty tab)."""
+        pane = self.split_container.active_pane()
+        # Close all tabs in the pane first
+        while pane.count() > 0:
+            editor = pane.widget(0)
+            if editor and hasattr(editor, 'is_dirty') and editor.is_dirty():
+                # Don't force-close dirty files
+                self.statusBar().showMessage(
+                    "Save or discard changes before closing pane.", 3000
+                )
+                return
+            if editor:
+                if hasattr(editor, 'teardown_lsp'):
+                    editor.teardown_lsp()
+                editor.deleteLater()
+            pane.removeTab(0)
+        self.split_container.close_pane(pane)
+        self.tabs = self.split_container.active_pane()
+ 
+    def _focus_adjacent_pane(self, direction: int):
+        """Move keyboard focus to the next/previous pane."""
+        panes = self.split_container.all_panes()
+        if len(panes) < 2:
+            return
+        current = self.split_container.active_pane()
+        try:
+            idx = panes.index(current)
+        except ValueError:
+            return
+        next_idx = (idx + direction) % len(panes)
+        next_pane = panes[next_idx]
+        self.split_container._set_active(next_pane)
+        self.tabs = next_pane
+        editor = next_pane.currentWidget()
+        if editor:
+            editor.setFocus()
+
     def handle_editor_error_help(self, error_msg, code, line_num):
         self.chat_panel.expand()
         self.chat_panel.switch_to_chat()
@@ -806,8 +918,8 @@ Instructions:
         if hasattr(self, "lsp_manager") and self.lsp_manager:
                 self.lsp_manager.stop()
         unsaved = any(
-            hasattr(self.tabs.widget(i), 'is_dirty') and self.tabs.widget(i).is_dirty()
-            for i in range(self.tabs.count())
+            hasattr(editor, 'is_dirty') and editor.is_dirty()
+            for _, editor in self.split_container.all_editors()
         )
 
         if unsaved:
@@ -819,10 +931,13 @@ Instructions:
                 QMessageBox.StandardButton.Cancel
             )
             if reply == QMessageBox.StandardButton.SaveAll:
-                for i in range(self.tabs.count()):
-                    editor = self.tabs.widget(i)
-                    if hasattr(editor, 'is_dirty') and editor.is_dirty():
-                        self.save_file(i)
+                for pane in self.split_container.all_panes():
+                    self.tabs = pane
+                    for i in range(pane.count()):
+                        editor = pane.widget(i)
+                        if hasattr(editor, 'is_dirty') and editor.is_dirty():
+                            self.save_file(i)
+                self.tabs = self.split_container.active_pane()
                 event.accept()
             elif reply == QMessageBox.StandardButton.Discard:
                 event.accept()
@@ -883,7 +998,8 @@ Instructions:
                     return
             elif reply == QMessageBox.StandardButton.Cancel:
                 return
-
+        self.tabs.removeTab(index)
+        
         widget = self.tabs.widget(index)
         if widget:
             if hasattr(widget, "teardown_lsp"):
@@ -898,7 +1014,7 @@ Instructions:
                 widget.teardown_lsp()                
             widget.deleteLater()
         self.tabs.removeTab(index)
-        if self.tabs.count() == 0:
+        if self.tabs.count() == 0 and len(self.split_container.all_panes()) == 1:
             self.add_new_tab("Untitled", "")
 
     def save_file(self, index=None):
@@ -981,18 +1097,20 @@ Instructions:
             return False
 
     def _save_current_session(self):
+        # Save active pane tabs only
+        pane = self.split_container.active_pane()
         tabs = []
-        for i in range(self.tabs.count()):
-            editor = self.tabs.widget(i)
+        for i in range(pane.count()):
+            editor = pane.widget(i)
             path = getattr(editor, 'file_path', None)
             cursor_pos = editor.textCursor().position() if editor else 0
             tabs.append((path, cursor_pos))
-
+ 
         project_path = None
         if hasattr(self, 'git_dock') and self.git_dock.repo_path:
             project_path = self.git_dock.repo_path
-
-        save_session(tabs, self.tabs.currentIndex(), project_path)
+ 
+        save_session(tabs, pane.currentIndex(), project_path)
 
     def _restore_session(self, project_path=None):
         self._startup.register("LSP")
@@ -1094,12 +1212,8 @@ Instructions:
             
     def _get_all_editors_indexed(self):
         """Return list of (tab_index, editor) for all open tabs."""
-        result = []
-        for i in range(self.tabs.count()):
-            editor = self.tabs.widget(i)
-            if editor and hasattr(editor, "toPlainText"):
-                result.append((i, editor))
-        return result
+        return self.split_container.all_editors()
+
 
     # ── Context building ──────────────────────────────────────────────────
 
@@ -1443,6 +1557,8 @@ Instructions:
                                           self.search_dock.raise_())),
             ("Import Graph",     lambda: (self.graph_dock.show(),
                                           self.graph_dock.raise_())),
+            ("Split Editor ↔",   lambda: self._split_active(Qt.Orientation.Horizontal)),
+            ("Split Editor ↕",   lambda: self._split_active(Qt.Orientation.Vertical)),
         ]
         for name, fn in panels:
             action = QAction(name, self)
@@ -1648,17 +1764,19 @@ Instructions:
     # ── AI loading indicator ──────────────────────────────────────────────
 
     def show_loading_indicator(self):
-        index = self.tabs.currentIndex()
+        pane  = self.split_container.active_pane()
+        index = pane.currentIndex()
         if index >= 0:
-            title = self.tabs.tabText(index)
+            title = pane.tabText(index)
             if not title.startswith("⟳ "):
-                self.tabs.setTabText(index, "⟳ " + title)
-
+                pane.setTabText(index, "⟳ " + title)
+ 
     def hide_loading_indicator(self):
-        for i in range(self.tabs.count()):
-            title = self.tabs.tabText(i)
-            if title.startswith("⟳ "):
-                self.tabs.setTabText(i, title[2:])
+        for pane in self.split_container.all_panes():
+            for i in range(pane.count()):
+                title = pane.tabText(i)
+                if title.startswith("⟳ "):
+                    pane.setTabText(i, title[2:])
 
     def on_text_changed(self):
         editor = self.current_editor()

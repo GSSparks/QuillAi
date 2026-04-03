@@ -60,7 +60,6 @@
           markdown
           pygments
           python-lsp-server
-          perlnavigator
           chromadb
           sentence-transformers
           # sentence-transformers and chromadb are optional —
