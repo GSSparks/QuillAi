@@ -11,9 +11,10 @@ servers work transparently — the mixin doesn't need to know which server
 is handling the current file.
 """
 
+import re as _re
 from PyQt6.QtCore    import Qt, QTimer, QPoint
-from PyQt6.QtGui     import QTextCharFormat, QColor, QTextCursor, QMouseEvent
-from PyQt6.QtWidgets import QTextEdit, QToolTip
+from PyQt6.QtGui     import QTextCharFormat, QColor, QFont, QPalette, QTextCursor, QMouseEvent
+from PyQt6.QtWidgets import QTextEdit, QToolTip, QFrame, QVBoxLayout, QLabel, QScrollArea
 
 from ai.lsp_client import uri_to_path
 
@@ -25,6 +26,228 @@ _SEVERITY_COLOR = {
     4: "#a89984",   # Hint    — Gruvbox grey
 }
 
+class _HoverPopup(QFrame):
+    """Styled hover tooltip that renders markdown code blocks."""
+
+    _instance = None   # singleton — only one at a time
+
+    @classmethod
+    def show_at(cls, parent, text: str, global_pos):
+        # Dismiss any existing popup
+        if cls._instance is not None:
+            try:
+                cls._instance.close()
+                cls._instance.deleteLater()
+            except RuntimeError:
+                pass
+            cls._instance = None
+
+        popup = cls(parent, text)
+        cls._instance = popup
+
+        # Position: below cursor, nudge left if near right edge
+        from PyQt6.QtWidgets import QApplication
+        screen = QApplication.screenAt(global_pos)
+        popup.adjustSize()
+        x = global_pos.x()
+        y = global_pos.y() + 20
+
+        if screen:
+            sg = screen.availableGeometry()
+            if x + popup.width() > sg.right():
+                x = sg.right() - popup.width() - 8
+            if y + popup.height() > sg.bottom():
+                y = global_pos.y() - popup.height() - 8
+
+        popup.move(x, y)
+        popup.show()
+        popup.raise_()
+
+        # Auto-dismiss after 8s
+        QTimer.singleShot(8000, popup._dismiss)
+
+    @classmethod
+    def dismiss(cls):
+        if cls._instance is not None:
+            try:
+                cls._instance._dismiss()
+            except RuntimeError:
+                pass
+            cls._instance = None
+
+    def __init__(self, parent, text: str):
+        super().__init__(parent.window(), Qt.WindowType.ToolTip)
+        self.setObjectName("HoverPopup")
+
+        from ui.theme import get_theme, FONT_UI, FONT_CODE
+        t = get_theme()
+
+        bg      = t.get("bg1",      "#3c3836")
+        bg_code = t.get("bg0_hard", "#1d2021")
+        fg      = t.get("fg1",      "#ebdbb2")
+        fg_dim  = t.get("fg4",      "#a89984")
+        border  = t.get("border",   "#504945")
+        accent  = t.get("blue",     "#83a598")
+        orange  = t.get("orange",   "#fe8019")
+
+        self.setStyleSheet(f"""
+            QFrame#HoverPopup {{
+                background-color: {bg};
+                border: 1px solid {border};
+                border-radius: 4px;
+            }}
+        """)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet(f"background: {bg}; border: none;")
+        outer.addWidget(scroll)
+
+        content = QFrame()
+        content.setStyleSheet(f"background: {bg};")
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(4)
+        scroll.setWidget(content)
+
+        # Parse and render markdown blocks
+        blocks = _parse_hover_markdown(text)
+        for block_type, block_text in blocks:
+            if block_type == "code":
+                # Detect language label if present
+                lines = block_text.split("\n")
+                lbl = QLabel(block_text)
+                lbl.setWordWrap(False)
+                lbl.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse
+                )
+                lbl.setStyleSheet(f"""
+                    QLabel {{
+                        background-color: {bg_code};
+                        color: {orange};
+                        font-family: '{FONT_CODE}', monospace;
+                        font-size: 9pt;
+                        padding: 6px 10px;
+                        border-radius: 3px;
+                        border: 1px solid {border};
+                    }}
+                """)
+                layout.addWidget(lbl)
+
+            elif block_type == "heading":
+                lbl = QLabel(block_text)
+                lbl.setWordWrap(True)
+                lbl.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse
+                )
+                lbl.setStyleSheet(f"""
+                    QLabel {{
+                        color: {accent};
+                        font-family: '{FONT_UI}', system-ui, sans-serif;
+                        font-size: 9.5pt;
+                        font-weight: 600;
+                        padding: 0;
+                    }}
+                """)
+                layout.addWidget(lbl)
+
+            else:  # prose
+                if not block_text.strip():
+                    continue
+                lbl = QLabel(block_text)
+                lbl.setWordWrap(True)
+                lbl.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse
+                )
+                lbl.setStyleSheet(f"""
+                    QLabel {{
+                        color: {fg};
+                        font-family: '{FONT_UI}', system-ui, sans-serif;
+                        font-size: 9pt;
+                        padding: 0;
+                    }}
+                """)
+                layout.addWidget(lbl)
+
+        # Max size
+        self.setMaximumWidth(520)
+        self.setMaximumHeight(320)
+
+    def _dismiss(self):
+        self.close()
+        self.deleteLater()
+        if _HoverPopup._instance is self:
+            _HoverPopup._instance = None
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        if hasattr(self, "_hover_timer"):
+            self._hover_timer.stop()
+        QToolTip.hideText()
+        _HoverPopup.dismiss()
+
+
+def _parse_hover_markdown(text: str) -> list:
+    """
+    Parse hover markdown into [(type, content), ...].
+    Types: 'code', 'heading', 'prose'
+    """
+    blocks = []
+    lines  = text.split("\n")
+    i      = 0
+
+    while i < len(lines):
+        line = lines[i]
+
+        # Fenced code block
+        if line.strip().startswith("```"):
+            lang  = line.strip()[3:].strip()
+            code_lines = []
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                code_lines.append(lines[i])
+                i += 1
+            code = "\n".join(code_lines).strip()
+            if code:
+                blocks.append(("code", code))
+            i += 1
+            continue
+
+        # Heading
+        if line.startswith("#"):
+            heading = _re.sub(r"^#+\s*", "", line).strip()
+            if heading:
+                blocks.append(("heading", heading))
+            i += 1
+            continue
+
+        # Prose — accumulate until next special block
+        prose_lines = []
+        while i < len(lines):
+            l = lines[i]
+            if l.strip().startswith("```") or l.startswith("#"):
+                break
+            prose_lines.append(l)
+            i += 1
+
+        prose = "\n".join(prose_lines).strip()
+        # Strip inline backticks for display — wrap in prose with accent
+        prose = _re.sub(r'`([^`]+)`', r'\1', prose)
+        if prose:
+            blocks.append(("prose", prose))
+
+    return blocks
+
+
+def _show_hover_popup(parent, text: str, global_pos):
+    _HoverPopup.show_at(parent, text, global_pos)
 
 class LspEditorMixin:
     """
@@ -194,19 +417,29 @@ class LspEditorMixin:
     def _on_lsp_hover(self, result):
         if not result:
             return
+    
         contents = result.get("contents", "")
         if isinstance(contents, dict):
             text = contents.get("value", "").strip()
+            kind = contents.get("kind", "markdown")
         elif isinstance(contents, list):
-            text = "\n".join(
-                c.get("value", c) if isinstance(c, dict) else str(c)
-                for c in contents
-            ).strip()
+            parts = []
+            for c in contents:
+                if isinstance(c, dict):
+                    parts.append(c.get("value", ""))
+                else:
+                    parts.append(str(c))
+            text = "\n".join(parts).strip()
+            kind = "markdown"
         else:
             text = str(contents).strip()
-        if text:
-            global_pos = self.viewport().mapToGlobal(self._last_hover_pos)
-            QToolTip.showText(global_pos, text, self)
+            kind = "plaintext"
+    
+        if not text:
+            return
+    
+        global_pos = self.viewport().mapToGlobal(self._last_hover_pos)
+        _show_hover_popup(self, text, global_pos)
 
     # ─────────────────────────────────────────────────────────────
     # Diagnostic squiggles
