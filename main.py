@@ -1063,15 +1063,21 @@ Instructions:
         editor = self.tabs.widget(index)
         if editor and hasattr(editor, 'file_path') and editor.file_path:
             self.intent_tracker.record_file_edit(editor.file_path)
-            # Record co-edit pair with the previously active file
             if (self.vector_index
-                    and hasattr(self, '_last_active_file')
-                    and self._last_active_file
-                    and self._last_active_file != editor.file_path):
+                and hasattr(self, '_last_active_file')
+                and self._last_active_file
+                and self._last_active_file != editor.file_path):
                 self.vector_index.index_edit(
                     self._last_active_file, editor.file_path
                 )
             self._last_active_file = editor.file_path
+    
+        # Breadcrumb — connect to new active editor
+        if hasattr(self, 'lsp_manager') and editor:
+            if hasattr(editor, '_breadcrumb') and not editor._breadcrumb.isVisible():
+                if self.lsp_manager and self.lsp_manager.is_supported(
+                        getattr(editor, 'file_path', '') or ''):
+                    editor.setup_breadcrumb(self.lsp_manager)
             
     def _get_all_editors_indexed(self):
         """Return list of (tab_index, editor) for all open tabs."""
@@ -1245,6 +1251,9 @@ Instructions:
             return   # already wired
         editor.setup_lsp(self.lsp_manager)
         editor.goto_file_requested.connect(self._goto_file)
+        # Breadcrumb
+        if hasattr(editor, 'setup_breadcrumb'):
+            editor.setup_breadcrumb(self.lsp_manager)
     
     def _goto_file(self, file_path: str, line: int, col: int):
         self.open_file_in_tab(file_path)

@@ -201,6 +201,14 @@ class LSPClient(QObject):
             "textDocument": {"uri": path_to_uri(file_path)},
             "position":     {"line": line, "character": col},
         }, callback=callback)
+        
+    def document_symbols(self, file_path: str, callback):
+        if not self._ready:
+            callback([])
+            return
+        self._send_request("textDocument/documentSymbol", {
+            "textDocument": {"uri": path_to_uri(file_path)},
+        }, callback=lambda result: callback(result if isinstance(result, list) else []))
 
     # ─────────────────────────────────────────────────────────────
     # JSON-RPC transport

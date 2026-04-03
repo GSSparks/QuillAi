@@ -25,6 +25,7 @@ from ui.theme import (
     QFONT_CODE,
 )
 from ui.lsp_editor import LspEditorMixin
+from ui.breadcrumb_bar import BreadcrumbBar
 
 # ==========================================
 # Professional Snippet Manager
@@ -244,6 +245,11 @@ class GhostEditor(LspEditorMixin, QPlainTextEdit):
             ) if self._get_hex_color_at_cursor() else None
         )
         self.cursorPositionChanged.connect(self._update_color_swatch)
+        
+        # Breadcrumb bar — floats at the top of the editor viewport
+        self._breadcrumb = BreadcrumbBar(self)
+        self._breadcrumb.show()
+        theme_signals.theme_changed.connect(self._breadcrumb.apply_theme)
 
         # Subscribe to theme changes
         theme_signals.theme_changed.connect(self._on_theme_changed)
@@ -382,6 +388,22 @@ class GhostEditor(LspEditorMixin, QPlainTextEdit):
             cr.bottom() - 28 - scrollbar_height,
             cr.width() - self.line_number_area_width() - self.minimap_width,
             28
+        )
+        
+    def setup_breadcrumb(self, lsp_manager):
+        self._breadcrumb.set_lsp_manager(lsp_manager)
+        self._breadcrumb.connect_editor(self)
+        self.update_line_number_area_width(0)
+        self._position_breadcrumb()
+    
+    def _position_breadcrumb(self):
+        r = self.rect()
+        crumb_h = 24
+        self._breadcrumb.setGeometry(
+            r.left() + self.line_number_area_width(),
+            r.top(),
+            r.width() - self.line_number_area_width() - self.minimap_width,
+            crumb_h
         )
 
     def _do_jump(self):
@@ -1170,7 +1192,8 @@ Answer concisely. If you include code, use a single fenced code block."""
         return base + self._blame_width
 
     def update_line_number_area_width(self, _):
-        self.setViewportMargins(self.line_number_area_width(), 0, self.minimap_width, 0)
+        crumb_h = 24
+        self.setViewportMargins(self.line_number_area_width(), crumb_h, self.minimap_width, 0)
 
     def update_line_number_area(self, rect, dy):
         if dy:
@@ -1183,35 +1206,50 @@ Answer concisely. If you include code, use a single fenced code block."""
     def resizeEvent(self, event):
         super().resizeEvent(event)
         cr = self.contentsRect()
-        self.line_number_area.setGeometry(QRect(cr.left(), cr.top(), self.line_number_area_width(), cr.height()))
-        self.minimap.setGeometry(QRect(cr.right() - self.minimap_width, cr.top(), self.minimap_width, cr.height()))
+        crumb_h = 24
+    
+        # Use full widget rect for gutter and minimap so they cover the crumb margin
+        full = self.rect()
+        self.line_number_area.setGeometry(QRect(full.left(), full.top(), self.line_number_area_width(), full.height()))
+        self.minimap.setGeometry(QRect(full.right() - self.minimap_width, full.top(), self.minimap_width, full.height()))
+    
         if hasattr(self, '_jump_bar'):
             self._position_jump_bar()
         if hasattr(self, '_inline_chat') and self._inline_chat.isVisible():
             self._position_inline_chat()
+        if hasattr(self, '_breadcrumb'):
+            self._position_breadcrumb()
 
     def line_number_area_paint_event(self, event):
         painter = QPainter(self.line_number_area)
         painter.fillRect(event.rect(), QColor(self._t['bg0_hard']))
+    
+        # Fill the breadcrumb reserved area with bg so no numbers bleed in
+        crumb_h = 24 if (hasattr(self, '_breadcrumb') and self._breadcrumb.isVisible()) else 0
+        if crumb_h > 0:
+            painter.fillRect(0, 0, self.line_number_area.width(), crumb_h, QColor(self._t['bg0_hard']))
+    
         painter.setPen(QColor(self._t['border']))
         painter.drawLine(self.line_number_area.width() - 1, event.rect().top(),
                          self.line_number_area.width() - 1, event.rect().bottom())
-
-        # Blame column separator
+    
         if self._blame_visible and self._blame_width > 0:
             painter.setPen(QColor(self._t['border']))
             painter.drawLine(self._blame_width, event.rect().top(),
                              self._blame_width, event.rect().bottom())
-
+    
         block = self.firstVisibleBlock()
         block_number = block.blockNumber()
         top    = round(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
         bottom = top + round(self.blockBoundingRect(block).height())
         fm_h   = self.fontMetrics().height()
-
+    
+        # Offset block positions into gutter coords (viewport is offset by crumb_h)
+        top    += crumb_h
+        bottom += crumb_h
+    
         while block.isValid() and top <= event.rect().bottom():
-            if block.isVisible() and bottom >= event.rect().top():
-                # ── Blame annotation ──────────────────────────────────────
+            if block.isVisible() and bottom >= event.rect().top() and top >= crumb_h:
                 if self._blame_visible and self._blame_width > 0:
                     annotation = self._blame_data.get(block_number + 1, "")
                     if annotation:
@@ -1224,11 +1262,9 @@ Answer concisely. If you include code, use a single fenced code block."""
                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                             annotation
                         )
-                        # Restore font
                         blame_font.setPointSize(blame_font.pointSize() + 1)
                         painter.setFont(blame_font)
-
-                # ── Line number ───────────────────────────────────────────
+    
                 painter.setPen(QColor(self._t['fg4']))
                 painter.drawText(
                     self._blame_width, top,
@@ -1236,8 +1272,7 @@ Answer concisely. If you include code, use a single fenced code block."""
                     Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                     str(block_number + 1)
                 )
-
-                # ── Diff indicator ────────────────────────────────────────
+    
                 status = self.line_changes.get(block_number)
                 if status:
                     color = QColor(self._t['added_line']) if status == 'added' \
@@ -1245,7 +1280,7 @@ Answer concisely. If you include code, use a single fenced code block."""
                     painter.fillRect(
                         self.line_number_area.width() - 4, top, 4, fm_h, color
                     )
-
+    
             block = block.next()
             top    = bottom
             bottom = top + round(self.blockBoundingRect(block).height())

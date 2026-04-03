@@ -325,3 +325,21 @@ class LSPManager(QObject):
             dead_exts = [ext for ext, c in self._ext_map.items() if c is client]
             for ext in dead_exts:
                 del self._ext_map[ext]
+                                
+    # ─────────────────────────────────────────────────────────────
+    # Breadcrumb support
+    # ─────────────────────────────────────────────────────────────                
+                
+    def request_document_symbols(self, file_path: str, callback):
+        """
+        Request textDocument/documentSymbol for file_path.
+        Calls callback(file_path, symbols) on the main thread.
+        """
+        client = self.client_for(file_path)
+        if not client or not client.is_ready:
+            callback(file_path, [])
+            return
+        client.document_symbols(
+            file_path,
+            lambda symbols: callback(file_path, symbols)
+        )
