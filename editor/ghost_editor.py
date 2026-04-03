@@ -54,8 +54,13 @@ class LineNumberArea(QWidget):
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            # Map click Y to editor viewport Y, accounting for scroll
             y = event.pos().y()
+    
+            # Adjust for breadcrumb top margin
+            crumb_h = 24 if (hasattr(self.codeEditor, '_breadcrumb')
+                             and self.codeEditor._breadcrumb.isVisible()) else 0
+            y -= crumb_h
+    
             block = self.codeEditor.firstVisibleBlock()
             offset = self.codeEditor.contentOffset()
             while block.isValid():
