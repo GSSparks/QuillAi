@@ -18,6 +18,7 @@ Usage:
 """
 
 import json
+import os
 import re
 
 from PyQt6.QtCore import QObject, QProcess, pyqtSignal
@@ -108,17 +109,37 @@ class LSPClient(QObject):
             "rootUri":      path_to_uri(self.project_root),
             "capabilities": {
                 "textDocument": {
-                    "hover":      {"contentFormat": ["markdown", "plaintext"]},
-                    "definition": {},
-                    "publishDiagnostics": {"relatedInformation": True},
+                    "hover": {
+                        "contentFormat":      ["markdown", "plaintext"],
+                        "dynamicRegistration": False,
+                    },
+                    "definition": {
+                        "dynamicRegistration": False,
+                    },
+                    "completion": {
+                        "completionItem": {
+                            "snippetSupport":        False,
+                            "documentationFormat":   ["markdown", "plaintext"],
+                        },
+                        "dynamicRegistration": False,
+                    },
+                    "documentSymbol": {
+                        "hierarchicalDocumentSymbolSupport": True,
+                        "dynamicRegistration": False,
+                    },
+                    "publishDiagnostics": {
+                        "relatedInformation": True,
+                    },
                     "synchronization": {
-                        "didOpen":   True,
-                        "didChange": True,
-                        "didClose":  True,
+                        "didOpen":             True,
+                        "didChange":           True,
+                        "didClose":            True,
+                        "dynamicRegistration": False,
                     },
                 },
                 "workspace": {
                     "didChangeConfiguration": {},
+                    "configuration":          True,
                 },
             },
             "initializationOptions": self.init_options,
@@ -201,14 +222,16 @@ class LSPClient(QObject):
             "textDocument": {"uri": path_to_uri(file_path)},
             "position":     {"line": line, "character": col},
         }, callback=callback)
-        
+
     def document_symbols(self, file_path: str, callback):
         if not self._ready:
             callback([])
             return
         self._send_request("textDocument/documentSymbol", {
             "textDocument": {"uri": path_to_uri(file_path)},
-        }, callback=lambda result: callback(result if isinstance(result, list) else []))
+        }, callback=lambda result: callback(
+            result if isinstance(result, list) else []
+        ))
 
     # ─────────────────────────────────────────────────────────────
     # JSON-RPC transport
@@ -262,16 +285,84 @@ class LSPClient(QObject):
             self._dispatch(msg)
 
     def _dispatch(self, msg: dict):
-        if "id" in msg:
+        # ── Responses to our requests ─────────────────────────────────────
+        if "id" in msg and "method" not in msg:
             callback = self._pending.pop(msg["id"], None)
             if callback:
                 callback(msg.get("result"))
             return
+
         method = msg.get("method", "")
+
+        # ── workspace/configuration — servers request their own settings ──
+        # Must respond or servers like perlnavigator stall indefinitely.
+        if method == "workspace/configuration":
+            req_id = msg.get("id")
+            items  = msg.get("params", {}).get("items", [])
+            # Return empty config object for each requested section
+            self._write({
+                "jsonrpc": "2.0",
+                "id":      req_id,
+                "result":  [{}] * len(items),
+            })
+            return
+
+        # ── workspace/applyEdit — acknowledge silently ────────────────────
+        if method == "workspace/applyEdit":
+            req_id = msg.get("id")
+            if req_id is not None:
+                self._write({
+                    "jsonrpc": "2.0",
+                    "id":      req_id,
+                    "result":  {"applied": False},
+                })
+            return
+
+        # ── window/showMessageRequest — dismiss silently ──────────────────
+        if method == "window/showMessageRequest":
+            req_id = msg.get("id")
+            if req_id is not None:
+                self._write({
+                    "jsonrpc": "2.0",
+                    "id":      req_id,
+                    "result":  None,
+                })
+            return
+
+        # ── Informational notifications ───────────────────────────────────
+        if method == "window/logMessage":
+            params = msg.get("params", {})
+            return
+
+        if method == "window/showMessage":
+            params = msg.get("params", {})
+            return
+
+        if method == "$/progress":
+            return   # ignore progress notifications
+
+        if method == "telemetry/event":
+            return   # ignore telemetry
+
+        # ── Diagnostics ───────────────────────────────────────────────────
         if method == "textDocument/publishDiagnostics":
             params    = msg.get("params", {})
             file_path = uri_to_path(params.get("uri", ""))
-            self.diagnostics.emit(file_path, params.get("diagnostics", []))
+            diags     = params.get("diagnostics", [])
+            self.diagnostics.emit(file_path, diags)
+            return
+
+        # ── Catch-all for unhandled server→client requests ────────────────
+        if "id" in msg:
+            # Server sent a request we don't handle — send error response
+            self._write({
+                "jsonrpc": "2.0",
+                "id":      msg["id"],
+                "error": {
+                    "code":    -32601,
+                    "message": f"Method not supported: {method}",
+                },
+            })
 
     def _on_initialize_response(self, result):
         self._send_notify("initialized", {})
@@ -279,12 +370,16 @@ class LSPClient(QObject):
         self.initialized.emit()
 
     def _on_stderr(self):
-        pass  # Uncomment for debug: print(bytes(self._process.readAllStandardError()).decode())
+        data = bytes(self._process.readAllStandardError()).decode(
+            "utf-8", errors="replace"
+        )
 
     def _on_process_error(self, error):
         labels = {
-            QProcess.ProcessError.FailedToStart: f"{self.cmd!r} failed to start — is it installed?",
-            QProcess.ProcessError.Crashed:       f"{self.cmd!r} crashed.",
+            QProcess.ProcessError.FailedToStart: (
+                f"{self.cmd!r} failed to start — is it installed?"
+            ),
+            QProcess.ProcessError.Crashed: f"{self.cmd!r} crashed.",
         }
         self.error.emit(labels.get(error, f"{self.cmd!r} process error: {error}"))
         self._ready = False

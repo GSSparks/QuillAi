@@ -243,6 +243,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         # Panels & docks
         self.setup_sidebar()
         self.setup_git_panel()
+        self.setup_graph_panel()
         self.setup_output_panel()
         self.setup_chat_panel()
         self.setup_memory_panel()
@@ -360,6 +361,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
                 '.nix': 'Nix', '.sh': 'Bash', '.bash': 'Bash',
                 '.js': 'JavaScript', '.ts': 'TypeScript', '.json': 'JSON',
                 '.toml': 'TOML', '.txt': 'Text',
+                '.pl': 'Perl', '.pm': 'Perl Module', '.t': 'Perl Test',
             }
             self.filetype_label.setText(
                 type_map.get(ext, ext.lstrip('.').upper() or 'Plain Text')
@@ -490,6 +492,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
             (r'nixpkgs|mkShell|buildInputs|stdenv\.mkDerivation|pkgs\.',              '.nix'),
             (r'^#{1,6}\s\w|\*\*\w+\*\*|\[.+\]\(https?://',                           '.md'),
             (r'^\s*(if|for|while|case)\s+.*;\s*(then|do)\b|^\s*fi\b|^\s*done\b',     '.sh'),
+            (r'^\s*(?:use\s+strict|use\s+warnings|sub\s+\w+\s*\{|my\s+\$\w+)', '.pl'),
         ]
         for pattern, ext in checks:
             if re.search(pattern, text, re.MULTILINE):
@@ -1019,6 +1022,11 @@ Instructions:
                 self._init_vector_index(project_root=saved_project)               
             if hasattr(self, 'update_git_branch'):
                 self.update_git_branch()
+            if hasattr(self, 'graph_dock'):
+                self.graph_dock.load_project(
+                    saved_project,
+                    open_cb=self.open_file_in_tab
+                )
 
         restored = 0
         for tab_data in session.get("tabs", []):
@@ -1078,6 +1086,11 @@ Instructions:
                 if self.lsp_manager and self.lsp_manager.is_supported(
                         getattr(editor, 'file_path', '') or ''):
                     editor.setup_breadcrumb(self.lsp_manager)
+                    
+        if hasattr(self, 'graph_dock') and editor:
+            fp = getattr(editor, 'file_path', None)
+            if fp:
+                self.graph_dock.set_active_file(fp)
             
     def _get_all_editors_indexed(self):
         """Return list of (tab_index, editor) for all open tabs."""
@@ -1428,17 +1441,13 @@ Instructions:
                                           self.output_dock.raise_())),
             ("Find in Files",    lambda: (self.search_dock.show(),
                                           self.search_dock.raise_())),
+            ("Import Graph",     lambda: (self.graph_dock.show(),
+                                          self.graph_dock.raise_())),
         ]
         for name, fn in panels:
             action = QAction(name, self)
             action.triggered.connect(fn)
             view_menu.addAction(action)
-
-        #toggle_completion = QAction("Toggle In-line Completion", self)
-        #toggle_completion.setCheckable(True)
-        #toggle_completion.setChecked(True)
-        #toggle_completion.toggled.connect(self.toggle_inline_completion)
-        #view_menu.addAction(toggle_completion)
 
     def setup_help_menu(self):
         help_menu = self.menuBar().addMenu("Help")
@@ -1627,6 +1636,14 @@ Instructions:
         file_path = self.file_model.filePath(index)
         if not self.file_model.isDir(index):
             self.open_file_in_tab(file_path)
+            
+    def setup_graph_panel(self):
+        from ui.graph_panel import GraphDockWidget
+        self.graph_dock = GraphDockWidget(self)
+        self.graph_dock.setObjectName("graph_dock")
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.graph_dock)
+        self.tabifyDockWidget(self.sidebar_dock, self.graph_dock)
+        self.graph_dock.hide()
 
     # ── AI loading indicator ──────────────────────────────────────────────
 

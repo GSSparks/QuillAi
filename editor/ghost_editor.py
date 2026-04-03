@@ -276,6 +276,7 @@ class GhostEditor(LspEditorMixin, QPlainTextEdit):
             '.ts': 'TypeScript', '.json': 'JSON', '.md': 'Markdown',
             '.lua': 'Lua', '.go': 'Go', '.rs': 'Rust',
             '.c': 'C', '.cpp': 'C++',
+            '.pl': 'Perl', '.pm': 'Perl', '.t': 'Perl',
         }
         for ext, name in ext_map.items():
             if self.file_path.lower().endswith(ext):
@@ -638,8 +639,9 @@ Answer concisely. If you include code, use a single fenced code block."""
         if not self.file_path:
             return '#'
         ext = self.file_path.lower()
-        if ext.endswith(('.py', '.sh', '.bash', '.yml', '.yaml', '.nix')):
-            return '#'
+        if ext.endswith(('.py', '.sh', '.bash', '.yml', '.yaml', '.nix',
+                         '.pl', '.pm', '.t')):
+           return '#'
         if ext.endswith(('.js', '.ts', '.cpp', '.c', '.java', '.go')):
             return '//'
         if ext.endswith('.lua'):
@@ -1028,6 +1030,28 @@ Answer concisely. If you include code, use a single fenced code block."""
                     self._draw_error_squiggle(e.problem_mark.line, e.problem_mark.column, str(e))
             except Exception:
                 pass
+        
+        elif ext.endswith(('.pl', '.pm', '.t')):
+            try:
+                process = subprocess.Popen(
+                    ['perl', '-c', '-'],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, text=True
+                )
+                _, stderr = process.communicate(input=text, timeout=5)
+                if process.returncode != 0:
+                    # perl -c errors look like: "syntax error at - line 42."
+                    for line in stderr.splitlines():
+                        m = re.search(r'at - line (\d+)', line)
+                        if m:
+                            line_idx = int(m.group(1)) - 1
+                            self._draw_error_squiggle(line_idx, 0, line.strip())
+                            break
+            except FileNotFoundError:
+                pass   # perl not on PATH
+            except Exception as e:
+                  print(f"LINTER ERROR (perl): {e}")        
+                    
         elif ext.endswith(('.sh', '.bash')):
             try:
                 process = subprocess.Popen(

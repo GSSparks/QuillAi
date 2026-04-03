@@ -157,6 +157,39 @@ LSP_REGISTRY = [
         "lang_id":    "markdown",
         "init_options": {},
     },
+    # ── Perl Navigator (perlnavigator) ────────────────────────────────────────────
+    # Install: npm install -g perlnavigator-server
+    # NixOS:   pkgs.perlnavigator  (or via nodePackages)
+    {
+        "name":       "perlnavigator",
+        "cmd":        "perlnavigator",
+        "args":       ["--stdio"],
+        "extensions": {".pl", ".pm", ".t"},
+        "lang_id":    "perl",
+        "init_options": {
+            "perlnavigator": {
+                "enableWarnings":    True,
+                "perltidyEnabled":   False,
+                "perlcriticEnabled": False,
+            }
+        },
+    },
+     
+    # ── PLS (Perl::LanguageServer) ────────────────────────────────────────────────
+    # Install: cpan PLS   or   cpanm PLS
+    # NixOS:   pkgs.perl.withPackages (p: [ p.PLS ])
+    {
+        "name":       "pls",
+        "cmd":        "pls",
+        "args":       [],
+        "extensions": {".pl", ".pm", ".t"},
+        "lang_id":    "perl",
+        "init_options": {
+            "pls": {
+                "inc": [],
+            }
+        },
+    },
 ]
 
 
@@ -281,12 +314,12 @@ class LSPManager(QObject):
     # ─────────────────────────────────────────────────────────────
 
     def _available_servers(self) -> list[dict]:
-        """Filter registry to servers whose binary exists on PATH."""
-        return [cfg for cfg in LSP_REGISTRY if shutil.which(cfg["cmd"])]
+        available = [cfg for cfg in LSP_REGISTRY if shutil.which(cfg["cmd"])]
+        return available
 
     def _start_server(self, cfg: dict):
         name = cfg["name"]
-
+    
         client = LSPClient(
             project_root  = self.project_root,
             cmd           = cfg["cmd"],
@@ -295,24 +328,18 @@ class LSPManager(QObject):
             init_options  = cfg.get("init_options", {}),
             parent        = self,
         )
-
-        # Wire signals
-        client.initialized.connect(
-            lambda n=name: self._on_server_ready(n)
-        )
-        client.error.connect(
-            lambda msg, n=name: self.server_error.emit(n, msg)
-        )
-        client.stopped.connect(
-            lambda n=name: self._on_server_stopped(n)
-        )
-
+    
+        client.initialized.connect(lambda n=name: self._on_server_ready(n))
+        client.error.connect(lambda msg, n=name: self.server_error.emit(n, msg))
+        client.stopped.connect(lambda n=name: self._on_server_stopped(n))
+    
         client.start()
-
-        # Register under every extension this server handles
+    
+        # Only register extensions not already claimed by a higher-priority server
         for ext in cfg["extensions"]:
-            self._ext_map[ext] = client
-
+            if ext not in self._ext_map:          # ← don't overwrite
+                self._ext_map[ext] = client
+    
         self._clients[name] = client
 
     def _on_server_ready(self, name: str):

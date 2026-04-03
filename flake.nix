@@ -21,6 +21,7 @@
         pkgs.nodePackages.vscode-langservers-extracted
         pkgs.nil
         pkgs.lua-language-server
+        pkgs.perlnavigator
       ];
 
       quillaiDesktop = pkgs.makeDesktopItem {
@@ -59,6 +60,7 @@
           markdown
           pygments
           python-lsp-server
+          perlnavigator
           chromadb
           sentence-transformers
           # sentence-transformers and chromadb are optional —
@@ -124,6 +126,7 @@
           pkgs.git
           pkgs.inter
           pkgs.jetbrains-mono
+          pkgs.perlnavigator
         ] ++ lspServers;
 
         shellHook = ''
@@ -143,6 +146,7 @@
             vscode-json-language-server \
             vscode-markdown-language-server \
             nil \
+            perlnavigator \
             lua-language-server; do
             if command -v "$srv" &>/dev/null; then
               echo "  ✓ $srv"

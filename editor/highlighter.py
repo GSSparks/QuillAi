@@ -298,7 +298,6 @@ class HighlighterRegistry:
                     if is_language or is_standalone:
                         for ext in obj.EXTENSIONS:
                             self.register(ext, obj)
-                            print(f"  Registered: {ext} → {obj.__name__}")
 
             except Exception as e:
                 print(f"Could not load language plugin '{filename}': {e}")
