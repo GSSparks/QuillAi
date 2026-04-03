@@ -425,7 +425,8 @@ class GhostEditor(LspEditorMixin, QPlainTextEdit):
                 self.highlight_current_line()
         except ValueError:
             pass
-        self.setFocus()
+        # Defer focus so the Return keypress doesn't bleed into the editor
+        QTimer.singleShot(0, self.setFocus)
 
     def eventFilter(self, obj, event):
         from PyQt6.QtCore import QEvent
