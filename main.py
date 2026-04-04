@@ -185,6 +185,10 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.central_layout.setSpacing(0)
 
         self.find_replace_panel = FindReplaceWidget(self)
+        self.find_replace_panel.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed
+        )
         self.find_replace_panel.hide()
 
         self.central_layout.addWidget(self.find_replace_panel)
