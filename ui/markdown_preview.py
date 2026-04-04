@@ -35,11 +35,14 @@ class MarkdownPreviewDock(QDockWidget):
         self.apply_styles(get_theme())
         theme_signals.theme_changed.connect(self._on_theme_changed)
 
+        # Scroll sync state
+        self._pending_scroll_ratio = None   # applied when range becomes non-zero
+        self._sync_ratio           = None   # set by cursor movement, wins over restore
+
     # ── Theme handling ────────────────────────────────────────────────────
 
     def _on_theme_changed(self, t: dict):
         self.apply_styles(t)
-        # Re-render so the injected HTML CSS reflects the new palette
         if self._pending_text:
             self._do_render()
 
@@ -51,6 +54,42 @@ class MarkdownPreviewDock(QDockWidget):
     def update_preview(self, markdown_text: str):
         self._pending_text = markdown_text
         self._debounce.start()
+
+    def sync_scroll(self, cursor_line: int, total_lines: int):
+        """
+        Scroll the preview to match the editor cursor position.
+        cursor_line and total_lines are 0-indexed block counts.
+        """
+        if total_lines <= 1:
+            return
+        ratio = cursor_line / max(1, total_lines - 1)
+        self._sync_ratio = ratio
+        scrollbar = self.browser.verticalScrollBar()
+        if scrollbar.maximum() > 0:
+            # Content already rendered — apply immediately
+            scrollbar.setValue(int(ratio * scrollbar.maximum()))
+        else:
+            # Content not laid out yet — wait for rangeChanged
+            self._pending_scroll_ratio = ratio
+            try:
+                scrollbar.rangeChanged.disconnect(self._on_range_ready)
+            except (RuntimeError, TypeError):
+                pass
+            scrollbar.rangeChanged.connect(self._on_range_ready)
+
+    def _on_range_ready(self, min_val: int, max_val: int):
+        """Called when QTextBrowser finishes layout and scrollbar max is known."""
+        print(f"[range_ready] min={min_val} max={max_val} pending={self._pending_scroll_ratio}")
+        if max_val <= 0:
+            return
+        scrollbar = self.browser.verticalScrollBar()
+        try:
+            scrollbar.rangeChanged.disconnect(self._on_range_ready)
+        except (RuntimeError, TypeError):
+            pass
+        if self._pending_scroll_ratio is not None:
+            scrollbar.setValue(int(self._pending_scroll_ratio * max_val))
+            self._pending_scroll_ratio = None
 
     # ── Rendering ─────────────────────────────────────────────────────────
 
@@ -88,16 +127,30 @@ class MarkdownPreviewDock(QDockWidget):
 </body>
 </html>"""
 
-        scrollbar = self.browser.verticalScrollBar()
-        scroll_pos = scrollbar.value()
-        was_at_bottom = scroll_pos == scrollbar.maximum()
+        print(f"[do_render] after setHtml, max={self.browser.verticalScrollBar().maximum()}")        
+        # Capture scroll state before replacing content
+        scrollbar     = self.browser.verticalScrollBar()
+        old_max       = scrollbar.maximum()
+        old_ratio     = (scrollbar.value() / old_max) if old_max > 0 else 0.0
+        was_at_bottom = old_ratio > 0.99
 
         self.browser.setHtml(html)
 
-        if was_at_bottom:
-            scrollbar.setValue(scrollbar.maximum())
+        # Cursor sync takes priority over position restore
+        if self._sync_ratio is not None:
+            restore = self._sync_ratio
+        elif was_at_bottom:
+            restore = 1.0
         else:
-            scrollbar.setValue(scroll_pos)
+            restore = old_ratio
+
+        # Apply after layout completes via rangeChanged
+        self._pending_scroll_ratio = restore
+        try:
+            scrollbar.rangeChanged.disconnect(self._on_range_ready)
+        except (RuntimeError, TypeError):
+            pass
+        scrollbar.rangeChanged.connect(self._on_range_ready)
 
     def _basic_render(self, text: str) -> str:
         """Minimal fallback renderer used when the markdown package is absent."""

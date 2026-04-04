@@ -616,6 +616,20 @@ class CodeEditor(QMainWindow, ChatRenderer):
             self.md_preview_dock.show()
             self.md_preview_dock.raise_()
             self.md_preview_dock.update_preview(editor.toPlainText())
+            
+    def _sync_markdown_scroll(self):
+        editor = self.current_editor()
+        if not editor:
+            return
+        path = getattr(editor, 'file_path', '') or ''
+        if not path.lower().endswith(('.md', '.markdown')):
+            return
+        if not hasattr(self, 'md_preview_dock'):
+            return
+        # Use first visible block for scroll sync, not cursor position
+        first_visible = editor.firstVisibleBlock().blockNumber()
+        total_lines   = editor.document().blockCount()
+        self.md_preview_dock.sync_scroll(first_visible, total_lines)
 
     # ── Window state ──────────────────────────────────────────────────────
 
@@ -778,6 +792,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
                     existing.document(), ext
                 )
                 self._wire_editor_lsp(existing)
+                existing.cursorPositionChanged.connect(self._sync_markdown_scroll)
                 active_pane.setCurrentIndex(0)
                 return existing
         editor = GhostEditor(settings_manager=self.settings_manager)
@@ -793,6 +808,10 @@ class CodeEditor(QMainWindow, ChatRenderer):
         editor.highlighter = registry.get_highlighter(editor.document(), ext)
     
         editor.cursorPositionChanged.connect(self.update_status_bar)
+        editor.cursorPositionChanged.connect(self._sync_markdown_scroll)
+        editor.verticalScrollBar().valueChanged.connect(
+            lambda _: self._sync_markdown_scroll()
+        )
         editor.textChanged.connect(self.on_text_changed)
         editor.ai_started.connect(self.show_loading_indicator)
         editor.ai_finished.connect(self.hide_loading_indicator)
@@ -830,16 +849,13 @@ class CodeEditor(QMainWindow, ChatRenderer):
     def _on_pane_tab_close(self, pane: EditorPane, index: int):
         """Route tab close from any pane — collapse pane if it becomes empty."""
         count_before = pane.count()   # capture BEFORE close_tab runs
-        print(f"[split] close requested: pane={id(pane)} index={index} count_before={count_before}")
 
         self.tabs = pane
         self.close_tab(index)
 
         count_after = pane.count()
-        print(f"[split] after close_tab: count_after={count_after} all_panes={len(self.split_container.all_panes())}")
         for i in range(pane.count()):
             w = pane.widget(i)
-            print(f"  tab {i}: file={getattr(w, 'file_path', None)} text={repr(w.toPlainText()[:20]) if w else None} title={pane.tabText(i)}")
         
         self.tabs = self.split_container.active_pane()    
     
@@ -1277,6 +1293,9 @@ Instructions:
                 
         if hasattr(self, 'symbol_dock') and editor:
             self.symbol_dock.set_editor(editor, self.lsp_manager)
+         
+        # Sync markdown preview scroll on tab switch
+        self._sync_markdown_scroll() 
             
     def _get_all_editors_indexed(self):
         """Return list of (tab_index, editor) for all open tabs."""
