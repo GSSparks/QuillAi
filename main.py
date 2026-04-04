@@ -53,7 +53,7 @@ from ui.terminal import TerminalDock
 from ui.startup_progress import StartupProgress
 from ui.autosave_manager import AutosaveManager, AUTOSAVE_INTERVAL_MS
 from ui.split_container import SplitContainer, EditorPane
-
+from ui.symbol_outline import SymbolOutlineDock
 
 from editor.highlighter import registry
 from ui.git_panel import GitDockWidget
@@ -261,6 +261,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         # Panels & docks
         self.setup_sidebar()
         self.setup_git_panel()
+        self.setup_symbol_outline()
         self.setup_graph_panel()
         self.setup_output_panel()
         self.setup_chat_panel()
@@ -328,7 +329,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         dock_style = build_dock_stylesheet(t)
         for dock in (self.sidebar_dock, self.output_dock,
                      self.search_dock, self.md_preview_dock,
-                     self.terminal_dock):
+                     self.terminal_dock, self.symbol_dock):
             dock.setStyleSheet(dock_style)
 
         # Rebuild file model icons with new palette
@@ -1149,6 +1150,9 @@ Instructions:
 
             if hasattr(self, 'git_dock'):
                 self.git_dock.refresh_status()
+                
+            if hasattr(self, 'symbol_dock') and editor.file_path:
+                self.symbol_dock.refresh_for_path(editor.file_path)
 
             self.statusBar().showMessage(f"Saved: {editor.file_path}", 3000)
             self.autosave_manager.clear(editor.file_path)
@@ -1270,6 +1274,9 @@ Instructions:
             fp = getattr(editor, 'file_path', None)
             if fp:
                 self.graph_dock.set_active_file(fp)
+                
+        if hasattr(self, 'symbol_dock') and editor:
+            self.symbol_dock.set_editor(editor, self.lsp_manager)
             
     def _get_all_editors_indexed(self):
         """Return list of (tab_index, editor) for all open tabs."""
@@ -1620,6 +1627,8 @@ Instructions:
                                           self.graph_dock.raise_())),
             ("Split Editor ↔",   lambda: self._split_active(Qt.Orientation.Horizontal)),
             ("Split Editor ↕",   lambda: self._split_active(Qt.Orientation.Vertical)),
+            ("Outline",          lambda: (self.symbol_dock.show(),
+                                          self.symbol_dock.raise_())),
         ]
         for name, fn in panels:
             action = QAction(name, self)
@@ -1821,6 +1830,12 @@ Instructions:
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.graph_dock)
         self.tabifyDockWidget(self.sidebar_dock, self.graph_dock)
         self.graph_dock.hide()
+        
+    def setup_symbol_outline(self):
+        self.symbol_dock = SymbolOutlineDock(self)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.symbol_dock)
+        self.tabifyDockWidget(self.sidebar_dock, self.symbol_dock)
+        self.symbol_dock.hide()
 
     # ── AI loading indicator ──────────────────────────────────────────────
 

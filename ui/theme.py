@@ -2066,7 +2066,63 @@ def build_diff_apply_parts(t: dict) -> dict:
         "diff_neutral": t['fg1'],
     }
 
+def build_symbol_outline_stylesheet(t: dict) -> str:
+    """Stylesheet for the Symbol Outline dock panel."""
+    bg     = t.get("bg0_hard", "#1d2021")
+    bg1    = t.get("bg1",      "#3c3836")
+    bg2    = t.get("bg2",      "#504945")
+    fg     = t.get("fg1",      "#ebdbb2")
+    fg_dim = t.get("fg4",      "#a89984")
+    border = t.get("border",   "#504945")
 
+    return f"""
+        QWidget#outlineContainer {{
+            background-color: {bg};
+        }}
+        QWidget#outlineHeader {{
+            background-color: {bg1};
+            border-bottom: 1px solid {border};
+        }}
+        QLabel#outlineFileLabel {{
+            color: {fg_dim};
+            font-family: {FONT_UI};
+            font-size: 8.5pt;
+            background: transparent;
+        }}
+        QPushButton#outlineRefreshBtn {{
+            background: transparent;
+            color: {fg_dim};
+            border: none;
+            font-size: 11pt;
+            padding: 0;
+        }}
+        QPushButton#outlineRefreshBtn:hover {{
+            color: {fg};
+        }}
+        QTreeWidget#outlineTree {{
+            background-color: {bg};
+            color: {fg};
+            border: none;
+            font-family: {FONT_UI};
+            font-size: 9.5pt;
+        }}
+        QTreeWidget#outlineTree::item {{
+            padding: 2px 4px;
+            border-radius: 3px;
+        }}
+        QTreeWidget#outlineTree::item:selected {{
+            background-color: {bg2};
+            color: {fg};
+        }}
+        QTreeWidget#outlineTree::item:hover:!selected {{
+            background-color: {bg1};
+        }}
+        QTreeWidget#outlineTree::branch {{
+            background: transparent;
+            border: none;
+        }}
+    """
+    
 def build_memory_panel_stylesheet(t: dict) -> str:
     """Outer widget background for MemoryPanel."""
     return f"background-color: {t['bg1']};"
