@@ -214,6 +214,13 @@ class GhostEditor(LspEditorMixin, QPlainTextEdit):
         self.ai_suggest_timer.timeout.connect(self.trigger_inline_completion)
         self.textChanged.connect(self.handle_text_changed_for_ai)
 
+        # Smooth scrolling
+        self._scroll_target  = 0
+        self._scroll_current = 0.0
+        self._scroll_timer   = QTimer(self)
+        self._scroll_timer.setInterval(12)   # ~83fps — smooth but not wasteful
+        self._scroll_timer.timeout.connect(self._smooth_scroll_tick)
+
         self.current_line_selection = []
         self.lint_selections = []
         self.bracket_selections = []
@@ -1729,6 +1736,7 @@ Answer concisely. If you include code, use a single fenced code block."""
     # ── Wheel & paint ─────────────────────────────────────────────────────
 
     def wheelEvent(self, event):
+        # Ctrl+wheel = zoom — don't smooth scroll this
         if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             delta = event.angleDelta().y()
             if delta > 0:
@@ -1738,7 +1746,41 @@ Answer concisely. If you include code, use a single fenced code block."""
             self.update_line_number_area_width(0)
             self.minimap.viewport().update()
             return
-        super().wheelEvent(event)
+    
+        # Accumulate scroll delta into a target position
+        delta    = event.angleDelta().y()
+        steps    = delta / 120.0          # 120 units = one detent
+        bar      = self.verticalScrollBar()
+        line_h   = self.fontMetrics().height()
+        px_per_step = line_h * 3          # 3 lines per detent — feel free to tune
+    
+        if not self._scroll_timer.isActive():
+            # Initialise current to actual bar value on first tick of a new gesture
+            self._scroll_current = float(bar.value())
+    
+        self._scroll_target = self._scroll_current - steps * px_per_step
+        self._scroll_target = max(bar.minimum(),
+                                  min(bar.maximum(), self._scroll_target))
+        self._scroll_timer.start()
+        event.accept()
+    
+    def _smooth_scroll_tick(self):
+        bar      = self.verticalScrollBar()
+        distance = self._scroll_target - self._scroll_current
+    
+        # Ease-out: move 18% of remaining distance each tick
+        # At 12ms intervals this settles in ~150ms
+        step = distance * 0.18
+    
+        if abs(distance) < 0.5:
+            # Close enough — snap and stop
+            self._scroll_current = self._scroll_target
+            bar.setValue(int(self._scroll_target))
+            self._scroll_timer.stop()
+            return
+    
+        self._scroll_current += step
+        bar.setValue(int(self._scroll_current))
 
     def paintEvent(self, event):
         super().paintEvent(event)
