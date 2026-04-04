@@ -17,6 +17,7 @@ from PyQt6.QtGui     import QTextCharFormat, QColor, QFont, QPalette, QTextCurso
 from PyQt6.QtWidgets import QTextEdit, QToolTip, QFrame, QVBoxLayout, QLabel, QScrollArea
 
 from ai.lsp_client import uri_to_path
+from ui.completion_popup import CompletionPopup
 
 
 _SEVERITY_COLOR = {
@@ -248,6 +249,16 @@ def _parse_hover_markdown(text: str) -> list:
 
 def _show_hover_popup(parent, text: str, global_pos):
     _HoverPopup.show_at(parent, text, global_pos)
+    
+def _strip_snippet_markers(text: str) -> str:
+    """Remove LSP snippet syntax: $0, $1, ${1:placeholder} etc."""
+    import re
+    # ${N:placeholder} → placeholder
+    text = re.sub(r'\$\{[0-9]+:([^}]*)\}', r'\1', text)
+    # ${N} or $N → empty
+    text = re.sub(r'\$\{[0-9]+\}', '', text)
+    text = re.sub(r'\$[0-9]+', '', text)
+    return text
 
 class LspEditorMixin:
     """
@@ -290,7 +301,10 @@ class LspEditorMixin:
 
         self.setMouseTracking(True)
         self.viewport().setMouseTracking(True)
-
+        
+        self._setup_completion()
+        self.textChanged.connect(self._on_text_changed_for_completion)
+    
     def teardown_lsp(self):
         if not hasattr(self, "_lsp_manager"):
             return
@@ -500,3 +514,199 @@ class LspEditorMixin:
     def cursor_lsp_position(self) -> tuple[int, int]:
         cursor = self.textCursor()
         return cursor.blockNumber(), cursor.positionInBlock()
+
+    # ── Completion ────────────────────────────────────────────────────────
+ 
+    # Trigger characters that auto-show completion for most languages
+    _TRIGGER_CHARS = set('.(:,@>')
+ 
+    def _setup_completion(self):
+        """Call from setup_lsp() after existing timer setup."""
+        self._completion_timer = QTimer(self)
+        self._completion_timer.setSingleShot(True)
+        self._completion_timer.setInterval(400)   # 400ms auto-trigger delay
+        self._completion_timer.timeout.connect(self._request_completion)
+        self._last_trigger_char = None
+        # Dismiss popup when editor scrolls
+        self.verticalScrollBar().valueChanged.connect(
+            lambda: CompletionPopup.close_current()
+        )
+ 
+    def _on_text_changed_for_completion(self):
+        if getattr(self, '_accepting_completion', False):
+            return
+        if not self._lsp_active():
+            return
+    
+        cursor = self.textCursor()
+        col    = cursor.positionInBlock()
+        text   = cursor.block().text()
+    
+        if col == 0:
+            CompletionPopup.close_current()
+            return
+    
+        char = text[col - 1] if col > 0 else ""
+    
+        # Auto-trigger on trigger characters
+        if char in self._TRIGGER_CHARS:
+            self._last_trigger_char = char
+            self._completion_timer.start(50)
+            return
+    
+        # Auto-trigger if we're in the middle of a word (3+ chars)
+        start = col
+        while start > 0 and (text[start - 1].isalnum() or text[start - 1] == '_'):
+            start -= 1
+        word = text[start:col]
+    
+        if len(word) >= 3:
+            self._last_trigger_char = None
+            self._completion_timer.start(400)
+        else:
+            # Word too short — close popup if open
+            self._completion_timer.stop()
+            if len(word) == 0:
+                CompletionPopup.close_current()
+ 
+    def request_completion_now(self):
+        """Manual trigger — Ctrl+Space."""
+        if not self._lsp_active():
+            return
+        self._last_trigger_char = None
+        self._completion_timer.stop()
+        self._request_completion(trigger_kind=1)
+ 
+    def _request_completion(self, trigger_kind=None):
+        if not self._lsp_active():
+            return
+        from ui.completion_popup import CompletionPopup
+        # Don't re-request if popup is already showing with content
+        # (let existing popup stand; it'll re-request on next keystroke)
+ 
+        line, col = self._lsp_pos_from_viewport(self._last_hover_pos)
+        # Use actual cursor position, not hover position
+        cursor = self.textCursor()
+        line   = cursor.blockNumber()
+        col    = cursor.positionInBlock()
+ 
+        char = self._last_trigger_char
+        kind = trigger_kind if trigger_kind else (2 if char else 1)
+ 
+        self._lsp_manager.completion(
+            self.file_path, line, col,
+            trigger_kind=kind,
+            trigger_char=char,
+            callback=self._on_completion_result,
+        )
+ 
+    def _on_completion_result(self, items: list):
+        if not items:
+            CompletionPopup.close_current()
+            return
+ 
+        # Filter out items with no label
+        items = [i for i in items if i.get("label", "").strip()]
+        if not items:
+            CompletionPopup.close_current()
+            return
+ 
+        # Prefix-filter against current word
+        cursor      = self.textCursor()
+        block_text  = cursor.block().text()
+        col         = cursor.positionInBlock()
+        # Walk left to find start of current word
+        start = col
+        while start > 0 and (block_text[start - 1].isalnum()
+                              or block_text[start - 1] in '_'):
+            start -= 1
+        prefix = block_text[start:col].lower()
+ 
+        if prefix:
+            filtered = [i for i in items
+                        if i.get("label", "").lower().startswith(prefix)]
+            if not filtered:
+                # Fuzzy fallback — any item containing prefix
+                filtered = [i for i in items
+                            if prefix in i.get("label", "").lower()]
+            items = filtered if filtered else items
+ 
+        if not items:
+            CompletionPopup.close_current()
+            return
+ 
+        # Close existing and show new
+        CompletionPopup.close_current()
+        popup = CompletionPopup(self, items)
+        popup.item_accepted.connect(self._on_completion_accepted)
+        popup.position_at_cursor()
+        popup.show()
+        popup.raise_()
+        
+        # Silence re-trigger for 500ms after accepting
+        self._completion_timer.stop()
+        self._last_trigger_char = None
+        self._accepting_completion = True
+        QTimer.singleShot(500, self._clear_accepting_flag)
+    
+    def _clear_accepting_flag(self):
+        self._accepting_completion = False
+ 
+    def _on_completion_accepted(self, item: dict):
+        """Insert the selected completion item into the editor."""
+        cursor = self.textCursor()
+ 
+        # Determine insert text
+        insert_text = (item.get("insertText")
+                       or item.get("label", ""))
+ 
+        # If LSP provides a textEdit, use that range
+        text_edit = item.get("textEdit")
+        if text_edit:
+            rng   = text_edit.get("range", {})
+            start = rng.get("start", {})
+            end   = rng.get("end",   {})
+            doc   = self.document()
+            s_block = doc.findBlockByLineNumber(start.get("line", 0))
+            e_block = doc.findBlockByLineNumber(end.get("line", 0))
+            if s_block.isValid() and e_block.isValid():
+                s_pos = s_block.position() + start.get("character", 0)
+                e_pos = e_block.position() + end.get("character", 0)
+                cursor.setPosition(s_pos)
+                cursor.setPosition(e_pos, cursor.MoveMode.KeepAnchor)
+                insert_text = text_edit.get("newText", insert_text)
+        else:
+            # No textEdit — replace current word prefix
+            block_text = cursor.block().text()
+            col        = cursor.positionInBlock()
+            start_col  = col
+            while start_col > 0 and (block_text[start_col - 1].isalnum()
+                                     or block_text[start_col - 1] in '_'):
+                start_col -= 1
+            if start_col < col:
+                cursor.setPosition(
+                    cursor.block().position() + start_col
+                )
+                cursor.setPosition(
+                    cursor.block().position() + col,
+                    cursor.MoveMode.KeepAnchor,
+                )
+ 
+        # Strip snippet placeholders ($0, $1, ${1:placeholder})
+        insert_text = _strip_snippet_markers(insert_text)
+ 
+        cursor.insertText(insert_text)
+        self.setTextCursor(cursor)
+        self.clear_ghost_text()
+        
+        # Silence re-trigger for 600ms after accepting
+        self._accepting_completion = True
+        self._completion_timer.stop()
+        QTimer.singleShot(600, self._clear_accepting_flag)
+    
+    def _clear_accepting_flag(self):
+        self._accepting_completion = False
+    
+    def _on_text_changed_for_completion(self):
+        if getattr(self, '_accepting_completion', False):
+            return

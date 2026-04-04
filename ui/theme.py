@@ -2699,25 +2699,69 @@ def build_hover_popup_stylesheet(t: dict) -> str:
 
 
 def build_completion_popup_stylesheet(t: dict) -> str:
-    """Autocomplete list popup."""
+    """Autocomplete dropdown popup — list + detail bar."""
+    bg      = t.get("bg1",      "#3c3836")
+    bg2     = t.get("bg2",      "#504945")
+    bg_hard = t.get("bg0_hard", "#1d2021")
+    fg      = t.get("fg1",      "#ebdbb2")
+    fg_dim  = t.get("fg4",      "#a89984")
+    border  = t.get("border",   "#504945")
+    blue    = t.get("blue",     "#83a598")
+    sel     = t.get("bg3",      "#665c54")
+
     return f"""
+        QFrame#CompletionPopup {{
+            background-color: {bg};
+            border: 1px solid {border};
+        }}
         QListWidget {{
-            background-color: {t['bg1']};
-            color: {t['fg1']};
-            border: 1px solid {t['border']};
-            border-radius: 4px;
-            font-family: {FONT_CODE};
-            font-size: 10pt;
+            background-color: {bg};
+            color: {fg};
+            border: none;
             outline: none;
+            font-family: {FONT_CODE};
+            font-size: 9pt;
         }}
-        QListWidget::item {{ padding: 3px 10px; }}
+        QListWidget::item {{
+            padding: 2px 8px;
+            border: none;
+        }}
         QListWidget::item:selected {{
-            background-color: {t['highlight']};
-            color: {t['fg0']};
+            background-color: {sel};
+            color: {fg};
         }}
-        QListWidget::item:hover:!selected {{
-            background-color: {t['bg2']};
+        QListWidget::item:hover {{
+            background-color: {bg2};
         }}
+        QFrame#detailBar {{
+            background-color: {bg_hard};
+            border-top: 1px solid {border};
+        }}
+        QLabel#detailLabel {{
+            color: {blue};
+            font-family: {FONT_CODE};
+            font-size: 8pt;
+            font-weight: 600;
+            background: transparent;
+        }}
+        QLabel#docLabel {{
+            color: {fg_dim};
+            font-family: {FONT_UI};
+            font-size: 8pt;
+            background: transparent;
+        }}
+        QScrollBar:vertical {{
+            background: {bg};
+            width: 6px;
+            border: none;
+        }}
+        QScrollBar::handle:vertical {{
+            background: {sel};
+            border-radius: 3px;
+            min-height: 20px;
+        }}
+        QScrollBar::add-line:vertical,
+        QScrollBar::sub-line:vertical {{ height: 0; }}
     """
 
 

@@ -26,6 +26,7 @@ from ui.theme import (
 )
 from ui.lsp_editor import LspEditorMixin
 from ui.breadcrumb_bar import BreadcrumbBar
+from ui.completion_popup import CompletionPopup
 
 # ==========================================
 # Professional Snippet Manager
@@ -265,7 +266,10 @@ class GhostEditor(LspEditorMixin, QPlainTextEdit):
 
         # Subscribe to theme changes
         theme_signals.theme_changed.connect(self._on_theme_changed)
-
+        
+        self._ai_completion_for_popup = False
+        self._ai_popup_buffer = ""
+        
     # ── Theme handling ────────────────────────────────────────────────────
 
     def _on_theme_changed(self, t: dict):
@@ -1134,16 +1138,29 @@ Answer concisely. If you include code, use a single fenced code block."""
     def request_completion_hotkey(self):
         if self._is_markdown_file():
             return
-
+    
+        if hasattr(self, '_lsp_manager') and self._lsp_active():
+            self.request_completion_now()
+            return
+    
         self.clear_ghost_text()
+        CompletionPopup.close_current()
+        self._ai_popup_buffer = ""
+        self._ai_completion_for_popup = True
+        self.ai_suggest_timer.stop()
+    
+        # Cancel any running thread and reset it before starting new one
         try:
             if hasattr(self, 'ai_thread') and self.ai_thread is not None:
                 if self.ai_thread.isRunning():
                     if hasattr(self, 'worker') and self.worker:
                         self.worker.cancel()
+                    self.ai_thread.quit()
+                    self.ai_thread.wait(500)
         except RuntimeError:
-            self.ai_thread = None
-        self.ai_suggest_timer.stop()
+            pass
+        self.ai_thread = None   # ← force reset so _create_ai_worker doesn't bail
+    
         self.trigger_inline_completion()
 
     def trigger_inline_completion(self):
@@ -1323,9 +1340,52 @@ Answer concisely. If you include code, use a single fenced code block."""
             bottom = top + round(self.blockBoundingRect(block).height())
             block_number += 1
 
-    def set_ghost_text(self, text):
+    def set_ghost_text(self, text: str):
+        if not text.strip():
+            return
+    
+        if getattr(self, '_ai_completion_for_popup', False):
+            # Accumulate — don't show yet, wait for finish_function_stream
+            self._ai_popup_buffer = getattr(self, '_ai_popup_buffer', '') + text
+            return
+    
+        # Normal auto-trigger — ghost text inline as usual
         self.ghost_text = text
         self.viewport().update()
+        
+    def _show_ai_completion_popup(self, text: str):
+        CompletionPopup.close_current()
+    
+        # Package the AI suggestion as a synthetic LSP-style completion item
+        # Split into lines for multi-line display label
+        preview = text.strip()[:60].split('\n')[0]
+        item = {
+            "label":         preview + ("…" if len(text.strip()) > 60 else ""),
+            "insertText":    text,
+            "detail":        "AI suggestion",
+            "documentation": text.strip(),
+            "kind":          15,   # Snippet kind — gets ~ icon
+            "_ai_full_text": text, # store full text for insertion
+        }
+    
+        popup = CompletionPopup(self, [item])
+        popup.item_accepted.connect(self._on_ai_popup_accepted)
+        popup.position_at_cursor()
+        popup.show()
+        popup.raise_()
+    
+    def _on_ai_popup_accepted(self, item: dict):
+        text = item.get("_ai_full_text") or item.get("insertText", "")
+        if text:
+            cursor = self.textCursor()
+            cursor.insertText(text)
+            self.setTextCursor(cursor)
+        self.clear_ghost_text()
+        
+        # Silence ai_suggest_timer from immediately re-triggering
+        self.ai_suggest_timer.stop()
+        self._ai_completion_for_popup = False
+        self._ai_popup_buffer = ""
 
     def clear_ghost_text(self):
         self.ghost_text = ""
@@ -1470,6 +1530,14 @@ Answer concisely. If you include code, use a single fenced code block."""
             self.function_output += text
 
     def finish_function_stream(self):
+        if getattr(self, '_ai_completion_for_popup', False):
+            self._ai_completion_for_popup = False
+            full_text = getattr(self, '_ai_popup_buffer', '').strip()
+            self._ai_popup_buffer = ""
+            if full_text:
+                self._show_ai_completion_popup(full_text)
+            return   # don't fall through to diff dialog
+    
         if hasattr(self, "replacement_cursor") and self.function_output:
             self._show_diff_dialog()
         self.function_active = False
@@ -1638,16 +1706,24 @@ Answer concisely. If you include code, use a single fenced code block."""
         # ── Multi-cursor active: route keypresses ─────────────
         if self.multi_cursor.active:
             if self.multi_cursor.handle_key(event):
-                # _apply handled ALL cursors including primary — do NOT call super()
                 return
-            # Unhandled keys (Ctrl+S, Ctrl+Z etc.) — pass through normally
             super().keyPressEvent(event)
             return
-            
+
+        # ── Completion popup — highest priority after multi-cursor ──
+        from ui.completion_popup import CompletionPopup
+        if CompletionPopup._instance is not None:
+            if CompletionPopup._instance.handle_key(event):
+                return
+            # Key not consumed by popup (e.g. regular typing)
+            # Fall through to normal handling — popup stays open
+            # and will re-filter on next completion result
 
         if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Up, Qt.Key.Key_Down):
             self.ai_suggest_timer.stop()
             self.clear_ghost_text()
+            # Also dismiss popup on navigation away
+            CompletionPopup.close_current()
             super().keyPressEvent(event)
             return
 
@@ -1681,6 +1757,8 @@ Answer concisely. If you include code, use a single fenced code block."""
             return
 
         if event.key() == Qt.Key.Key_Tab:
+            # Popup already handled Tab above if it was open
+            # This only runs if no popup is showing
             if self.ghost_text:
                 self.accept_full_completion()
                 return
@@ -1770,7 +1848,7 @@ Answer concisely. If you include code, use a single fenced code block."""
     
         # Ease-out: move 18% of remaining distance each tick
         # At 12ms intervals this settles in ~150ms
-        step = distance * 0.18
+        step = distance * 0.15
     
         if abs(distance) < 0.5:
             # Close enough — snap and stop

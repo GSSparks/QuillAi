@@ -296,6 +296,19 @@ class LSPManager(QObject):
             client.definition(file_path, line, col, callback)
         else:
             callback(None)
+            
+    def completion(self, file_path: str, line: int, col: int,
+                   trigger_kind: int = 1, trigger_char: str = None,
+                   callback = None):
+        client = self.client_for(file_path)
+        if client and client.is_ready:
+            client.completion(file_path, line, col,
+                              trigger_kind=trigger_kind,
+                              trigger_char=trigger_char,
+                              callback=callback)
+        else:
+            if callback:
+                callback([])
 
     # ─────────────────────────────────────────────────────────────
     # Introspection

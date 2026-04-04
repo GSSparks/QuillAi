@@ -118,9 +118,21 @@ class LSPClient(QObject):
                     },
                     "completion": {
                         "completionItem": {
-                            "snippetSupport":        False,
-                            "documentationFormat":   ["markdown", "plaintext"],
+                            "snippetSupport":              False,
+                            "documentationFormat":         ["markdown", "plaintext"],
+                            "resolveSupport": {
+                                "properties": ["documentation", "detail", "additionalTextEdits"]
+                            },
+                            "insertReplaceSupport":        True,
+                            "deprecatedSupport":           True,
+                            "tagSupport": {
+                                "valueSet": [1]
+                            },
                         },
+                        "completionItemKind": {
+                            "valueSet": list(range(1, 26))
+                        },
+                        "contextSupport":      True,
                         "dynamicRegistration": False,
                     },
                     "documentSymbol": {
@@ -232,6 +244,40 @@ class LSPClient(QObject):
         }, callback=lambda result: callback(
             result if isinstance(result, list) else []
         ))
+        
+    def completion(self, file_path: str, line: int, col: int,
+                   trigger_kind: int = 1, trigger_char: str = None,
+                   callback = None):
+        """
+        textDocument/completion request.
+        trigger_kind: 1=Invoked, 2=TriggerCharacter, 3=TriggerForIncompleteCompletions
+        """
+        if not self._ready:
+            if callback:
+                callback([])
+            return
+ 
+        context = {"triggerKind": trigger_kind}
+        if trigger_char:
+            context["triggerCharacter"] = trigger_char
+ 
+        def _handle(result):
+            if result is None:
+                items = []
+            elif isinstance(result, list):
+                items = result
+            elif isinstance(result, dict):
+                items = result.get("items", [])
+            else:
+                items = []
+            if callback:
+                callback(items)
+ 
+        self._send_request("textDocument/completion", {
+            "textDocument": {"uri": path_to_uri(file_path)},
+            "position":     {"line": line, "character": col},
+            "context":      context,
+        }, callback=_handle)
 
     # ─────────────────────────────────────────────────────────────
     # JSON-RPC transport
