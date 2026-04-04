@@ -793,6 +793,12 @@ Answer concisely. If you include code, use a single fenced code block."""
             font.setBold(True)
             fix_action.setFont(font)
             menu.addAction(fix_action)
+            
+        if (hasattr(self, '_lsp_manager') and self._lsp_active()):
+            menu.addSeparator()
+            rename_action = QAction("✏️ Rename Symbol  (F2)", self)
+            rename_action.triggered.connect(self.trigger_rename)
+            menu.addAction(rename_action)
 
         menu.exec(event.globalPos())
 
@@ -1807,6 +1813,11 @@ Answer concisely. If you include code, use a single fenced code block."""
         if event.key() == Qt.Key.Key_I and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             self.show_inline_chat()
             return
+            
+        if event.key() == Qt.Key.Key_F2:
+            if hasattr(self, '_lsp_manager') and self._lsp_active():
+                self.trigger_rename()
+                return
 
         super().keyPressEvent(event)
         self.clear_ghost_text()

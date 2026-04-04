@@ -297,6 +297,14 @@ class LSPManager(QObject):
         else:
             callback(None)
             
+    def rename(self, file_path: str, line: int, col: int,
+               new_name: str, callback):
+        client = self.client_for(file_path)
+        if client and client.is_ready:
+            client.rename(file_path, line, col, new_name, callback=callback)
+        else:
+            callback(None)
+            
     def completion(self, file_path: str, line: int, col: int,
                    trigger_kind: int = 1, trigger_char: str = None,
                    callback = None):
@@ -309,7 +317,7 @@ class LSPManager(QObject):
         else:
             if callback:
                 callback([])
-
+      
     # ─────────────────────────────────────────────────────────────
     # Introspection
     # ─────────────────────────────────────────────────────────────

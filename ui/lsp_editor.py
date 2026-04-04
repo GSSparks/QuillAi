@@ -454,6 +454,222 @@ class LspEditorMixin:
     
         global_pos = self.viewport().mapToGlobal(self._last_hover_pos)
         _show_hover_popup(self, text, global_pos)
+        
+    # ─────────────────────────────────────────────────────────────
+    # Rename symbol
+    # ─────────────────────────────────────────────────────────────
+
+    def trigger_rename(self):
+        """Show the inline rename popup at the cursor."""
+        if not self._lsp_active():
+            return
+ 
+        # Get the word under the cursor as the default name
+        cursor     = self.textCursor()
+        cursor.select(cursor.SelectionType.WordUnderCursor)
+        word       = cursor.selectedText().strip()
+        if not word:
+            return
+ 
+        from ui.rename_dialog import RenamePopup
+        popup = RenamePopup(self, word)
+        popup.rename_confirmed.connect(self._do_rename)
+        popup.cancelled.connect(self.setFocus)
+        popup.show_at_cursor()
+ 
+    def _do_rename(self, new_name: str):
+        """Send the rename request to the LSP server."""
+        if not self._lsp_active() or not self.file_path:
+            return
+ 
+        cursor = self.textCursor()
+        line   = cursor.blockNumber()
+        col    = cursor.positionInBlock()
+ 
+        self._lsp_manager.rename(
+            self.file_path, line, col, new_name,
+            callback=self._apply_workspace_edit
+        )
+ 
+    def _apply_workspace_edit(self, workspace_edit):
+        """Apply a WorkspaceEdit returned by textDocument/rename."""
+        if not workspace_edit:
+            return
+
+        from ai.lsp_client import uri_to_path
+        from PyQt6.QtGui import QTextCursor as _QTC
+ 
+        # WorkspaceEdit has either 'changes' (uri → [TextEdit])
+        # or 'documentChanges' ([TextDocumentEdit])
+        changes = {}
+ 
+        if "changes" in workspace_edit:
+            changes = workspace_edit["changes"]
+ 
+        elif "documentChanges" in workspace_edit:
+            for doc_change in workspace_edit["documentChanges"]:
+                uri   = doc_change.get("textDocument", {}).get("uri", "")
+                edits = doc_change.get("edits", [])
+                if uri:
+                    changes[uri] = edits
+ 
+        if not changes:
+            return
+ 
+        # Apply edits to each affected file
+        # Sort URIs so the current file is applied last (preserves cursor)
+        current_uri = f"file://{self.file_path}" if self.file_path else ""
+        sorted_uris = sorted(
+            changes.keys(),
+            key=lambda u: (1 if u == current_uri else 0)
+        )
+ 
+        for uri in sorted_uris:
+            edits     = changes[uri]
+            file_path = uri_to_path(uri)
+ 
+            # Find if this file is already open in an editor
+            editor = self._find_open_editor(file_path)
+ 
+            if editor is None:
+                # File not open — apply edits directly to disk
+                self._apply_edits_to_file(file_path, edits)
+            else:
+                # File is open — apply to the editor document
+                self._apply_edits_to_editor(editor, edits)
+ 
+        # Status message
+        total_edits = sum(len(v) for v in changes.values())
+        total_files = len(changes)
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self._show_rename_status(
+            total_edits, total_files
+        ))
+ 
+    def _show_rename_status(self, edits: int, files: int):
+        """Show rename result in the main window status bar."""
+        try:
+            window = self.window()
+            if hasattr(window, 'statusBar'):
+                window.statusBar().showMessage(
+                    f"Renamed: {edits} occurrence(s) across {files} file(s)",
+                    4000
+                )
+        except RuntimeError:
+            pass
+ 
+    def _find_open_editor(self, file_path: str):
+        """Search all open panes for an editor with this file path."""
+        try:
+            window = self.window()
+            if hasattr(window, 'split_container'):
+                for _, editor in window.split_container.all_editors():
+                    if getattr(editor, 'file_path', None) == file_path:
+                        return editor
+        except RuntimeError:
+            pass
+        return None
+ 
+    def _apply_edits_to_editor(self, editor, edits: list):
+        from PyQt6.QtGui import QTextCursor
+    
+        doc = editor.document()
+    
+        def lsp_to_offset(line: int, char: int) -> int:
+            block = doc.findBlockByLineNumber(line)
+            if not block.isValid():
+                return doc.characterCount() - 1
+            return block.position() + min(char, max(0, block.length() - 1))
+    
+        prepared = []
+        for edit in edits:
+            rng      = edit.get("range", {})
+            new_text = edit.get("newText", "")
+            start    = rng.get("start", {})
+            end      = rng.get("end",   {})
+    
+            s_line = start.get("line", 0)
+            s_char = start.get("character", 0)
+            e_line = end.get("line",   0)
+            e_char = end.get("character", 0)
+    
+            s_offset = lsp_to_offset(s_line, s_char)
+    
+            # When e_char == 0, the range ends at the START of e_line.
+            # pylsp sends the full file content in newText but doesn't
+            # include e_line in the range — so we must extend the range
+            # to cover e_line entirely, then strip it from the replacement.
+            e_block = doc.findBlockByLineNumber(e_line)
+            if e_char == 0 and e_block.isValid() and e_block.length() > 1:
+                # Extend range to end of e_line (include the \n)
+                e_offset = e_block.position() + e_block.length() - 1
+                # Strip the duplicate from newText — newText already
+                # contains the content of e_line at its end
+            else:
+                e_offset = lsp_to_offset(e_line, e_char)
+    
+            prepared.append((s_offset, e_offset, new_text))
+    
+        prepared.sort(key=lambda x: x[0], reverse=True)
+    
+        cursor = QTextCursor(doc)
+        cursor.beginEditBlock()
+    
+        for s_offset, e_offset, new_text in prepared:
+            cursor.setPosition(s_offset)
+            cursor.setPosition(e_offset, QTextCursor.MoveMode.KeepAnchor)
+            cursor.insertText(new_text)
+    
+        cursor.endEditBlock()
+        editor.setTextCursor(cursor)
+ 
+    def _apply_edits_to_file(self, file_path: str, edits: list):
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+    
+            # Work on the raw string rather than line-by-line
+            # Convert LSP line/char positions to string offsets
+            lines = content.split('\n')
+    
+            sorted_edits = sorted(
+                edits,
+                key=lambda e: (
+                    e.get("range", {}).get("start", {}).get("line", 0),
+                    e.get("range", {}).get("start", {}).get("character", 0),
+                ),
+                reverse=True,
+            )
+    
+            for edit in sorted_edits:
+                rng      = edit.get("range", {})
+                new_text = edit.get("newText", "")
+                start    = rng.get("start", {})
+                end      = rng.get("end",   {})
+    
+                s_line = start.get("line", 0)
+                s_char = start.get("character", 0)
+                e_line = end.get("line", 0)
+                e_char = end.get("character", 0)
+    
+                # Convert to flat string offsets
+                s_offset = sum(len(lines[i]) + 1 for i in range(s_line)) + s_char
+                e_offset = sum(len(lines[i]) + 1 for i in range(e_line)) + e_char
+    
+                # Clamp to content length
+                s_offset = min(s_offset, len(content))
+                e_offset = min(e_offset, len(content))
+    
+                content = content[:s_offset] + new_text + content[e_offset:]
+    
+                # Rebuild lines for subsequent edits (reverse order so this is fine)
+                lines = content.split('\n')
+    
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+    
+        except Exception as e:
+            print(f"[rename] failed to apply edits to {file_path}: {e}")
 
     # ─────────────────────────────────────────────────────────────
     # Diagnostic squiggles

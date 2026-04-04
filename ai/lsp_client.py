@@ -234,6 +234,18 @@ class LSPClient(QObject):
             "textDocument": {"uri": path_to_uri(file_path)},
             "position":     {"line": line, "character": col},
         }, callback=callback)
+        
+    def rename(self, file_path: str, line: int, col: int,
+               new_name: str, callback):
+        """textDocument/rename — returns a WorkspaceEdit or None."""
+        if not self._ready:
+            callback(None)
+            return
+        self._send_request("textDocument/rename", {
+            "textDocument": {"uri": path_to_uri(file_path)},
+            "position":     {"line": line, "character": col},
+            "newName":      new_name,
+        }, callback=callback)
 
     def document_symbols(self, file_path: str, callback):
         if not self._ready:
