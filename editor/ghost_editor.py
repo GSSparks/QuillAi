@@ -1814,7 +1814,6 @@ Answer concisely. If you include code, use a single fenced code block."""
     # ── Wheel & paint ─────────────────────────────────────────────────────
 
     def wheelEvent(self, event):
-        # Ctrl+wheel = zoom — don't smooth scroll this
         if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             delta = event.angleDelta().y()
             if delta > 0:
@@ -1825,15 +1824,18 @@ Answer concisely. If you include code, use a single fenced code block."""
             self.minimap.viewport().update()
             return
     
-        # Accumulate scroll delta into a target position
-        delta    = event.angleDelta().y()
-        steps    = delta / 120.0          # 120 units = one detent
-        bar      = self.verticalScrollBar()
-        line_h   = self.fontMetrics().height()
-        px_per_step = line_h * 3          # 3 lines per detent — feel free to tune
+        delta = event.angleDelta().y()
+    
+        # Clamp delta to ±120 regardless of what the mouse reports
+        # This prevents high-resolution mice from sending huge jumps
+        delta = max(-120, min(120, delta))
+    
+        steps       = delta / 120.0
+        bar         = self.verticalScrollBar()
+        line_h      = self.fontMetrics().height()
+        px_per_step = line_h * 1.5    # ← was 3, now 1.5 lines per detent
     
         if not self._scroll_timer.isActive():
-            # Initialise current to actual bar value on first tick of a new gesture
             self._scroll_current = float(bar.value())
     
         self._scroll_target = self._scroll_current - steps * px_per_step
