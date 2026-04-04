@@ -751,6 +751,30 @@ class CodeEditor(QMainWindow, ChatRenderer):
         editor.ensureCursorVisible()
 
     def add_new_tab(self, name="Untitled", content="", path=None):
+        # If the active pane has only one empty untitled tab, replace it
+        active_pane = self.split_container.active_pane()
+        if (path and active_pane.count() == 1):
+            existing = active_pane.widget(0)
+            if (existing and
+                    getattr(existing, 'file_path', None) is None and
+                    not existing.toPlainText().strip() and
+                    active_pane.tabText(0).lstrip("⟳ ") == "Untitled"):
+                # Replace it — reuse the slot
+                active_pane.setTabText(0, name)
+                existing.file_path = path
+                self._is_loading = True
+                existing.setPlainText(content)
+                existing.set_original_state(content)
+                self._is_loading = False
+                if path:
+                    self.intent_tracker.record_file_edit(path)
+                ext = os.path.splitext(name)[1].lower()
+                existing.highlighter = registry.get_highlighter(
+                    existing.document(), ext
+                )
+                self._wire_editor_lsp(existing)
+                active_pane.setCurrentIndex(0)
+                return existing
         editor = GhostEditor(settings_manager=self.settings_manager)
         self._is_loading = True
         editor.setPlainText(content)
@@ -800,18 +824,50 @@ class CodeEditor(QMainWindow, ChatRenderer):
  
     def _on_pane_tab_close(self, pane: EditorPane, index: int):
         """Route tab close from any pane — collapse pane if it becomes empty."""
-        prev_active = self.split_container.active_pane()
-    
-        # Temporarily point self.tabs at this pane so close_tab works
+        count_before = pane.count()   # capture BEFORE close_tab runs
+        print(f"[split] close requested: pane={id(pane)} index={index} count_before={count_before}")
+
         self.tabs = pane
         self.close_tab(index)
+
+        count_after = pane.count()
+        print(f"[split] after close_tab: count_after={count_after} all_panes={len(self.split_container.all_panes())}")
+        for i in range(pane.count()):
+            w = pane.widget(i)
+            print(f"  tab {i}: file={getattr(w, 'file_path', None)} text={repr(w.toPlainText()[:20]) if w else None} title={pane.tabText(i)}")
+        
+        self.tabs = self.split_container.active_pane()    
     
-        # After closing, check if pane is now empty
         all_panes = self.split_container.all_panes()
-        if pane.count() == 0 and len(all_panes) > 1:
+        if len(all_panes) <= 1:
+            self.tabs = self.split_container.active_pane()
+            return
+    
+        should_collapse = False
+    
+        if pane.count() == 0:
+            should_collapse = True
+    
+        elif pane.count() == 1 and count_before == 1:
+            # close_tab auto-created an Untitled because count hit 0
+            # — remove it and collapse
+            only = pane.widget(0)
+            is_empty_untitled = (
+                only is not None
+                and getattr(only, 'file_path', None) is None
+                and not only.toPlainText().strip()
+                and pane.tabText(0).lstrip("⟳ ") == "Untitled"
+            )
+            if is_empty_untitled:
+                if hasattr(only, 'teardown_lsp'):
+                    only.teardown_lsp()
+                only.deleteLater()
+                pane.removeTab(0)
+                should_collapse = True
+    
+        if should_collapse:
             self.split_container.close_pane(pane)
     
-        # Update the shim to whoever is active now
         self.tabs = self.split_container.active_pane()
  
     def _on_pane_current_changed(self, pane: EditorPane, index: int):
@@ -983,7 +1039,7 @@ Instructions:
         editor = self.tabs.widget(index)
         if not editor:
             return
-
+    
         if hasattr(editor, 'is_dirty') and editor.is_dirty():
             filename = self.tabs.tabText(index).replace("*", "")
             reply = QMessageBox.question(
@@ -998,22 +1054,23 @@ Instructions:
                     return
             elif reply == QMessageBox.StandardButton.Cancel:
                 return
+    
+        # Teardown and cleanup — get file_path BEFORE removing
+        file_path = getattr(editor, "file_path", None)
+    
+        if hasattr(editor, "teardown_lsp"):
+            editor.teardown_lsp()
+    
+        if file_path:
+            self.autosave_manager.clear(file_path)
+        else:
+            self.autosave_manager.clear_untitled(index)
+    
+        # Single removal
         self.tabs.removeTab(index)
-        
-        widget = self.tabs.widget(index)
-        if widget:
-            if hasattr(widget, "teardown_lsp"):
-                widget.teardown_lsp()
-        if widget:
-            file_path = getattr(widget, "file_path", None)
-            if file_path:
-                self.autosave_manager.clear(file_path)
-            else:
-                self.autosave_manager.clear_untitled(index)
-            if hasattr(widget, "teardown_lsp"):
-                widget.teardown_lsp()                
-            widget.deleteLater()
-        self.tabs.removeTab(index)
+        editor.deleteLater()
+    
+        # Only add Untitled if this is the sole remaining pane and now empty
         if self.tabs.count() == 0 and len(self.split_container.all_panes()) == 1:
             self.add_new_tab("Untitled", "")
 
