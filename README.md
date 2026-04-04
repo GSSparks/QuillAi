@@ -29,6 +29,25 @@ When you do want cloud power (Claude, GPT-4, OpenRouter), you switch with one cl
 
 ---
 
+## Screenshots
+
+### Editor with Split Panes
+<p align="center">
+  <img src="./images/screenshot_split_panes.png" width="900" alt="QuillAI split editor panes"/>
+</p>
+
+### Symbol Outline Panel
+<p align="center">
+  <img src="./images/screenshot_outline.png" width="900" alt="QuillAI symbol outline panel showing class and method tree"/>
+</p>
+
+### Import Graph
+<p align="center">
+  <img src="./images/screenshot_import_graph.png" width="900" alt="QuillAI import dependency graph visualization"/>
+</p>
+
+---
+
 ## Installation
 
 ### AppImage (Linux — easiest)
@@ -94,9 +113,12 @@ The chat panel understands your entire project: active file and the symbol you'r
 ### LSP integration
 QuillAI connects to language servers automatically when installed, giving you IDE-grade code intelligence across multiple languages:
 
-- **Hover tooltips** — signature and docstring for any symbol, shown on mouseover
+- **Hover tooltips** — signature and docstring for any symbol, shown on mouseover with formatted markdown rendering
 - **Ctrl+Click go-to-definition** — jump to where a function or class is defined, across files
 - **Diagnostic squiggles** — live error and warning underlines as you type
+- **Breadcrumb bar** — always-visible `file › class › method` navigation at the top of the editor; click to jump
+- **Symbol outline panel** — full tree of classes, functions, and variables in the sidebar; click to jump
+- **LSP completion dropdown** — context-aware completions with type signatures and docstrings
 - **Context-aware chat** — LSP hover info and diagnostics are automatically injected into every chat prompt
 
 Supported servers (all included in the Nix package):
@@ -110,8 +132,25 @@ Supported servers (all included in the Nix package):
 | HTML / CSS / JSON / Markdown | `vscode-langservers-extracted` |
 | Nix | `nil` |
 | Lua | `lua-language-server` |
+| Perl | `perlnavigator` |
 
 LSP degrades gracefully — everything works normally if a server is not installed.
+
+### Split editor panes
+Split the editor horizontally or vertically to view multiple files side by side. Each pane has its own tab bar and active indicator. Panes collapse automatically when their last tab is closed.
+
+- **`Ctrl+\`** — split active pane side by side
+- **`Ctrl+Shift+\`** — split active pane top/bottom
+- **`Ctrl+Shift+W`** — close active pane
+- **`Ctrl+K Left/Right`** — move focus between panes
+
+### Import dependency graph
+Visualize your project's import structure as an interactive force-directed graph. Node size reflects connectivity. Double-click any node to open that file. Drag nodes, scroll to zoom, pan by dragging the background. Filter low-connectivity nodes with the min-degree slider.
+
+Supports Python, JavaScript/TypeScript, YAML, Nix, Bash, Lua, and Perl.
+
+### Symbol outline panel
+A sidebar tree of every class, function, and variable in the current file, powered by LSP `documentSymbol`. Classes nest their methods. Click any symbol to jump directly to its definition. Updates live as you edit with a 1.5s debounce.
 
 ### Repo map
 QuillAI builds a structural map of your entire project on open — every file, every class, every function signature and docstring — and injects a query-filtered slice of it into every chat prompt. The model gets a navigational overview of the whole codebase without the token cost of full source. Ansible playbooks and role imports are followed and included.
@@ -159,13 +198,15 @@ QuillAI autosaves every 2 minutes to `~/.config/quillai/autosave/`. If the app c
 Each project remembers which files you had open and where your cursor was. Switching projects restores that project's tabs, chat history, and memory. Recent Projects menu with tab count for each entry.
 
 ### Editor
-- Syntax highlighting for Python, HTML, Ansible/YAML, Nix, Bash, and Markdown
+- Syntax highlighting for Python, HTML, Ansible/YAML, Nix, Bash, Markdown, Perl, and more
 - Line numbers with live git diff indicators (green = added, amber = modified)
 - Double-click line number to select the entire line
 - Minimap with click-to-navigate and viewport highlight
+- Smooth scrolling with ease-out animation
 - Git blame in the gutter — toggle per-file to see commit hash and author per line
 - Bracket match highlighting
 - Indent guides, auto-closing brackets, smart auto-indent
+- Color swatch inline for hex color values — click to open color picker
 - `Ctrl+E` — AI rewrite of selection with side-by-side diff preview
 - `Ctrl+I` — inline chat popup at the cursor
 - `Ctrl+G` — jump to line, `Ctrl+Shift+D` — duplicate line, `Ctrl+/` — toggle comment
@@ -174,7 +215,7 @@ Each project remembers which files you had open and where your cursor was. Switc
 Chat and Memory live in a sliding panel on the right edge. Hover to expand, pin to keep open, drag the left edge to resize. Width persists across sessions.
 
 ### Markdown preview
-Opens automatically when editing `.md` files. Live preview with full CommonMark support. Floatable — drag it wherever you want on screen.
+Opens automatically when editing `.md` files. Live preview with full CommonMark support. Scroll position syncs with the editor cursor — the preview follows as you move through the document. Floatable — drag it wherever you want on screen.
 
 ### Source control (Git)
 Changed files tree, selective staging with checkboxes, inline diff viewer, commit/push/discard — plus AI-generated commit messages from your staged diff.
@@ -241,6 +282,10 @@ All settings stored locally at `~/.config/quillai/settings.json`.
 | `Ctrl+Click` | Go to definition (LSP) |
 | `Ctrl+Return` | Send chat message |
 | `Ctrl+\`` | Toggle terminal |
+| `Ctrl+\` | Split editor pane (side by side) |
+| `Ctrl+Shift+\` | Split editor pane (top/bottom) |
+| `Ctrl+Shift+W` | Close active pane |
+| `Ctrl+K Left/Right` | Focus adjacent pane |
 | `Ctrl+D` | Multi-cursor: add next occurrence |
 | `Ctrl+Shift+L` | Multi-cursor: add all occurrences |
 | `Ctrl+Alt+Up/Down` | Multi-cursor: add cursor above/below |
@@ -283,6 +328,7 @@ sentence-transformers  # Local embeddings for vector index
 chromadb               # Vector index storage
 pyqtermwidget          # Full PTY terminal (Linux/macOS)
 shellcheck             # Bash linting (via system package manager)
+perlnavigator          # LSP for Perl
 ```
 
 ---
@@ -306,18 +352,18 @@ quillai/
 │   ├── multi_cursor.py        # Multi-cursor editing logic
 │   └── highlighter.py         # Syntax highlighter registry
 ├── plugins/
-│   ├── python_plugin.py
-│   ├── html_plugin.py
-│   ├── ansible_plugin.py
-│   ├── nix_plugin.py
-│   ├── bash_plugin.py
-│   ├── markdown_plugin.py
-│   └── git_plugin.py
+│   ├── languages/             # Per-language syntax + LSP plugins
+│   └── features/              # Auto-registered feature plugins
 └── ui/
     ├── menu.py                # File menu and recent projects
     ├── chat_renderer.py       # Chat rendering, streaming, syntax highlighting
     ├── command_palette.py     # Ctrl+P command palette
-    ├── lsp_editor.py          # LspEditorMixin — hover, go-to-def, squiggles
+    ├── lsp_editor.py          # LspEditorMixin — hover, go-to-def, squiggles, completions
+    ├── breadcrumb_bar.py      # File › class › method breadcrumb navigation
+    ├── symbol_outline.py      # Symbol outline sidebar panel
+    ├── completion_popup.py    # LSP completion dropdown with docstring preview
+    ├── split_container.py     # Split editor pane container
+    ├── graph_panel.py         # Import dependency graph visualization
     ├── terminal.py            # Embedded terminal dock
     ├── sliding_chat_panel.py  # Sliding panel with Chat and Memory tabs
     ├── memory_manager.py      # Per-project memory, facts, conversations, turns
@@ -325,14 +371,14 @@ quillai/
     ├── autosave_manager.py    # Crash recovery and periodic autosave
     ├── startup_progress.py    # Animated startup indicator
     ├── session_manager.py     # Per-project tab session save/restore
-    ├── intent_tracker.py      # Session intent for smarter completions
-    ├── find_replace.py
-    ├── find_in_files.py
-    ├── markdown_preview.py
-    ├── snippet_palette.py
-    ├── settings_manager.py
-    ├── settings_dialog.py
-    └── diff_viewer.py
+    ├── find_replace.py        # Find/replace panel
+    ├── find_in_files.py       # Project-wide search
+    ├── markdown_preview.py    # Live markdown preview with scroll sync
+    ├── snippet_palette.py     # Snippet palette
+    ├── settings_manager.py    # Settings persistence
+    ├── settings_dialog.py     # Settings UI
+    ├── diff_apply_dialog.py   # AI rewrite diff preview
+    └── theme.py               # Theme engine — 9 themes, all stylesheet builders
 ```
 
 ---
@@ -358,24 +404,29 @@ When using a local backend, no data is transmitted anywhere. When using a cloud 
 ## Roadmap
 
 ### Planned
-- [ ] Breadcrumb bar (file › class › method)
-- [ ] Symbol outline panel
-- [ ] Split editor panes
 - [ ] LSP rename symbol
-- [ ] LSP-powered completions (replace ghost text with semantically-aware suggestions)
+- [ ] Code folding
+- [ ] AI completion popup (Ctrl+Space for non-LSP files)
+- [ ] Drag-and-drop tabs between split panes
 - [ ] Git diff context in chat — auto-inject recent changes for debug queries
 - [ ] Terminal stderr capture — pipe last error into chat context automatically
-- [ ] Smooth scrolling
-- [ ] Code folding
-- [ ] Markdown preview scroll sync
 - [ ] Completion feedback loop — use acceptance data to influence suggestion ranking
 
 ### Completed
+- [x] Split editor panes — horizontal and vertical, auto-collapse on last tab close
+- [x] Symbol outline panel — LSP-powered class/method tree with click-to-jump
+- [x] Import dependency graph — interactive force-directed visualization
+- [x] LSP completion dropdown — type signatures, docstrings, kind icons
+- [x] Breadcrumb bar — file › class › method navigation with symbol picker
+- [x] Markdown preview scroll sync — preview follows editor cursor and scroll position
+- [x] Smooth scrolling — ease-out wheel scroll animation
+- [x] Perl support — syntax highlighting, linting, LSP via perlnavigator
+- [x] LSP hover tooltips — formatted markdown with code block rendering
 - [x] Multi-cursor editing — Ctrl+D, Ctrl+Shift+L, Ctrl+Alt+Up/Down, Alt+Click
 - [x] Crash recovery — autosave every 2 minutes, silent restore on next launch
 - [x] Vector index — semantic search across code, conversations, completions, edit patterns
-- [x] LSP support — hover docs, Ctrl+Click go-to-definition, diagnostics, 7 languages
-- [x] Repo map — structural project index for codebase-aware chat (Python + Ansible)
+- [x] LSP support — hover docs, Ctrl+Click go-to-definition, diagnostics, 8 languages
+- [x] Repo map — structural project index for codebase-aware chat
 - [x] Git blame in gutter
 - [x] Bracket match highlight
 - [x] Embedded terminal
