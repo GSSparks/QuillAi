@@ -3,12 +3,12 @@
 from PyQt6.QtCore import Qt
 from core.plugin_base import FeaturePlugin
 from core.events import EVT_PROJECT_OPENED
-from plugins.features.terminal.terminal import TerminalDock
+from plugins.features.terminal.terminal_dock import TerminalDock
 
 
 class TerminalPlugin(FeaturePlugin):
     name = "terminal"
-    description = "Embedded terminal dock (Ctrl+`)"
+    description = "Full VT100 terminal emulator"
     enabled = True
 
     def activate(self):
@@ -17,8 +17,8 @@ class TerminalPlugin(FeaturePlugin):
         self.app.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.dock)
         self.dock.hide()
 
-        self.app.plugin_manager.register_dock("Terminal", "terminal_dock", "Ctrl+`")
-        self.bind_key("Ctrl+`", self._toggle)
+        self.app.plugin_manager.register_dock('Terminal', 'terminal_dock', 'Ctrl+`')
+        self.bind_key('Ctrl+`', self._toggle)
         self.on(EVT_PROJECT_OPENED, self._on_project_opened)
 
     def _toggle(self):
@@ -27,9 +27,7 @@ class TerminalPlugin(FeaturePlugin):
         else:
             self.dock.show()
             self.dock.raise_()
-            terminal = self.dock._terminal
-            if hasattr(terminal, 'input_line'):
-                terminal.input_line.setFocus()
+            self.dock._terminal.setFocus()
 
     def _on_project_opened(self, project_root: str = None, **kwargs):
         if project_root:
