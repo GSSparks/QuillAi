@@ -56,3 +56,13 @@ kwargs:
     first_visible (int) — block number of the first visible line
     total_lines   (int) — total block count in the document
 """
+
+# ── Terminal output events ─────────────────────────────────────────────────────
+
+EVT_TERMINAL_OUTPUT = "terminal_output"
+"""
+Emitted for each chunk of output from the terminal.
+
+kwargs:
+    text (str) — raw text chunk from the PTY
+"""

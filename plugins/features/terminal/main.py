@@ -1,8 +1,8 @@
 # plugins/features/terminal/main.py
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from core.plugin_base import FeaturePlugin
-from core.events import EVT_PROJECT_OPENED
+from core.events import EVT_PROJECT_OPENED, EVT_TERMINAL_OUTPUT
 from plugins.features.terminal.terminal_dock import TerminalDock
 
 
@@ -21,13 +21,20 @@ class TerminalPlugin(FeaturePlugin):
         self.bind_key('Ctrl+`', self._toggle)
         self.on(EVT_PROJECT_OPENED, self._on_project_opened)
 
+        # Forward terminal output into the event bus
+        self.dock.data_received.connect(
+            lambda text: self.app.plugin_manager.emit(
+                EVT_TERMINAL_OUTPUT, text=text
+            )
+        )
+
     def _toggle(self):
         if self.dock.isVisible():
             self.dock.hide()
         else:
             self.dock.show()
             self.dock.raise_()
-            self.dock._terminal.setFocus()
+            QTimer.singleShot(50, self.dock._terminal.setFocus)
 
     def _on_project_opened(self, project_root: str = None, **kwargs):
         if project_root:
