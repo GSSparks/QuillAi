@@ -66,7 +66,7 @@ def _symbol_info(kind: int):
 # ── Expand/collapse indicator delegate ───────────────────────────────────────
 
 class _OutlineDelegate(QStyledItemDelegate):
-    """Draws ▶/▼ expand indicators for items that have children."""
+    """Draws QPainter [+]/[-] expand indicators for items that have children."""
 
     def __init__(self, tree, parent=None):
         super().__init__(parent)
@@ -75,22 +75,40 @@ class _OutlineDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
         super().paint(painter, option, index)
         item = self._tree.itemFromIndex(index)
-        if item and item.childCount() > 0:
-            t   = get_theme()
-            fg  = t.get("fg4", "#a89984")
-            painter.save()
-            painter.setPen(QColor(fg))
-            indicator = "▼" if item.isExpanded() else "▶"   # ← on the item, not the tree
-            rect = option.rect
-            painter.drawText(
-                rect.left() + 2,
-                rect.top(),
-                16,
-                rect.height(),
-                Qt.AlignmentFlag.AlignVCenter,
-                indicator,
-            )
-            painter.restore()
+        if not item or item.childCount() == 0:
+            return
+
+        t        = get_theme()
+        fg       = QColor(t.get("fg4", "#a89984"))
+        expanded = item.isExpanded()
+
+        rect     = option.rect
+        box_size = 10
+        box_x    = rect.left() + 2
+        box_y    = rect.top() + (rect.height() - box_size) // 2
+
+        from PyQt6.QtGui import QPen
+        from PyQt6.QtCore import Qt as _Qt
+
+        painter.save()
+        pen = QPen(fg)
+        pen.setWidth(1)
+        painter.setPen(pen)
+        painter.setBrush(_Qt.BrushStyle.NoBrush)
+
+        # Outer box
+        painter.drawRect(box_x, box_y, box_size, box_size)
+
+        # Horizontal bar (always present)
+        mid_x = box_x + box_size // 2
+        mid_y = box_y + box_size // 2
+        painter.drawLine(box_x + 2, mid_y, box_x + box_size - 2, mid_y)
+
+        # Vertical bar only when collapsed (makes it a +)
+        if not expanded:
+            painter.drawLine(mid_x, box_y + 2, mid_x, box_y + box_size - 2)
+
+        painter.restore()
 
 
 # ── Dock widget ───────────────────────────────────────────────────────────────
