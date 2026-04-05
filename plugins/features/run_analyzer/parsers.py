@@ -46,8 +46,8 @@ class AnsibleParser:
       ERROR! message
     """
 
-    _RE_PLAY      = re.compile(r'^PLAY \[(.+?)\]')
-    _RE_TASK      = re.compile(r'^TASK \[(.+?)\]')
+    _RE_PLAY      = re.compile(r'^PLAY \[(.+?)\] \*+')
+    _RE_TASK      = re.compile(r'^TASK \[(.+?)\] \*+')
     _RE_OK        = re.compile(r'^ok: \[(.+?)\]')
     _RE_CHANGED   = re.compile(r'^changed: \[(.+?)\]')
     _RE_FAILED    = re.compile(r'^(failed|fatal): \[(.+?)\](.*)$')

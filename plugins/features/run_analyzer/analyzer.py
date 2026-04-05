@@ -15,6 +15,8 @@ from plugins.features.run_analyzer.parsers import (
 _RE_ANSIBLE   = re.compile(r'ansible-playbook|ansible ')
 _RE_TERRAFORM = re.compile(r'\bterraform\b|\btofu\b')
 
+# Strip ANSI escape sequences before parsing
+_RE_ANSI = re.compile(r'\x1b\[[0-9;]*[mABCDEFGHJKSTfsu]')
 
 class RunAnalyzer:
     """
@@ -33,13 +35,13 @@ class RunAnalyzer:
         self._terraform = TerraformParser()
 
     def feed(self, text: str):
-        """Feed a chunk of terminal output."""
-        self._buf += text
-        # Process complete lines
+        # Strip ANSI before buffering
+        clean = _RE_ANSI.sub('', text)
+        self._buf += clean
         while '\n' in self._buf:
             line, self._buf = self._buf.split('\n', 1)
             self._process_line(line)
-
+            
     def reset(self):
         """Call when a new command starts."""
         self._buf       = ""
