@@ -104,6 +104,26 @@ python main.py
 
 Switch backends at any time with the mode button in the status bar.
 
+### Plugin system
+QuillAI features a lightweight auto-discovery plugin system. Drop a new plugin folder into `plugins/features/` and it is loaded automatically on next launch — no changes to core code required.
+
+Each plugin is a self-contained package with its own widget code and a thin `main.py` entry point:
+
+```
+plugins/features/
+└── my_feature/
+    ├── __init__.py
+    ├── main.py          # FeaturePlugin subclass — activate(), deactivate()
+    └── my_feature.py    # Widget implementation
+```
+
+Plugins communicate via a named event bus (`file_opened`, `file_saved`, `project_opened`, and more — see `EVENTS.md`). Disabling a plugin is as simple as setting `enabled = False` in its class body. The following panels are implemented as plugins:
+
+- **Terminal** — embedded terminal dock
+- **Import Graph** — dependency graph visualization
+- **Symbol Outline** — LSP-powered class/method tree
+- **Markdown Preview** — live preview with scroll sync
+
 ### Intent-aware inline completions
 Completions are informed by your whole session — recent chat exchanges, pinned memory facts, files you've been editing, and functions you've been working in. Ghost text appears at natural pause points. **`Tab`** to accept, **`Ctrl+Right`** for word-by-word, **`Ctrl+Space`** to trigger manually.
 
@@ -334,52 +354,118 @@ perlnavigator          # LSP for Perl
 ---
 
 ## Project structure
+
 ```
 quillai/
-├── main.py                    # Main window and application entry point
+├── main.py                        # Main window and application entry point
+├── EVENTS.md                      # Plugin event bus reference
 ├── ai/
-│   ├── worker.py              # AIWorker — all LLM backends and streaming
-│   ├── context_engine.py      # Context assembly — symbols, imports, LSP, repo map, vector
-│   ├── lsp_client.py          # Generic JSON-RPC LSP client
-│   ├── lsp_manager.py         # Multi-server LSP registry and routing
-│   ├── lsp_context.py         # Formats LSP hover/diagnostics for chat context
-│   ├── repo_map.py            # AST-based structural project map (Python + Ansible)
-│   ├── embedder.py            # Embedding router (local sentence-transformers / OpenAI)
-│   ├── vector_store.py        # ChromaDB wrapper, per-project collections
-│   └── vector_index.py        # Semantic index orchestration and query
+│   ├── worker.py                  # AIWorker — all LLM backends and streaming
+│   ├── context_engine.py          # Context assembly — symbols, imports, LSP, repo map, vector
+│   ├── lsp_client.py              # Generic JSON-RPC LSP client
+│   ├── lsp_manager.py             # Multi-server LSP registry and routing
+│   ├── lsp_context.py             # Formats LSP hover/diagnostics for chat context
+│   ├── repo_map.py                # AST-based structural project map (Python + Ansible)
+│   ├── embedder.py                # Embedding router (local sentence-transformers / OpenAI)
+│   ├── vector_store.py            # ChromaDB wrapper, per-project collections
+│   └── vector_index.py            # Semantic index orchestration and query
+├── core/
+│   ├── plugin_base.py             # FeaturePlugin ABC — activate(), deactivate(), event helpers
+│   ├── plugin_manager.py          # Auto-discovery, loading, event bus, dock registry
+│   └── events.py                  # Named constants for all plugin bus events
 ├── editor/
-│   ├── ghost_editor.py        # Editor with ghost text, minimap, inline chat, LSP
-│   ├── multi_cursor.py        # Multi-cursor editing logic
-│   └── highlighter.py         # Syntax highlighter registry
+│   ├── ghost_editor.py            # Editor with ghost text, minimap, inline chat, LSP
+│   ├── multi_cursor.py            # Multi-cursor editing logic
+│   └── highlighter.py             # Syntax highlighter registry
 ├── plugins/
-│   ├── languages/             # Per-language syntax + LSP plugins
-│   └── features/              # Auto-registered feature plugins
+│   ├── languages/                 # Per-language syntax highlighting plugins
+│   │   ├── python_plugin.py
+│   │   ├── javascript_plugin.py
+│   │   ├── typescript_plugin.py
+│   │   ├── bash_plugin.py
+│   │   ├── html_plugin.py
+│   │   ├── markdown_plugin.py
+│   │   ├── nix_plugin.py
+│   │   ├── ansible_plugin.py
+│   │   └── perl_plugin.py
+│   ├── features/                  # Auto-discovered feature plugins
+│   │   ├── terminal/              # Embedded terminal dock (Ctrl+`)
+│   │   │   ├── main.py            #   TerminalPlugin
+│   │   │   └── terminal.py        #   TerminalDock, FallbackTerminal, QtermWidget
+│   │   ├── import_graph/          # Import dependency graph visualization
+│   │   │   ├── main.py            #   ImportGraphPlugin
+│   │   │   └── import_graph.py    #   GraphDockWidget, GraphCanvas, force simulation
+│   │   ├── symbol_outline/        # LSP-powered symbol outline panel
+│   │   │   ├── main.py            #   SymbolOutlinePlugin
+│   │   │   └── symbol_outline.py  #   SymbolOutlineDock
+│   │   └── markdown_preview/      # Live markdown preview with scroll sync
+│   │       ├── main.py            #   MarkdownPreviewPlugin
+│   │       └── markdown_preview.py #  MarkdownPreviewDock
+│   └── themes/                    # Theme definitions
+│       ├── gruvbox_dark.py
+│       ├── vscode_dark.py
+│       ├── monokai.py
+│       ├── solarized_dark.py
+│       ├── solarized_light.py
+│       ├── dracula.py
+│       ├── nord.py
+│       ├── one_dark.py
+│       ├── palenight.py
+│       └── quillai.py
 └── ui/
-    ├── menu.py                # File menu and recent projects
-    ├── chat_renderer.py       # Chat rendering, streaming, syntax highlighting
-    ├── command_palette.py     # Ctrl+P command palette
-    ├── lsp_editor.py          # LspEditorMixin — hover, go-to-def, squiggles, completions
-    ├── breadcrumb_bar.py      # File › class › method breadcrumb navigation
-    ├── symbol_outline.py      # Symbol outline sidebar panel
-    ├── completion_popup.py    # LSP completion dropdown with docstring preview
-    ├── split_container.py     # Split editor pane container
-    ├── graph_panel.py         # Import dependency graph visualization
-    ├── terminal.py            # Embedded terminal dock
-    ├── sliding_chat_panel.py  # Sliding panel with Chat and Memory tabs
-    ├── memory_manager.py      # Per-project memory, facts, conversations, turns
-    ├── memory_panel.py        # Memory panel UI
-    ├── autosave_manager.py    # Crash recovery and periodic autosave
-    ├── startup_progress.py    # Animated startup indicator
-    ├── session_manager.py     # Per-project tab session save/restore
-    ├── find_replace.py        # Find/replace panel
-    ├── find_in_files.py       # Project-wide search
-    ├── markdown_preview.py    # Live markdown preview with scroll sync
-    ├── snippet_palette.py     # Snippet palette
-    ├── settings_manager.py    # Settings persistence
-    ├── settings_dialog.py     # Settings UI
-    ├── diff_apply_dialog.py   # AI rewrite diff preview
-    └── theme.py               # Theme engine — 9 themes, all stylesheet builders
+    ├── menu.py                    # Application menus and recent projects
+    ├── chat_renderer.py           # Chat rendering, streaming, syntax highlighting
+    ├── command_palette.py         # Ctrl+P command palette
+    ├── lsp_editor.py              # LspEditorMixin — hover, go-to-def, squiggles, completions
+    ├── breadcrumb_bar.py          # File › class › method breadcrumb navigation
+    ├── completion_popup.py        # LSP completion dropdown with docstring preview
+    ├── split_container.py         # Split editor pane container
+    ├── sliding_chat_panel.py      # Sliding panel with Chat and Memory tabs
+    ├── memory_manager.py          # Per-project memory, facts, conversations, turns
+    ├── memory_panel.py            # Memory panel UI
+    ├── git_panel.py               # Source control panel
+    ├── autosave_manager.py        # Crash recovery and periodic autosave
+    ├── startup_progress.py        # Animated startup indicator
+    ├── session_manager.py         # Per-project tab session save/restore
+    ├── find_replace.py            # Find/replace panel
+    ├── find_in_files.py           # Project-wide search
+    ├── snippet_palette.py         # Snippet palette
+    ├── settings_manager.py        # Settings persistence
+    ├── settings_dialog.py         # Settings UI
+    ├── diff_apply_dialog.py       # AI rewrite diff preview
+    └── theme.py                   # Theme engine — stylesheet builders for all widgets
 ```
+
+### Writing a plugin
+
+Create a folder under `plugins/features/` with a `main.py` containing a `FeaturePlugin` subclass:
+
+```python
+from core.plugin_base import FeaturePlugin
+from core.events import EVT_FILE_OPENED
+from PyQt6.QtCore import Qt
+
+class MyPlugin(FeaturePlugin):
+    name = "my_plugin"
+    enabled = True
+
+    def activate(self):
+        from plugins.features.my_plugin.my_widget import MyDockWidget
+        self.dock = MyDockWidget(self.app)
+        self.app.my_dock = self.dock
+        self.app.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock)
+        self.app.plugin_manager.register_dock("My Panel", "my_dock")
+        self.on(EVT_FILE_OPENED, self._on_file_opened)
+
+    def _on_file_opened(self, path=None, editor=None, **kwargs):
+        pass
+
+    def deactivate(self):
+        self.dock.close()
+        self.app.my_dock = None
+```
+
+Restart QuillAI — the plugin is discovered and loaded automatically. See `EVENTS.md` for the full event reference.
 
 ---
 
@@ -404,15 +490,17 @@ When using a local backend, no data is transmitted anywhere. When using a cloud 
 ## Roadmap
 
 ### Planned
-- [ ] LSP rename symbol
 - [ ] Code folding
 - [ ] AI completion popup (Ctrl+Space for non-LSP files)
+- [ ] LSP rename symbol
 - [ ] Drag-and-drop tabs between split panes
 - [ ] Git diff context in chat — auto-inject recent changes for debug queries
 - [ ] Terminal stderr capture — pipe last error into chat context automatically
 - [ ] Completion feedback loop — use acceptance data to influence suggestion ranking
+- [ ] Plugin settings UI — enable/disable plugins at runtime from Settings dialog
 
 ### Completed
+- [x] Plugin system — auto-discovery, event bus, dock registry; terminal, import graph, symbol outline, and markdown preview all implemented as plugins
 - [x] Split editor panes — horizontal and vertical, auto-collapse on last tab close
 - [x] Symbol outline panel — LSP-powered class/method tree with click-to-jump
 - [x] Import dependency graph — interactive force-directed visualization
