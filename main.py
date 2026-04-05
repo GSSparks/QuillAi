@@ -33,7 +33,7 @@ from ui.theme import (apply_theme, get_theme, theme_signals,
                       build_explain_error_btn_stylesheet,
                       build_tree_view_stylesheet)
 
-from ui.menu import setup_file_menu
+from ui.menu import setup_menus
 from ui.about_dialog import AboutDialog
 from ui.find_replace import FindReplaceWidget
 from ui.find_in_files import FindInFilesWidget
@@ -219,10 +219,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         )
 
 
-        setup_file_menu(self)
-        self.setup_run_menu()
-        self.setup_view_menu()
-        self.setup_help_menu()
+        setup_menus(self)
 
         # Status Bar
         self.status_bar = self.statusBar()
@@ -268,6 +265,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.setup_memory_panel()
         self.setup_markdown_preview()
         self.setup_find_in_files_panel()
+        self.setup_terminal()
 
         _plugins_dir = os.path.join(os.path.dirname(__file__), 'plugins')
         registry.auto_register_languages(
@@ -276,15 +274,6 @@ class CodeEditor(QMainWindow, ChatRenderer):
 
         # Command palette — Ctrl+P
         self.command_palette = CommandPalette(self)
-        QShortcut(QKeySequence("Ctrl+P"), self).activated.connect(
-            self.command_palette.show_palette
-        )
-
-        # Terminal — Ctrl+`
-        self.setup_terminal()
-        QShortcut(QKeySequence("Ctrl+`"), self).activated.connect(
-            self.toggle_terminal
-        )
 
         # Single theme-change handler for main-window-owned widgets
         theme_signals.theme_changed.connect(self._apply_theme_to_widgets)
@@ -1617,48 +1606,6 @@ Instructions:
                 term._term.setFocus()
 
     # ── Runner ────────────────────────────────────────────────────────────
-
-    def setup_run_menu(self):
-        run_menu = self.menuBar().addMenu("Run")
-        run_action = QAction("Run Script", self)
-        run_action.setShortcut(QKeySequence("F5"))
-        run_action.triggered.connect(self.run_script)
-        run_menu.addAction(run_action)
-
-    def setup_view_menu(self):
-        view_menu = self.menuBar().addMenu("View")
-        panels = [
-            ("Chat",             lambda: self.chat_panel.switch_to_chat()),
-            ("Memory",           lambda: self.chat_panel.switch_to_memory()),
-            ("Terminal",         lambda: self.toggle_terminal()),
-            ("Markdown Preview", lambda: (self.md_preview_dock.show(),
-                                          self.md_preview_dock.raise_(),
-                                          self._refresh_markdown_preview())),
-            ("Explorer",         lambda: (self.sidebar_dock.show(),
-                                          self.sidebar_dock.raise_())),
-            ("Source Control",   lambda: (self.git_dock.show(),
-                                          self.git_dock.raise_())),
-            ("Output",           lambda: (self.output_dock.show(),
-                                          self.output_dock.raise_())),
-            ("Find in Files",    lambda: (self.search_dock.show(),
-                                          self.search_dock.raise_())),
-            ("Import Graph",     lambda: (self.graph_dock.show(),
-                                          self.graph_dock.raise_())),
-            ("Split Editor ↔",   lambda: self._split_active(Qt.Orientation.Horizontal)),
-            ("Split Editor ↕",   lambda: self._split_active(Qt.Orientation.Vertical)),
-            ("Outline",          lambda: (self.symbol_dock.show(),
-                                          self.symbol_dock.raise_())),
-        ]
-        for name, fn in panels:
-            action = QAction(name, self)
-            action.triggered.connect(fn)
-            view_menu.addAction(action)
-
-    def setup_help_menu(self):
-        help_menu = self.menuBar().addMenu("Help")
-        about_action = QAction("About QuillAI", self)
-        about_action.triggered.connect(self._show_about)
-        help_menu.addAction(about_action)
 
     def _show_about(self):
         AboutDialog(self).exec()
