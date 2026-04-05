@@ -2,7 +2,7 @@
 QuillAI Theme System
 ====================
 To add a new theme:
-  1. Add a new dictionary to THEMES following the same key structure.
+  1. Add a new dictionary to ./plugins/themes following the same key structure.
   2. It will automatically appear in Settings and the View → Theme menu.
 
 To switch themes at runtime:
