@@ -492,7 +492,6 @@ When using a local backend, no data is transmitted anywhere. When using a cloud 
 ### Planned
 - [ ] Code folding
 - [ ] AI completion popup (Ctrl+Space for non-LSP files)
-- [ ] LSP rename symbol
 - [ ] Drag-and-drop tabs between split panes
 - [ ] Git diff context in chat — auto-inject recent changes for debug queries
 - [ ] Terminal stderr capture — pipe last error into chat context automatically
@@ -521,6 +520,7 @@ When using a local backend, no data is transmitted anywhere. When using a cloud 
 - [x] Command palette (Ctrl+P)
 - [x] Memory system with turn buffer and session continuity
 - [x] Line number double-click to select line
+- [x] LSP rename symbol
 
 ---
 

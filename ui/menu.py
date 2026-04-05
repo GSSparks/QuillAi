@@ -375,10 +375,8 @@ def _setup_view_menu(window):
         ("Explorer",       "sidebar_dock",    None),
         ("Source Control", "git_dock",        None),
         ("Outline",        "symbol_dock",     None),
-        ("Import Graph",   "graph_dock",      None),
         ("Find in Files",  "search_dock",     None),
         ("Output",         "output_dock",     None),
-        ("Markdown Preview", "md_preview_dock", None),
     ]
     for label, attr, shortcut in static_panels:
         panels_menu.addAction(_make_panel_action(label, attr, window, shortcut))
