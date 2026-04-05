@@ -15,6 +15,8 @@ from PyQt6.QtCore import QTimer, QThread, Qt, QDir, QProcess, QUrl, pyqtSlot
 from PyQt6.QtGui import (QFileSystemModel, QAction, QKeySequence, QTextCursor,
                          QIcon, QPixmap, QPainter, QColor, QShortcut,
                          QSyntaxHighlighter, QTextCharFormat, QFont)
+                         
+from core.plugin_manager import PluginManager
 
 from editor.ghost_editor import GhostEditor
 from ai.worker import AIWorker
@@ -45,15 +47,10 @@ from ui.memory_panel import MemoryPanel
 from ui.session_manager import save_session, load_session
 from ui.session_intent import init_tracker
 from ui.sliding_chat_panel import SlidingPanel
-from ui.markdown_preview import MarkdownPreviewDock
 from ui.command_palette import CommandPalette
-from ui.terminal import TerminalDock
-from ui.command_palette import CommandPalette
-from ui.terminal import TerminalDock
 from ui.startup_progress import StartupProgress
 from ui.autosave_manager import AutosaveManager, AUTOSAVE_INTERVAL_MS
 from ui.split_container import SplitContainer, EditorPane
-from ui.symbol_outline import SymbolOutlineDock
 
 from editor.highlighter import registry
 from ui.git_panel import GitDockWidget
@@ -220,7 +217,8 @@ class CodeEditor(QMainWindow, ChatRenderer):
 
 
         setup_menus(self)
-
+        self.plugin_manager = PluginManager(self)
+        
         # Status Bar
         self.status_bar = self.statusBar()
         self.status_bar.setSizeGripEnabled(False)
@@ -258,14 +256,14 @@ class CodeEditor(QMainWindow, ChatRenderer):
         # Panels & docks
         self.setup_sidebar()
         self.setup_git_panel()
-        self.setup_symbol_outline()
-        self.setup_graph_panel()
         self.setup_output_panel()
         self.setup_chat_panel()
         self.setup_memory_panel()
-        self.setup_markdown_preview()
         self.setup_find_in_files_panel()
-        self.setup_terminal()
+        
+        self.plugin_manager.discover_and_load(
+            os.path.join(os.path.dirname(__file__), "plugins", "features")
+        )
 
         _plugins_dir = os.path.join(os.path.dirname(__file__), 'plugins')
         registry.auto_register_languages(
@@ -285,11 +283,6 @@ class CodeEditor(QMainWindow, ChatRenderer):
 
         self._restore_window_state()
         self._restore_session()
-
-        registry.auto_register_features(
-            os.path.join(os.path.dirname(__file__), 'plugins', 'features'),
-            self
-        )
 
         self._lang_detect_timer = QTimer()
         self._lang_detect_timer.setSingleShot(True)
@@ -314,22 +307,25 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.output_editor.setStyleSheet(build_output_panel_stylesheet(t))
         self.explain_error_btn.setStyleSheet(build_explain_error_btn_stylesheet(t))
         self.tree_view.setStyleSheet(build_tree_view_stylesheet(t))
-
+    
         dock_style = build_dock_stylesheet(t)
+    
+        # Shell-owned docks
         for dock in (self.sidebar_dock, self.output_dock,
-                     self.search_dock, self.md_preview_dock,
-                     self.terminal_dock, self.symbol_dock):
+                     self.search_dock):
             dock.setStyleSheet(dock_style)
-
+    
+        # Plugin-owned docks
+        for label, (dock_attr, _) in self.plugin_manager.docks.items():
+            dock = getattr(self, dock_attr, None)
+            if dock:
+                dock.setStyleSheet(dock_style)
+    
         # Rebuild file model icons with new palette
         self.file_model._rebuild_icons(t)
         self.tree_view.viewport().update()
-
-        # Terminal
-        if hasattr(self, 'terminal_dock'):
-            self.terminal_dock.apply_styles(t)
-
-        # Re-apply syntax highlighting across ALL panes:
+    
+        # Re-apply syntax highlighting across ALL panes
         for _, editor in self.split_container.all_editors():
             if hasattr(editor, 'file_path') and editor.file_path:
                 ext = os.path.splitext(editor.file_path)[1].lower()
@@ -601,11 +597,8 @@ class CodeEditor(QMainWindow, ChatRenderer):
         path = getattr(editor, 'file_path', '') or ''
         if not path.lower().endswith(('.md', '.markdown')):
             return
-        if hasattr(self, 'md_preview_dock'):
-            self.md_preview_dock.show()
-            self.md_preview_dock.raise_()
-            self.md_preview_dock.update_preview(editor.toPlainText())
-            
+        self.plugin_manager.emit("file_opened", path=path, editor=editor)
+    
     def _sync_markdown_scroll(self):
         editor = self.current_editor()
         if not editor:
@@ -613,12 +606,11 @@ class CodeEditor(QMainWindow, ChatRenderer):
         path = getattr(editor, 'file_path', '') or ''
         if not path.lower().endswith(('.md', '.markdown')):
             return
-        if not hasattr(self, 'md_preview_dock'):
-            return
-        # Use first visible block for scroll sync, not cursor position
         first_visible = editor.firstVisibleBlock().blockNumber()
         total_lines   = editor.document().blockCount()
-        self.md_preview_dock.sync_scroll(first_visible, total_lines)
+        self.plugin_manager.emit("editor_scrolled",
+                                 first_visible=first_visible,
+                                 total_lines=total_lines)
 
     # ── Window state ──────────────────────────────────────────────────────
 
@@ -806,7 +798,13 @@ class CodeEditor(QMainWindow, ChatRenderer):
         editor.ai_finished.connect(self.hide_loading_indicator)
         editor.error_help_requested.connect(self.handle_editor_error_help)
         editor.send_to_chat_requested.connect(self.load_snippet_to_chat)
-        editor.textChanged.connect(lambda: self._refresh_markdown_preview(editor))
+        editor.textChanged.connect(lambda e=editor: (
+            self.plugin_manager.emit(
+                "markdown_changed",
+                text=e.toPlainText()
+            ) if (getattr(e, 'file_path', '') or '').lower().endswith(('.md', '.markdown'))
+            else None
+        ))
     
         # ── Vector index — accepted completions ──────────────────────
         def _on_completion_accepted(text, ctx, e=editor):
@@ -831,9 +829,6 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.update_git_branch()
         self._refresh_markdown_preview()
         editor = pane.currentWidget()
-        if editor and hasattr(editor, 'file_path') and editor.file_path:
-            if hasattr(self, 'graph_dock'):
-                self.graph_dock.set_active_file(editor.file_path)
  
     def _on_pane_tab_close(self, pane: EditorPane, index: int):
         """Route tab close from any pane — collapse pane if it becomes empty."""
@@ -1014,6 +1009,14 @@ Instructions:
             event.accept()
 
         if event.isAccepted():
+            self.autosave_manager.clear_all()
+            registry.deactivate_all_features()
+            for plugin in self.plugin_manager._plugins:  # clean plugin teardown
+                try:
+                    plugin.deactivate()
+                except Exception as e:
+                    print(f"[PluginManager] Error deactivating {plugin.name}: {e}")
+            self._save_current_session()
             # Clean exit — remove all autosave files
             self.autosave_manager.clear_all()
             registry.deactivate_all_features()
@@ -1156,8 +1159,8 @@ Instructions:
             if hasattr(self, 'git_dock'):
                 self.git_dock.refresh_status()
                 
-            if hasattr(self, 'symbol_dock') and editor.file_path:
-                self.symbol_dock.refresh_for_path(editor.file_path)
+            if editor.file_path:
+                self.plugin_manager.emit("file_saved", path=editor.file_path)
 
             self.statusBar().showMessage(f"Saved: {editor.file_path}", 3000)
             self.autosave_manager.clear(editor.file_path)
@@ -1205,16 +1208,12 @@ Instructions:
                 self.git_dock.refresh_status()
             if hasattr(self, 'memory_manager'):
                 self.memory_manager.set_project(saved_project)
-                self._start_lsp(project_root=saved_project)
-                self._init_repo_map(project_root=saved_project)
-                self._init_vector_index(project_root=saved_project)               
+            self._start_lsp(project_root=saved_project)
+            self._init_repo_map(project_root=saved_project)
+            self._init_vector_index(project_root=saved_project)
             if hasattr(self, 'update_git_branch'):
                 self.update_git_branch()
-            if hasattr(self, 'graph_dock'):
-                self.graph_dock.load_project(
-                    saved_project,
-                    open_cb=self.open_file_in_tab
-                )
+            self.plugin_manager.emit("project_opened", project_root=saved_project)
 
         restored = 0
         for tab_data in session.get("tabs", []):
@@ -1275,13 +1274,10 @@ Instructions:
                         getattr(editor, 'file_path', '') or ''):
                     editor.setup_breadcrumb(self.lsp_manager)
                     
-        if hasattr(self, 'graph_dock') and editor:
+        if editor:
             fp = getattr(editor, 'file_path', None)
             if fp:
-                self.graph_dock.set_active_file(fp)
-                
-        if hasattr(self, 'symbol_dock') and editor:
-            self.symbol_dock.set_editor(editor, self.lsp_manager)
+                self.plugin_manager.emit("file_opened", path=fp, editor=editor)
          
         # Sync markdown preview scroll on tab switch
         self._sync_markdown_scroll() 
@@ -1584,27 +1580,6 @@ Instructions:
             self.memory_panel
         ))
 
-    def setup_terminal(self):
-        self.terminal_dock = TerminalDock(self)
-        self.addDockWidget(
-            Qt.DockWidgetArea.BottomDockWidgetArea, self.terminal_dock
-        )
-        if hasattr(self, 'output_dock'):
-            self.tabifyDockWidget(self.output_dock, self.terminal_dock)
-        self.terminal_dock.hide()
-
-    def toggle_terminal(self):
-        if self.terminal_dock.isVisible():
-            self.terminal_dock.hide()
-        else:
-            self.terminal_dock.show()
-            self.terminal_dock.raise_()
-            term = self.terminal_dock._terminal
-            if hasattr(term, 'input_line'):
-                term.input_line.setFocus()
-            elif hasattr(term, '_term'):
-                term._term.setFocus()
-
     # ── Runner ────────────────────────────────────────────────────────────
 
     def _show_about(self):
@@ -1789,14 +1764,6 @@ Instructions:
         if not self.file_model.isDir(index):
             self.open_file_in_tab(file_path)
             
-    def setup_graph_panel(self):
-        from ui.graph_panel import GraphDockWidget
-        self.graph_dock = GraphDockWidget(self)
-        self.graph_dock.setObjectName("graph_dock")
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.graph_dock)
-        self.tabifyDockWidget(self.sidebar_dock, self.graph_dock)
-        self.graph_dock.hide()
-        
     def setup_symbol_outline(self):
         self.symbol_dock = SymbolOutlineDock(self)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.symbol_dock)

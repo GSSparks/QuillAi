@@ -370,20 +370,35 @@ def _setup_view_menu(window):
     # ── Panels ───────────────────────────────────────────────────────────
     panels_menu = view_menu.addMenu("Panels")
 
-    panel_defs = [
-        ("Explorer",         "sidebar_dock",     None),
-        ("Source Control",   "git_dock",         None),
-        ("Outline",          "symbol_dock",      None),
-        ("Import Graph",     "graph_dock",       None),
-        ("Find in Files",    "search_dock",      None),
-        ("Output",           "output_dock",      None),
-        ("Terminal",         "terminal_dock",    "Ctrl+`"),
-        ("Markdown Preview", "md_preview_dock",  None),
+    # Shell-owned panels — always present
+    static_panels = [
+        ("Explorer",       "sidebar_dock",    None),
+        ("Source Control", "git_dock",        None),
+        ("Outline",        "symbol_dock",     None),
+        ("Import Graph",   "graph_dock",      None),
+        ("Find in Files",  "search_dock",     None),
+        ("Output",         "output_dock",     None),
+        ("Markdown Preview", "md_preview_dock", None),
     ]
+    for label, attr, shortcut in static_panels:
+        panels_menu.addAction(_make_panel_action(label, attr, window, shortcut))
+        
+    # Plugin-owned panels — added dynamically when menu opens
+    def _add_plugin_panels():
+        # Remove previously added plugin actions (tracked by property)
+        for action in getattr(panels_menu, '_plugin_actions', []):
+            panels_menu.removeAction(action)
+        panels_menu._plugin_actions = []
 
-    for label, attr, shortcut in panel_defs:
-        action = _make_panel_action(label, attr, window, shortcut)
-        panels_menu.addAction(action)
+        pm = getattr(window, 'plugin_manager', None)
+        if not pm:
+            return
+        for label, (dock_attr, shortcut) in pm.docks.items():
+            action = _make_panel_action(label, dock_attr, window, shortcut)
+            panels_menu.addAction(action)
+            panels_menu._plugin_actions.append(action)
+
+    panels_menu.aboutToShow.connect(_add_plugin_panels)
 
     # Chat is a sliding panel, not a dock — handle separately
     chat_action = QAction("Chat", window)
