@@ -176,6 +176,6 @@ class MarkdownPreviewDock(QDockWidget):
     def closeEvent(self, event):
         try:
             theme_signals.theme_changed.disconnect(self._on_theme_changed)
-        except RuntimeError:
+        except (RuntimeError, TypeError):
             pass
         super().closeEvent(event)

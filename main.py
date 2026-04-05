@@ -578,17 +578,6 @@ class CodeEditor(QMainWindow, ChatRenderer):
 
     # ── Markdown preview ──────────────────────────────────────────────────
 
-    def setup_markdown_preview(self):
-        self.md_preview_dock = MarkdownPreviewDock(self)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.md_preview_dock)
-        self.md_preview_dock.setFeatures(
-            QDockWidget.DockWidgetFeature.DockWidgetClosable |
-            QDockWidget.DockWidgetFeature.DockWidgetMovable |
-            QDockWidget.DockWidgetFeature.DockWidgetFloatable
-        )
-        self.md_preview_dock.setObjectName("md_preview_dock")
-        self.md_preview_dock.hide()
-
     def _refresh_markdown_preview(self, editor=None):
         if editor is None:
             editor = self.current_editor()
@@ -631,7 +620,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
             except Exception:
                 pass
 
-        if hasattr(self, 'md_preview_dock'):
+        if hasattr(self, 'md_preview_dock') and self.md_preview_dock is not None:
             if self.settings_manager.get('md_preview_visible'):
                 self.md_preview_dock.show()
             else:
@@ -1027,7 +1016,7 @@ Instructions:
             self.settings_manager.set(
                 'window_geometry', self.saveGeometry().toHex().data().decode()
             )
-            if hasattr(self, 'md_preview_dock'):
+            if hasattr(self, 'md_preview_dock') and self.md_preview_dock is not None:
                 self.settings_manager.set(
                     'md_preview_visible', self.md_preview_dock.isVisible()
                 )
