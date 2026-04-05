@@ -1,9 +1,10 @@
 # plugins/features/terminal/main.py
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QKeySequence
 from core.plugin_base import FeaturePlugin
-from .terminal import TerminalDock
+from core.events import EVT_PROJECT_OPENED
+from plugins.features.terminal.terminal import TerminalDock
+
 
 class TerminalPlugin(FeaturePlugin):
     name = "terminal"
@@ -15,8 +16,10 @@ class TerminalPlugin(FeaturePlugin):
         self.app.terminal_dock = self.dock
         self.app.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.dock)
         self.dock.hide()
-        self.bind_key("Ctrl+`", self._toggle)
+
         self.app.plugin_manager.register_dock("Terminal", "terminal_dock", "Ctrl+`")
+        self.bind_key("Ctrl+`", self._toggle)
+        self.on(EVT_PROJECT_OPENED, self._on_project_opened)
 
     def _toggle(self):
         if self.dock.isVisible():
@@ -24,10 +27,13 @@ class TerminalPlugin(FeaturePlugin):
         else:
             self.dock.show()
             self.dock.raise_()
-            # Focus the input line if using fallback terminal
             terminal = self.dock._terminal
             if hasattr(terminal, 'input_line'):
                 terminal.input_line.setFocus()
+
+    def _on_project_opened(self, project_root: str = None, **kwargs):
+        if project_root:
+            self.dock.set_cwd(project_root)
 
     def deactivate(self):
         self.dock.close()
