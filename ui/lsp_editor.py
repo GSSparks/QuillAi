@@ -464,6 +464,10 @@ class LspEditorMixin:
         if not self._lsp_active():
             return
  
+        # Dismiss hover popup if showing
+        from ui.lsp_editor import _HoverPopup
+        _HoverPopup.dismiss() 
+ 
         # Get the word under the cursor as the default name
         cursor     = self.textCursor()
         cursor.select(cursor.SelectionType.WordUnderCursor)

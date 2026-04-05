@@ -42,6 +42,7 @@ class RenamePopup(QWidget):
         theme_signals.theme_changed.connect(self._apply_theme)
 
     def _build_ui(self, t: dict):
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(6)

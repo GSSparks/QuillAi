@@ -2824,40 +2824,37 @@ def build_completion_popup_stylesheet(t: dict) -> str:
 def build_rename_dialog_stylesheet(t: dict) -> str:
     """Inline rename symbol dialog."""
     return f"""
-        QDialog {{
+        QWidget#RenamePopup {{
             background-color: {t['bg1']};
             border: 1px solid {t['border_focus']};
             border-radius: 6px;
         }}
-        QLabel {{
+        QLabel#renameLabel {{
             color: {t['fg2']};
             font-family: {FONT_UI};
             font-size: 9pt;
-            background: transparent;
-            padding: 0 2px;
+            background-color: {t['bg1']};
+            padding: 0 4px;
         }}
-        QLineEdit {{
+        QLabel#renameHint {{
+            color: {t['fg4']};
+            font-family: {FONT_UI};
+            font-size: 8pt;
+            background-color: {t['bg1']};
+            padding: 0 4px;
+        }}
+        QLineEdit#renameInput {{
             background-color: {t['bg0_hard']};
             color: {t['fg0']};
             border: 1px solid {t['border']};
             border-radius: 4px;
             font-family: {FONT_CODE};
-            font-size: 11pt;
-            padding: 6px 10px;
+            font-size: 10pt;
+            padding: 4px 8px;
         }}
-        QLineEdit:focus {{ border: 1px solid {t['border_focus']}; }}
-        QPushButton {{
-            background-color: {t['accent']};
-            color: {t['bg0_hard']};
-            border: none; border-radius: 4px;
-            padding: 6px 16px; font-weight: bold;
+        QLineEdit#renameInput:focus {{
+            border: 1px solid {t['border_focus']};
         }}
-        QPushButton:hover {{ background-color: {t['yellow']}; }}
-        QPushButton#cancel {{
-            background-color: {t['bg2']};
-            color: {t['fg1']};
-        }}
-        QPushButton#cancel:hover {{ background-color: {t['bg3']}; }}
     """
 
 
