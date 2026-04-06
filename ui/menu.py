@@ -8,6 +8,7 @@ Menus:
   Edit  — settings
   View  — panels (checkable), split editor, themes
   Run   — run script, stop
+  Wiki  — update wiki, rebuild all, show status
   Help  — about
 """
 
@@ -224,6 +225,7 @@ def setup_menus(window):
     _setup_edit_menu(window)
     _setup_view_menu(window)
     _setup_run_menu(window)
+    _setup_wiki_menu(window)
     _setup_help_menu(window)
 
 
@@ -493,6 +495,110 @@ def _stop_script(window):
             window.statusBar().showMessage("Process stopped.", 3000)
             if hasattr(window, 'output_editor'):
                 window.output_editor.appendPlainText("\n>>> Stopped by user.")
+
+
+# ── Wiki ──────────────────────────────────────────────────────────────────────
+
+def _setup_wiki_menu(window):
+    wiki_menu = window.menuBar().addMenu("Wiki")
+
+    # ── Update stale pages ────────────────────────────────────────────────
+    update_action = QAction("Update Stale Pages", window)
+    update_action.setShortcut(QKeySequence("Ctrl+Shift+U"))
+    update_action.triggered.connect(lambda: _wiki_update(window))
+    wiki_menu.addAction(update_action)
+
+    # ── Rebuild everything ────────────────────────────────────────────────
+    rebuild_action = QAction("Rebuild All Pages…", window)
+    rebuild_action.triggered.connect(lambda: _wiki_rebuild_all(window))
+    wiki_menu.addAction(rebuild_action)
+
+    wiki_menu.addSeparator()
+
+    # ── Status — populated dynamically on open ────────────────────────────
+    def _populate_status():
+        # Remove old dynamic actions
+        for action in getattr(wiki_menu, '_status_actions', []):
+            wiki_menu.removeAction(action)
+        wiki_menu._status_actions = []
+
+        wm = getattr(window, 'wiki_manager', None)
+        if not wm or not wm.enabled:
+            a = QAction("Wiki not available for this project", window)
+            a.setEnabled(False)
+            wiki_menu.addAction(a)
+            wiki_menu._status_actions = [a]
+            return
+
+        stale = wm.stale_files()
+        total = len(list(wm._wiki_dir.rglob("*.md")))
+        project = wm.repo_root.name
+
+        summary = QAction(
+            f"📁 {project}  —  {total} pages, {len(stale)} stale", window
+        )
+        summary.setEnabled(False)
+        wiki_menu.addAction(summary)
+        wiki_menu._status_actions = [summary]
+
+        if stale:
+            wiki_menu.addSeparator()
+            header = QAction("Stale files:", window)
+            header.setEnabled(False)
+            wiki_menu.addAction(header)
+            wiki_menu._status_actions += [header]
+
+            for rel in stale[:10]:
+                a = QAction(f"  · {rel}", window)
+                a.setEnabled(False)
+                wiki_menu.addAction(a)
+                wiki_menu._status_actions.append(a)
+
+            if len(stale) > 10:
+                more = QAction(f"  … and {len(stale) - 10} more", window)
+                more.setEnabled(False)
+                wiki_menu.addAction(more)
+                wiki_menu._status_actions.append(more)
+
+    wiki_menu.aboutToShow.connect(_populate_status)
+
+
+def _wiki_update(window):
+    wm = getattr(window, 'wiki_manager', None)
+    ww = getattr(window, 'wiki_watcher', None)
+    if not wm or not wm.enabled:
+        window.statusBar().showMessage("Wiki not available for this project.", 3000)
+        return
+    if ww:
+        # Use watcher's thread infrastructure
+        ww.trigger_full_update(only_if_empty=False)
+        window.statusBar().showMessage("Wiki: scanning for stale pages…", 3000)
+    else:
+        window.statusBar().showMessage("Wiki watcher not running.", 3000)
+
+
+def _wiki_rebuild_all(window):
+    wm = getattr(window, 'wiki_manager', None)
+    ww = getattr(window, 'wiki_watcher', None)
+    if not wm or not wm.enabled:
+        window.statusBar().showMessage("Wiki not available for this project.", 3000)
+        return
+
+    reply = QMessageBox.question(
+        window, "Rebuild Wiki",
+        f"Regenerate all wiki pages for '{wm.repo_root.name}'?\n\n"
+        f"This will make one API call per source file and may take a while.",
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+    )
+    if reply != QMessageBox.StandardButton.Yes:
+        return
+
+    if ww:
+        ww.trigger_full_update(only_if_empty=False)
+        # Also clear meta so everything is treated as stale
+        wm._meta.clear()
+        wm._save_meta()
+        window.statusBar().showMessage("Wiki: full rebuild started…", 3000)
 
 
 # ── Help ──────────────────────────────────────────────────────────────────────

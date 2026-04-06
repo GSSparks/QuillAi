@@ -42,7 +42,7 @@ class AIWorker(QObject):
         api_url: str = "",
         api_key: str = "",
         backend: str = "openai",
-        wiki_context: str = "",       # ← NEW: pre-built by caller via WikiContextBuilder
+        wiki_context: str = "",       
     ):
         super().__init__()
 

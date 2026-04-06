@@ -524,13 +524,14 @@ class CodeEditor(QMainWindow, ChatRenderer):
  
         # Build wiki context for all non-chat modes.                      
         # Chat mode gets it through ContextEngine.build() instead.        
-        wiki_ctx = ""                                                      
-        if not is_chat and hasattr(self, "wiki_context_builder") and self.wiki_context_builder:        
-            editor = self.current_editor()                                
-            fp = getattr(editor, "file_path", None) if editor else None  
-            if fp:                                                         
-                from pathlib import Path                                   
-                wiki_ctx = self.wiki_context_builder.for_file(Path(fp))  
+        wiki_ctx = ""
+        if not is_chat and hasattr(self, "wiki_context_builder") and self.wiki_context_builder:
+            editor = self.current_editor()
+            fp = getattr(editor, "file_path", None) if editor else None
+            if fp:
+                from pathlib import Path
+                wiki_ctx = self.wiki_context_builder.for_file(Path(fp))
+                print(f"🗂️ Wiki: fp={fp}, repo_root={self.wiki_manager.repo_root}, ctx_len={len(wiki_ctx)}")
  
         return AIWorker(
             prompt=prompt,
