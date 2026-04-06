@@ -5,6 +5,8 @@ import ast
 import re
 import base64
 import threading
+from pathlib import Path                                            # ← WIKI
+
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QProgressBar, QLabel,
                              QDockWidget, QTreeView, QPlainTextEdit, QTextEdit,
@@ -17,6 +19,9 @@ from PyQt6.QtGui import (QFileSystemModel, QAction, QKeySequence, QTextCursor,
                          QSyntaxHighlighter, QTextCharFormat, QFont)
                          
 from core.plugin_manager import PluginManager
+from core.wiki_manager import WikiManager                
+from core.wiki_watcher import WikiWatcher                
+from core.wiki_context_builder import WikiContextBuilder 
 
 from editor.ghost_editor import GhostEditor
 from ai.worker import AIWorker
@@ -286,8 +291,36 @@ class CodeEditor(QMainWindow, ChatRenderer):
 
         self._lang_detect_timer = QTimer()
         self._lang_detect_timer.setSingleShot(True)
-        self._lang_detect_timer.timeout.connect(self._fire_ai_lang_detect)
+        self._lang_detect_timer.timeout.connect(self._fire_ai_lang_detect) 
         self._lang_detect_running = False
+        
+        project_root = (
+            self.git_dock.repo_path
+            if hasattr(self, "git_dock") and self.git_dock.repo_path
+            else os.getcwd()
+        )
+        
+        self.wiki_manager = WikiManager(
+            repo_root=Path(project_root),
+            model=self.settings_manager.get_chat_model(),
+            api_url=self.settings_manager.get_api_url(),
+            api_key=self.settings_manager.get_api_key(),
+            backend=self.settings_manager.get_backend(),
+        )
+        self.wiki_context_builder = WikiContextBuilder(
+            self.wiki_manager, char_budget=3000
+        )
+        self.wiki_watcher = WikiWatcher(
+            self.wiki_manager, repo_root=Path(project_root), parent=self
+        )
+        self.wiki_watcher.update_finished.connect(
+            lambda updated: self.statusBar().showMessage(
+                f"Wiki: {len(updated)} page(s) updated"
+                if updated else "Wiki: up to date", 3000
+            )
+        )
+        self.wiki_watcher.start()
+        QTimer.singleShot(2000, self.wiki_watcher.trigger_full_update)
         
     @pyqtSlot()
     def _on_repo_map_ready(self):
@@ -506,6 +539,17 @@ class CodeEditor(QMainWindow, ChatRenderer):
         model    = (self.settings_manager.get_chat_model() if is_chat
                     else self.settings_manager.get_inline_model())
         api_key  = self.settings_manager.get_api_key()
+ 
+        # Build wiki context for all non-chat modes.                      
+        # Chat mode gets it through ContextEngine.build() instead.        
+        wiki_ctx = ""                                                      
+        if not is_chat and hasattr(self, "wiki_context_builder"):         
+            editor = self.current_editor()                                
+            fp = getattr(editor, "file_path", None) if editor else None  
+            if fp:                                                         
+                from pathlib import Path                                   
+                wiki_ctx = self.wiki_context_builder.for_file(Path(fp))  
+ 
         return AIWorker(
             prompt=prompt,
             editor_text=editor_text,
@@ -517,6 +561,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
             api_url=self.settings_manager.get_api_url(),
             api_key=api_key,
             backend=backend,
+            wiki_context=wiki_ctx,                                         
         )
 
     # ── Language detection ────────────────────────────────────────────────
@@ -1567,17 +1612,14 @@ Instructions:
             )
  
         def _launch(lsp_ctx):
-            # Query vector index synchronously here — we're already
-            # inside the LSP callback which runs on the Qt thread,
-            # but the query is fast (<50ms). For safety, run it before
-            # building context rather than spawning another thread.
-            vector_ctx = None
-            if self.vector_index and self.vector_index.is_ready:
-                try:
-                    vector_ctx = self.vector_index.query(user_text)
-                except Exception as e:
-                    print(f"[vector] query error: {e}")
-    
+            # ── Wiki context (replaces vector index for chat) ────────     
+            wiki_ctx = ""                                                  
+            if hasattr(self, "wiki_context_builder") and file_path:       
+                from pathlib import Path                                   
+                wiki_ctx = self.wiki_context_builder.for_prompt(           
+                    user_text, source_path=Path(file_path)                
+                )                                                           
+ 
             context = self.context_engine.build(
                 user_text      = user_text,
                 active_code    = active_code,
@@ -1589,7 +1631,7 @@ Instructions:
                     self.repo_map.get_context(user_text)
                     if self.repo_map else None
                 ),
-                vector_context = vector_ctx,   # ← add this param
+                vector_context = wiki_ctx,
             )
             prompt_with_context = f"{user_text}\n\n{context}"
 

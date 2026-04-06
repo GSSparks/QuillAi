@@ -49,7 +49,10 @@ class ContextEngine:
         # code, past conversations, accepted completions, and co-edit pairs.
         # Injected after repo_map so orientation comes before specifics.
         if vector_context and used < TOKEN_BUDGET:
-            vc_str = vector_context.format()
+            if isinstance(vector_context, str):                            
+                vc_str = vector_context                                    
+            else:
+                vc_str = vector_context.format()
             if vc_str:
                 parts.append(vc_str)
                 used += self.estimate_tokens(vc_str)
