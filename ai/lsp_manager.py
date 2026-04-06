@@ -50,11 +50,10 @@ LSP_REGISTRY = [
         "lang_id":    "yaml",
         "init_options": {
             "yaml": {
-                "validate": True,
-                "hover":    True,
+                "validate":   True,
+                "hover":      True,
                 "completion": True,
                 "schemas": {
-                    # Ansible schemas from SchemaStore
                     "https://raw.githubusercontent.com/ansible/schemas/main/f/ansible-playbook.json": [
                         "**/playbooks/*.yml",
                         "**/playbooks/*.yaml",
@@ -127,8 +126,6 @@ LSP_REGISTRY = [
         "lang_id":    "json",
         "init_options": {
             "provideFormatter": True,
-            # SchemaStore catalogue — gives the JSON server schema awareness
-            # for common files like package.json, tsconfig.json, etc.
             "schemas": [
                 {
                     "uri":       "https://json.schemastore.org/package.json",
@@ -157,9 +154,22 @@ LSP_REGISTRY = [
         "lang_id":    "markdown",
         "init_options": {},
     },
-    # ── Perl Navigator (perlnavigator) ────────────────────────────────────────────
-    # Install: npm install -g perlnavigator-server
-    # NixOS:   pkgs.perlnavigator  (or via nodePackages)
+    # ── Terraform LSP ─────────────────────────────────────────────────────────
+    # NixOS:   pkgs.terraform-lsp  (or pkgs.terraform-ls)
+    # Install: nix profile install nixpkgs#terraform-lsp
+    # Note:    terraform-lsp supports .tf and .hcl
+    #          terraform-ls (HashiCorp's official) also works —
+    #          just change "cmd" to "terraform-ls" and "args" to ["serve"]
+    {
+        "name":       "terraform-lsp",
+        "cmd":        "terraform-lsp",
+        "args":       [],
+        "extensions": {".tf", ".tfvars", ".hcl"},
+        "lang_id":    "terraform",
+        "init_options": {},
+    },
+    # ── Perl Navigator ────────────────────────────────────────────────────────
+    # NixOS:   pkgs.perlnavigator
     {
         "name":       "perlnavigator",
         "cmd":        "perlnavigator",
@@ -174,10 +184,8 @@ LSP_REGISTRY = [
             }
         },
     },
-     
-    # ── PLS (Perl::LanguageServer) ────────────────────────────────────────────────
-    # Install: cpan PLS   or   cpanm PLS
-    # NixOS:   pkgs.perl.withPackages (p: [ p.PLS ])
+    # ── PLS (Perl::LanguageServer) ────────────────────────────────────────────
+    # Install: cpanm PLS
     {
         "name":       "pls",
         "cmd":        "pls",
@@ -203,12 +211,12 @@ class LSPManager(QObject):
     Routes all LSP calls to the correct client based on file extension.
 
     Signals:
-        server_ready(name)   — a server finished its handshake
+        server_ready(name)      — a server finished its handshake
         server_error(name, msg) — a server reported an error
     """
 
-    server_ready = pyqtSignal(str)          # server name
-    server_error = pyqtSignal(str, str)     # server name, message
+    server_ready = pyqtSignal(str)       # server name
+    server_error = pyqtSignal(str, str)  # server name, message
 
     def __init__(self, project_root: str, parent=None):
         super().__init__(parent)
@@ -296,7 +304,7 @@ class LSPManager(QObject):
             client.definition(file_path, line, col, callback)
         else:
             callback(None)
-            
+
     def rename(self, file_path: str, line: int, col: int,
                new_name: str, callback):
         client = self.client_for(file_path)
@@ -304,10 +312,10 @@ class LSPManager(QObject):
             client.rename(file_path, line, col, new_name, callback=callback)
         else:
             callback(None)
-            
+
     def completion(self, file_path: str, line: int, col: int,
                    trigger_kind: int = 1, trigger_char: str = None,
-                   callback = None):
+                   callback=None):
         client = self.client_for(file_path)
         if client and client.is_ready:
             client.completion(file_path, line, col,
@@ -317,7 +325,7 @@ class LSPManager(QObject):
         else:
             if callback:
                 callback([])
-      
+
     # ─────────────────────────────────────────────────────────────
     # Introspection
     # ─────────────────────────────────────────────────────────────
@@ -335,12 +343,11 @@ class LSPManager(QObject):
     # ─────────────────────────────────────────────────────────────
 
     def _available_servers(self) -> list[dict]:
-        available = [cfg for cfg in LSP_REGISTRY if shutil.which(cfg["cmd"])]
-        return available
+        return [cfg for cfg in LSP_REGISTRY if shutil.which(cfg["cmd"])]
 
     def _start_server(self, cfg: dict):
         name = cfg["name"]
-    
+
         client = LSPClient(
             project_root  = self.project_root,
             cmd           = cfg["cmd"],
@@ -349,35 +356,34 @@ class LSPManager(QObject):
             init_options  = cfg.get("init_options", {}),
             parent        = self,
         )
-    
+
         client.initialized.connect(lambda n=name: self._on_server_ready(n))
         client.error.connect(lambda msg, n=name: self.server_error.emit(n, msg))
         client.stopped.connect(lambda n=name: self._on_server_stopped(n))
-    
+
         client.start()
-    
+
         # Only register extensions not already claimed by a higher-priority server
         for ext in cfg["extensions"]:
-            if ext not in self._ext_map:          # ← don't overwrite
+            if ext not in self._ext_map:
                 self._ext_map[ext] = client
-    
+
         self._clients[name] = client
 
     def _on_server_ready(self, name: str):
         self.server_ready.emit(name)
 
     def _on_server_stopped(self, name: str):
-        # Clean up extension map entries pointing to this client
         client = self._clients.pop(name, None)
         if client:
             dead_exts = [ext for ext, c in self._ext_map.items() if c is client]
             for ext in dead_exts:
                 del self._ext_map[ext]
-                                
+
     # ─────────────────────────────────────────────────────────────
-    # Breadcrumb support
-    # ─────────────────────────────────────────────────────────────                
-                
+    # Breadcrumb / symbol support
+    # ─────────────────────────────────────────────────────────────
+
     def request_document_symbols(self, file_path: str, callback):
         """
         Request textDocument/documentSymbol for file_path.
