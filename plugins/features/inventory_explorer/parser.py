@@ -331,40 +331,41 @@ def parse_inventory_file(file_path: str,
 
 
 def load_inventory(project_root: str) -> Inventory:
-    """
-    Find and load all inventory files in a project.
-
-    Detection strategy (in order):
-    1. Look for ansible.cfg and read [defaults] inventory= setting
-    2. Walk the project tree looking for directories named 'inventory'
-       or 'inventories' at any depth (up to 4 levels)
-    3. Look for common flat inventory filenames at any depth
-    4. Load group_vars/ and host_vars/ relative to each inventory found
-    """
-    inventory = Inventory()
-    found_roots = []  # inventory root dirs/files we've found
+    inventory   = Inventory()
+    found_roots = []
 
     # ── Strategy 1: ansible.cfg ───────────────────────────────────────────
     cfg_inventory = _read_ansible_cfg(project_root)
     if cfg_inventory:
-        full = cfg_inventory if os.path.isabs(cfg_inventory) \
-               else os.path.join(project_root, cfg_inventory)
-        full = os.path.normpath(full)
-        if os.path.exists(full):
+        full = os.path.normpath(
+            cfg_inventory if os.path.isabs(cfg_inventory)
+            else os.path.join(project_root, cfg_inventory)
+        )
+        if os.path.exists(full) and full not in found_roots:
             found_roots.append(full)
 
-    # ── Strategy 2: walk for inventory directories ────────────────────────
-    _INV_DIR_NAMES = {'inventory', 'inventories', 'inv'}
-    _INV_FILE_NAMES = {'hosts', 'hosts.ini', 'hosts.yml', 'hosts.yaml',
-                       'inventory', 'inventory.ini', 'inventory.yml',
-                       'inventory.yaml', 'site.hosts'}
-    _SKIP_DIRS = {'.git', '__pycache__', 'node_modules', '.tox',
-                  'venv', '.venv', '.mypy_cache', 'dist', 'build',
-                  'roles', 'tasks', 'handlers', 'templates', 'files',
-                  'vars', 'defaults', 'meta', 'library', 'filter_plugins'}
+    # ── Strategy 2: common flat files directly in project root ────────────
+    _ROOT_FILES = {
+        'hosts', 'hosts.ini', 'hosts.yml', 'hosts.yaml',
+        'inventory', 'inventory.ini', 'inventory.yml', 'inventory.yaml',
+        'site.hosts',
+    }
+    for name in _ROOT_FILES:
+        fp = os.path.join(project_root, name)
+        if os.path.isfile(fp) and fp not in found_roots:
+            found_roots.append(fp)
+
+    # ── Strategy 3: walk for inventory directories and files ──────────────
+    _INV_DIR_NAMES  = {'inventory', 'inventories', 'inv'}
+    _INV_FILE_NAMES = _ROOT_FILES   # same set, any depth
+    _SKIP_DIRS = {
+        '.git', '__pycache__', 'node_modules', '.tox',
+        'venv', '.venv', '.mypy_cache', 'dist', 'build',
+        'roles', 'tasks', 'handlers', 'templates', 'files',
+        'vars', 'defaults', 'meta', 'library', 'filter_plugins',
+    }
 
     for dirpath, dirnames, filenames in os.walk(project_root):
-        # Limit depth
         depth = dirpath.replace(project_root, '').count(os.sep)
         if depth > 5:
             dirnames.clear()
@@ -374,22 +375,25 @@ def load_inventory(project_root: str) -> Inventory:
                        if d not in _SKIP_DIRS
                        and not d.startswith('.')]
 
-        # Check if this directory IS an inventory directory
+        # Skip project root — already handled above
+        if dirpath == project_root:
+            continue
+
         basename = os.path.basename(dirpath)
-        if basename.lower() in _INV_DIR_NAMES and dirpath != project_root:
+        if basename.lower() in _INV_DIR_NAMES:
             if dirpath not in found_roots:
                 found_roots.append(dirpath)
+            # Don't descend into inventory dirs — we'll walk them ourselves
+            dirnames.clear()
+            continue
 
-        # Check for flat inventory files
         for fn in filenames:
             if fn in _INV_FILE_NAMES:
                 fp = os.path.join(dirpath, fn)
                 if fp not in found_roots:
                     found_roots.append(fp)
 
-    # ── Strategy 3: content sniffing if nothing found ─────────────────────
-    # If we still found nothing, look for any .ini/.yml that looks like
-    # an inventory by scanning content
+    # ── Strategy 4: content sniffing if nothing found ─────────────────────
     if not found_roots:
         for dirpath, dirnames, filenames in os.walk(project_root):
             depth = dirpath.replace(project_root, '').count(os.sep)
@@ -413,12 +417,8 @@ def load_inventory(project_root: str) -> Inventory:
     for root in found_roots:
         if os.path.isfile(root):
             parse_inventory_file(root, inventory)
-            # Look for group_vars/host_vars next to the file
-            _load_group_vars_relative(
-                os.path.dirname(root), inventory
-            )
+            _load_group_vars_relative(os.path.dirname(root), inventory)
         elif os.path.isdir(root):
-            # Parse all files in the inventory directory
             for dirpath, dirnames, filenames in os.walk(root):
                 dirnames[:] = [
                     d for d in dirnames
@@ -432,9 +432,7 @@ def load_inventory(project_root: str) -> Inventory:
                     parse_inventory_file(
                         os.path.join(dirpath, fn), inventory
                     )
-            # group_vars/host_vars inside the inventory dir
             _load_group_vars_relative(root, inventory)
-            # Also check one level up (e.g. playbooks/group_vars/)
             parent = os.path.dirname(root)
             if parent != project_root:
                 _load_group_vars_relative(parent, inventory)
@@ -443,7 +441,6 @@ def load_inventory(project_root: str) -> Inventory:
     _load_group_vars_relative(project_root, inventory)
 
     return inventory
-
 
 def _read_ansible_cfg(project_root: str) -> str:
     """
