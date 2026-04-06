@@ -10,10 +10,10 @@ from PyQt6.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QTreeWidget, QTreeWidgetItem, QLabel, QPushButton,
     QSizePolicy, QSplitter, QTextEdit, QLineEdit,
-    QFrame,
+    QFrame, QMenu
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QColor, QFont, QIcon
+from PyQt6.QtGui import QColor, QFont, QIcon, QCursor
 
 from ui.theme import get_theme, theme_signals, build_dock_stylesheet
 from plugins.features.inventory_explorer.parser import (
@@ -24,6 +24,7 @@ from plugins.features.inventory_explorer.parser import (
 class InventoryExplorerPanel(QDockWidget):
 
     jump_requested = pyqtSignal(str, int)   # file_path, line_num
+    ssh_connect_requested = pyqtSignal(str)       # ssh command
 
     def __init__(self, parent=None):
         super().__init__("Inventory", parent)
@@ -87,6 +88,13 @@ class InventoryExplorerPanel(QDockWidget):
         self._tree.itemClicked.connect(self._on_item_clicked)
         self._tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         splitter.addWidget(self._tree)
+
+        self._tree.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self._tree.customContextMenuRequested.connect(
+            self._on_context_menu
+        )
 
         # Detail panel
         self._detail = QTextEdit()
@@ -225,6 +233,142 @@ class InventoryExplorerPanel(QDockWidget):
                               ('host', host.name))
                 ug_item.addChild(hitem)
             self._tree.addTopLevelItem(ug_item)
+            
+    def _on_context_menu(self, pos):
+        item = self._tree.itemAt(pos)
+        if not item:
+            return
+    
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data:
+            return
+        kind, name = data
+    
+        print(f"[inventory] context menu: data={data}")
+    
+        menu = QMenu(self)
+        t    = self._t
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background: {t['bg1']};
+                color: {t['fg1']};
+                border: 1px solid {t['bg3']};
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 4px 24px 4px 12px;
+                font-size: 9pt;
+            }}
+            QMenu::item:selected {{
+                background: {t['bg2']};
+                color: {t['fg1']};
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background: {t['bg3']};
+                margin: 3px 0;
+            }}
+        """)
+    
+        if kind == 'host':
+            host = self._inventory.hosts.get(name) if self._inventory else None
+            if host:
+                ssh_action = menu.addAction(f"🔗  SSH into {name}")
+                ssh_action.triggered.connect(
+                    lambda checked=False, h=name: self._ssh_connect(h)
+                )
+                menu.addSeparator()
+            jump_action = menu.addAction("↗  Jump to definition")
+            jump_action.triggered.connect(
+                lambda: self._on_item_double_clicked(item, 0)
+            )
+    
+        elif kind in ('group', 'group_ref'):
+            # Collect all reachable hosts recursively
+            hosts = self._collect_hosts(name)
+    
+            if hosts:
+                if len(hosts) == 1:
+                    # Single host — connect directly
+                    hname = hosts[0]
+                    ssh_action = menu.addAction(f"🔗  SSH into {hname}")
+                    ssh_action.triggered.connect(
+                        lambda checked=False, h=hname: self._ssh_connect(h)
+                    )
+                else:
+                    # Multiple hosts — submenu
+                    ssh_menu = menu.addMenu(f"🔗  SSH into…")
+                    ssh_menu.setStyleSheet(menu.styleSheet())
+                    for hname in hosts[:12]:
+                        a = ssh_menu.addAction(hname)
+                        a.triggered.connect(
+                            lambda checked=False, h=hname: self._ssh_connect(h)
+                        )
+                    if len(hosts) > 12:
+                        ssh_menu.addSeparator()
+                        ssh_menu.addAction(
+                            f"… +{len(hosts) - 12} more hosts"
+                        ).setEnabled(False)
+    
+                menu.addSeparator()
+    
+            jump_action = menu.addAction("↗  Jump to definition")
+            jump_action.triggered.connect(
+                lambda: self._on_item_double_clicked(item, 0)
+            )
+    
+        if not menu.isEmpty():
+            menu.exec(QCursor.pos())
+            
+    def _collect_hosts(self, group_name: str,
+                       visited: set = None) -> list[str]:
+        """
+        Recursively collect all host names reachable from a group,
+        including hosts in child groups.
+        """
+        if visited is None:
+            visited = set()
+        if not self._inventory or group_name in visited:
+            return []
+        visited.add(group_name)
+    
+        group = self._inventory.groups.get(group_name)
+        if not group:
+            return []
+    
+        hosts = list(group.hosts)  # direct hosts
+    
+        for child in group.children:
+            hosts += self._collect_hosts(child, visited)
+    
+        # Deduplicate while preserving order
+        seen  = set()
+        dedup = []
+        for h in hosts:
+            if h not in seen:
+                seen.add(h)
+                dedup.append(h)
+    
+        return dedup
+    
+    def _ssh_connect(self, host_name: str):
+        if not self._inventory:
+            return
+        host = self._inventory.hosts.get(host_name)
+        if not host:
+            return
+    
+        from plugins.features.inventory_explorer.parser import resolve_host_vars
+        eff = resolve_host_vars(host, self._inventory)
+        print(f"[ssh] {host_name}")
+        print(f"[ssh] host.user = {repr(host.user)}")
+        print(f"[ssh] eff ansible_user = {repr(eff.get('ansible_user', 'NOT SET'))}")
+        print(f"[ssh] eff keys with user = {[k for k in eff if 'user' in k.lower()]}")
+    
+        from plugins.features.inventory_explorer.ssh_manager import connect_to_host
+        cmd = connect_to_host(host, self._inventory, self)
+        if cmd:
+            self.ssh_connect_requested.emit(cmd)
 
     # ── Filter ────────────────────────────────────────────────────────────
 

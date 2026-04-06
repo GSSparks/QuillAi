@@ -36,6 +36,36 @@ class InventoryExplorerPlugin(FeaturePlugin):
         self._panel.jump_requested.connect(self._on_jump_requested)
         self.on(EVT_PROJECT_OPENED, self._on_project_opened)
         self.on(EVT_FILE_SAVED,     self._on_file_saved)
+        
+        self._panel.ssh_connect_requested.connect(self._on_ssh_connect)
+
+    def _on_ssh_connect(self, cmd: str):
+        """Send SSH command to the terminal."""
+        terminal_dock = getattr(self.app, 'terminal_dock', None)
+        if terminal_dock is None:
+            # Terminal plugin not loaded — show status message
+            self.app.statusBar().showMessage(
+                "Terminal not available — enable the terminal plugin", 4000
+            )
+            return
+    
+        # Show terminal if hidden
+        if not terminal_dock.isVisible():
+            terminal_dock.show()
+            terminal_dock.raise_()
+    
+        # Send command to PTY
+        terminal = terminal_dock._terminal
+        try:
+            import os
+            os.write(terminal._master_fd, f"{cmd}\n".encode())
+            self.app.statusBar().showMessage(
+                f"Connecting to {cmd.split('@')[-1].split()[0]}…", 3000
+            )
+        except (OSError, AttributeError) as e:
+            self.app.statusBar().showMessage(
+                f"Could not send to terminal: {e}", 4000
+            )
 
     # ── Events ────────────────────────────────────────────────────────────
 
