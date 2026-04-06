@@ -343,48 +343,97 @@ class CodeEditor(QMainWindow, ChatRenderer):
             self.filetype_label.setText("")
             self.indent_label.setText("")
             return
-
+    
         cursor = editor.textCursor()
         self.cursor_label.setText(
             f"Ln {cursor.blockNumber() + 1}, Col {cursor.columnNumber() + 1}"
         )
-        
+    
         if editor and hasattr(editor, "multi_cursor") and editor.multi_cursor.active:
             count = editor.multi_cursor.cursor_count()
             self.cursor_label.setText(
                 f"Ln {cursor.blockNumber()+1}, Col {cursor.columnNumber()+1}"
                 f"  ·  {count} cursors"
             )
-
+    
         path = getattr(editor, 'file_path', None)
         if path:
             ext = os.path.splitext(path)[1].lower()
             type_map = {
-                '.py': 'Python', '.md': 'Markdown', '.html': 'HTML',
-                '.htm': 'HTML', '.yml': 'YAML', '.yaml': 'YAML',
-                '.nix': 'Nix', '.sh': 'Bash', '.bash': 'Bash',
-                '.js': 'JavaScript', '.ts': 'TypeScript', '.json': 'JSON',
-                '.toml': 'TOML', '.txt': 'Text',
-                '.pl': 'Perl', '.pm': 'Perl Module', '.t': 'Perl Test',
+                # Python
+                '.py':    'Python',
+                # Web
+                '.html':  'HTML',
+                '.htm':   'HTML',
+                '.css':   'CSS',
+                '.scss':  'SCSS',
+                '.sass':  'Sass',
+                '.less':  'Less',
+                '.js':    'JavaScript',
+                '.jsx':   'JavaScript',
+                '.ts':    'TypeScript',
+                '.tsx':   'TypeScript',
+                # Data / config
+                '.json':  'JSON',
+                '.toml':  'TOML',
+                '.xml':   'XML',
+                '.yml':   'YAML',
+                '.yaml':  'YAML',
+                # Infrastructure
+                '.tf':    'Terraform',
+                '.tfvars':'Terraform Vars',
+                '.hcl':   'HCL',
+                '.nix':   'Nix',
+                # Shell
+                '.sh':    'Bash',
+                '.bash':  'Bash',
+                '.zsh':   'Zsh',
+                '.fish':  'Fish',
+                # Scripting
+                '.pl':    'Perl',
+                '.pm':    'Perl Module',
+                '.t':     'Perl Test',
+                '.lua':   'Lua',
+                '.rb':    'Ruby',
+                '.php':   'PHP',
+                # Systems
+                '.rs':    'Rust',
+                '.go':    'Go',
+                '.c':     'C',
+                '.h':     'C Header',
+                '.cpp':   'C++',
+                '.hpp':   'C++ Header',
+                '.java':  'Java',
+                '.kt':    'Kotlin',
+                '.swift': 'Swift',
+                # Docs
+                '.md':    'Markdown',
+                '.rst':   'reStructuredText',
+                '.txt':   'Text',
+                '.tex':   'LaTeX',
+                # SQL
+                '.sql':   'SQL',
+                # CI/CD
+                '.gitlab-ci.yml':  'GitLab CI',
             }
             self.filetype_label.setText(
                 type_map.get(ext, ext.lstrip('.').upper() or 'Plain Text')
             )
         else:
             self.filetype_label.setText('Plain Text')
-
+    
         text = editor.toPlainText()
         tab_count   = sum(1 for l in text.split('\n') if l.startswith('\t'))
         space_count = sum(1 for l in text.split('\n') if l.startswith('    '))
         self.indent_label.setText("Tabs" if tab_count > space_count else "Spaces: 4")
-
+    
         if '\r\n' in text:
             self.lineending_label.setText("CRLF")
         elif '\r' in text:
             self.lineending_label.setText("CR")
         else:
             self.lineending_label.setText("LF")
-
+    
         if path and os.path.exists(path):
             try:
                 import chardet

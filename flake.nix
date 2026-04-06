@@ -22,6 +22,7 @@
         pkgs.nil
         pkgs.lua-language-server
         pkgs.perlnavigator
+        pkgs.terraform-lsp
       ];
 
       quillaiDesktop = pkgs.makeDesktopItem {
@@ -94,6 +95,7 @@
               pkgs.git
               python
               pkgs.shellcheck
+              pkgs.ansible
             ] ++ lspServers)}
 
           runHook postInstall
@@ -115,7 +117,6 @@
             requests
             markdown
             pygments
-            python-lsp-server
             sentence-transformers
             chromadb
           ]))
@@ -146,6 +147,7 @@
             vscode-markdown-language-server \
             nil \
             perlnavigator \
+            terraform-lsp \
             lua-language-server; do
             if command -v "$srv" &>/dev/null; then
               echo "  ✓ $srv"

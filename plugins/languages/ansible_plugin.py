@@ -1,49 +1,59 @@
-from PyQt6.QtGui import QTextCharFormat, QColor, QFont
+from editor.highlighter import LanguagePlugin, THEME
 from PyQt6.QtCore import QRegularExpression
 
-# [NEW] Import your base class from the highlighter engine!
-from editor.highlighter import LanguagePlugin
 
 class AnsiblePlugin(LanguagePlugin):
     EXTENSIONS = ['.yml', '.yaml']
+
     def __init__(self):
-        # [NEW] Call the parent init to set up self.rules and the multiline attributes
         super().__init__()
 
-        # --- Define Color Formats ---
+        # ── YAML keys (name:, hosts:, tasks:, become:, etc.) ─────────────
+        self.add_rule(r'\b[\w-]+\s*(?=:)', 'keyword')
 
-        # 1. YAML Keys (e.g., name:, hosts:, tasks:, apt:)
-        key_format = QTextCharFormat()
-        key_format.setForeground(QColor("#569CD6")) # VS Code Blue
-        key_format.setFontWeight(QFont.Weight.Bold)
-        self.rules.append((QRegularExpression(r'\b[\w-]+\s*(?=:)'), key_format))
+        # ── Ansible module names (values after the key on their own line) ─
+        # e.g. ansible.builtin.copy, ansible.builtin.command
+        self.add_rule(r'\bansible\.\w+\.\w+\b', 'builtin')
+        self.add_rule(r'\b(apt|yum|dnf|pip|copy|template|file|service|'
+                      r'command|shell|debug|fail|assert|stat|set_fact|'
+                      r'include_tasks|import_tasks|import_playbook|'
+                      r'include_role|import_role|register|notify|handler|'
+                      r'block|rescue|always|loop|with_items|with_dict|'
+                      r'when|tags|vars|vars_files|gather_facts|become|'
+                      r'become_user|ignore_errors|changed_when|failed_when|'
+                      r'no_log|delegate_to|run_once|serial|strategy)\b',
+                      'builtin')
 
-        # 2. YAML List Dashes (-)
-        dash_format = QTextCharFormat()
-        dash_format.setForeground(QColor("#D4D4D4")) # Light Grey
-        dash_format.setFontWeight(QFont.Weight.Bold)
-        self.rules.append((QRegularExpression(r'^\s*-\s'), dash_format))
+        # ── YAML list dashes ─────────────────────────────────────────────
+        self.add_rule(r'^\s*-\s', 'operator')
 
-        # 3. Booleans (yes, no, true, false)
-        boolean_format = QTextCharFormat()
-        boolean_format.setForeground(QColor("#C586C0")) # Purple
-        boolean_format.setFontWeight(QFont.Weight.Bold)
-        self.rules.append((QRegularExpression(r'\b(true|false|yes|no)\b', QRegularExpression.PatternOption.CaseInsensitiveOption), boolean_format))
+        # ── Booleans ──────────────────────────────────────────────────────
+        self.add_rule(
+            r'\b(true|false|yes|no|True|False|Yes|No|null|~)\b',
+            'keyword'
+        )
 
-        # 4. Strings (Single and Double Quotes)
-        string_format = QTextCharFormat()
-        string_format.setForeground(QColor("#CE9178")) # Orange/Brown
-        self.rules.append((QRegularExpression(r'".*?"'), string_format))
-        self.rules.append((QRegularExpression(r"'.*?'"), string_format))
+        # ── Numbers ───────────────────────────────────────────────────────
+        self.add_rule(r'\b[0-9]+(\.[0-9]+)?\b', 'number')
 
-        # 5. Jinja2 Templating Variables ( {{ variable_name }} )
-        jinja_format = QTextCharFormat()
-        jinja_format.setForeground(QColor("#4EC9B0")) # Bright Cyan/Teal
-        jinja_format.setBackground(QColor("#252526")) # Slight dark inset
-        self.rules.append((QRegularExpression(r'\{\{.*?\}\}'), jinja_format))
+        # ── Strings ───────────────────────────────────────────────────────
+        self.add_rule(r'"[^"\\]*(\\.[^"\\]*)*"', 'string')
+        self.add_rule(r"'[^'\\]*(\\.[^'\\]*)*'", 'string')
 
-        # 6. Comments (#)
-        comment_format = QTextCharFormat()
-        comment_format.setForeground(QColor("#6A9955")) # Green
-        comment_format.setFontItalic(True)
-        self.rules.append((QRegularExpression(r'#.*'), comment_format))
+        # ── Jinja2 variables {{ var }} ────────────────────────────────────
+        self.add_rule(r'\{\{.*?\}\}', 'string2')
+
+        # ── Jinja2 blocks {% ... %} ───────────────────────────────────────
+        self.add_rule(r'\{%.*?%\}', 'builtin')
+
+        # ── Comments ──────────────────────────────────────────────────────
+        self.add_rule(r'#[^\n]*', 'comment')
+
+        # ── YAML anchors and aliases (&anchor, *alias) ────────────────────
+        self.add_rule(r'&\w+', 'class_def')
+        self.add_rule(r'\*\w+', 'func_def')
+
+        # ── Multiline strings (| and > block scalars) ─────────────────────
+        self.multiline_start  = QRegularExpression(r'[|>][-+]?\s*$')
+        self.multiline_end    = QRegularExpression(r'^(?!\s)')
+        self.multiline_format = THEME['string']

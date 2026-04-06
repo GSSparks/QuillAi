@@ -136,6 +136,14 @@ class TerminalView(QWidget):
             env['COLORTERM'] = 'truecolor'
             env['COLUMNS']   = str(self._cols)
             env['LINES']     = str(self._rows)
+            
+            # Force clean readline — don't inherit parent shell's settings
+            env.pop('READLINE_POINT', None)
+            env.pop('READLINE_LINE', None)  
+            env.pop('BASH_ENV', None)
+            
+            # Use a minimal inputrc that doesn't interfere with our PTY
+            env['INPUTRC'] = '/dev/null'
     
             os.execvpe(shell, args, env)
             os._exit(1)
@@ -181,6 +189,16 @@ class TerminalView(QWidget):
         QTimer.singleShot(100, self._drain)
         QTimer.singleShot(300, self._drain)
         QTimer.singleShot(600, self._drain)
+
+        QTimer.singleShot(200, self._disable_bracketed_paste)
+        
+    def _disable_bracketed_paste(self):
+        """Disable bracketed paste mode inherited from parent shell."""
+        if self._master_fd is not None:
+            try:
+                os.write(self._master_fd, b'\x1b[?2004l\n')
+            except OSError:
+                pass        
         
     def _drain(self):
         """Read any pending PTY output — used to catch the initial prompt."""
