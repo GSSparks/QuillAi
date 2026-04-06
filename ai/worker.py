@@ -17,6 +17,13 @@ def clean_code(text: str) -> str:
     return text.strip()
 
 
+def _wiki_block(wiki_context: str) -> str:
+    """Wrap wiki context in a labeled XML block for the model."""
+    if not wiki_context:
+        return ""
+    return f"\n\n<wiki_context>\n{wiki_context.strip()}\n</wiki_context>"
+
+
 class AIWorker(QObject):
     update_ghost = pyqtSignal(str)
     function_ready = pyqtSignal(str)
@@ -34,7 +41,8 @@ class AIWorker(QObject):
         model: str = "",
         api_url: str = "",
         api_key: str = "",
-        backend: str = "openai",  # 🔥 NEW: explicit backend
+        backend: str = "openai",
+        wiki_context: str = "",       # ← NEW: pre-built by caller via WikiContextBuilder
     ):
         super().__init__()
 
@@ -48,6 +56,7 @@ class AIWorker(QObject):
         self.api_url = api_url.rstrip("/")
         self.api_key = api_key
         self.backend = backend.lower()
+        self.wiki_context = wiki_context  # ← NEW
 
         self._cancelled = False
 
@@ -56,6 +65,7 @@ class AIWorker(QObject):
 
     def build_messages(self):
         lang = self._detect_language()
+        wiki = _wiki_block(self.wiki_context)
 
         if self.is_chat:
             system = (
@@ -71,9 +81,12 @@ class AIWorker(QObject):
                 "If memory or past conversations are provided, use them to give "
                 "more personalised and relevant responses."
             )
+            # Wiki injected into user message so the model attends to it
+            # alongside the actual question, not buried in system.
+            user_content = self.prompt + wiki
             return [
                 {"role": "system", "content": system},
-                {"role": "user", "content": self.prompt},
+                {"role": "user", "content": user_content},
             ]
 
         before = self.editor_text[max(0, self.cursor_pos - 1000):self.cursor_pos]
@@ -85,7 +98,10 @@ class AIWorker(QObject):
                     "role": "system",
                     "content": "Return ONLY clean Python code. No markdown. No explanation.",
                 },
-                {"role": "user", "content": self.prompt},
+                {
+                    "role": "user",
+                    "content": self.prompt + wiki,
+                },
             ]
 
         elif self.generate_function:
@@ -107,7 +123,7 @@ Context AFTER:
 
 Request:
 {self.prompt}
-
+{wiki}
 Rules:
 - Only Python code
 - No markdown
@@ -117,6 +133,9 @@ Rules:
             ]
 
         else:
+            # Inline ghost — wiki prepended to context_before so FIM and
+            # chat-fallback paths both receive it naturally.
+            wiki_prefix = wiki + "\n\n" if wiki else ""
             return [
                 {
                     "role": "system",
@@ -126,7 +145,7 @@ Rules:
                     "role": "user",
                     "content": f"""
 <context_before>
-{before}
+{wiki_prefix}{before}
 </context_before>
 <context_after>
 {after}
@@ -140,7 +159,6 @@ Do NOT repeat any code from context_after.
 
     def _detect_language(self) -> str:
         """Infer the language from the editor context."""
-        # Check for language hints in the prompt/context
         context = (self.prompt + self.editor_text).lower()
         patterns = [
             ("Python",     ["def ", "import ", "class ", "elif ", "print("]),
@@ -176,7 +194,7 @@ Do NOT repeat any code from context_after.
                 headers["Authorization"] = f"Bearer {self.api_key.strip()}"
 
             # -------------------------------
-            # 🚀 ROUTING LOGIC (FIXED)
+            # 🚀 ROUTING LOGIC
             # -------------------------------
             if is_inline:
                 if is_local:
@@ -186,10 +204,14 @@ Do NOT repeat any code from context_after.
                     before = self.editor_text[max(0, self.cursor_pos - 1000):self.cursor_pos]
                     after = self.editor_text[self.cursor_pos:self.cursor_pos + 300]
 
+                    # Prepend wiki context to FIM prefix when available
+                    wiki = _wiki_block(self.wiki_context)
+                    fim_prefix = (wiki + "\n\n" + before) if wiki else before
+
                     print(f"👻 Using llama.cpp FIM → {target_url}")
 
                     payload = {
-                        "input_prefix": before,
+                        "input_prefix": fim_prefix,
                         "input_suffix": after,
                         "temperature": 0.1,
                         "stream": True,
@@ -219,9 +241,9 @@ Do NOT repeat any code from context_after.
                     "temperature": 0.7 if not is_inline else 0.1,
                     "stream": True,
                 }
-                
-            print(f"🌐 Backend: {self.backend} | URL: {target_url}")
-            
+
+            print(f"🌐 Backend: {self.backend} | URL: {target_url} | Wiki context: {len(self.wiki_context)} chars")
+
             timeout = 5 if is_inline else 60
 
             response = requests.post(
