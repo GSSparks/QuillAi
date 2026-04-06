@@ -72,14 +72,28 @@ def _wiki_path_for(wiki_dir: Path, source_rel: Path) -> Path:
     return wiki_dir / md_rel
 
 
-def _collect_python_files(repo_root: Path) -> list[Path]:
-    """Return all .py files in the repo, ignoring common noise dirs."""
+# All file extensions the wiki will document
+_WIKI_EXTENSIONS = {
+    ".py", ".js", ".jsx", ".ts", ".tsx",
+    ".html", ".htm", ".css", ".scss", ".sass", ".less",
+    ".json", ".toml", ".xml", ".yml", ".yaml",
+    ".tf", ".tfvars", ".hcl", ".nix",
+    ".sh", ".bash", ".zsh", ".fish",
+    ".pl", ".pm", ".lua", ".rb", ".php",
+    ".rs", ".go", ".c", ".h", ".cpp", ".hpp",
+    ".java", ".kt", ".swift",
+    ".md", ".rst", ".txt", ".tex",
+    ".sql",
+}
+
+def _collect_source_files(repo_root: Path) -> list[Path]:
+    """Return all wiki-able source files in the repo, ignoring noise dirs."""
     result: list[Path] = []
     for root, dirs, files in os.walk(repo_root):
         root_path = Path(root)
         dirs[:] = [d for d in dirs if d not in _IGNORE_DIRS]
         for f in files:
-            if f.endswith(".py"):
+            if Path(f).suffix.lower() in _WIKI_EXTENSIONS:
                 result.append((root_path / f).resolve())
     return sorted(result)
 
@@ -97,7 +111,7 @@ def _parse_dependents_from_dep_sections(
     """
     reverse: dict[str, list[str]] = {}
     dep_re = re.compile(r"## Dependencies\n(.*?)(?=\n##|\Z)", re.DOTALL)
-    bullet_re = re.compile(r"`([^`]+\.py)`")
+    bullet_re = re.compile(r"`([^`]+\.[a-z]+)`")
 
     for module_path, wiki_text in pages.items():
         m = dep_re.search(wiki_text)
@@ -196,7 +210,7 @@ class WikiManager:
         if not self.enabled:
             return []
         with self._lock:
-            py_files = _collect_python_files(self.repo_root)
+            py_files = _collect_source_files(self.repo_root)
             stale = [
                 f for f in py_files
                 if force or self._is_stale(f)
@@ -318,7 +332,7 @@ class WikiManager:
             return []
         return [
             str(f.relative_to(self.repo_root))
-            for f in _collect_python_files(self.repo_root)
+            for f in _collect_source_files(self.repo_root)
             if self._is_stale(f)
         ]
 

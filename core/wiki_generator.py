@@ -19,7 +19,7 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 _MODULE_PROMPT = """\
-You are a technical documentation assistant. Analyze the following Python source \
+You are a technical documentation assistant. Analyze the following {language} source \
 file and produce a structured Markdown wiki page for it.
 
 The wiki page MUST follow this exact format (do not add extra sections):
@@ -27,25 +27,26 @@ The wiki page MUST follow this exact format (do not add extra sections):
 # {module_path}
 
 ## Summary
-One or two sentences describing what this module does and its role in the application.
+One or two sentences describing what this file does and its role in the application.
 
 ## Key Symbols
 A table with columns: | Symbol | Kind | Description |
-List every public class, function, and important constant. Keep descriptions to one line.
+List every public class, function, variable, rule, key, or other important definition. Keep descriptions to one line.
 
 ## Dependencies
-List only intra-project imports (same repo). Format as a bullet list of relative paths, e.g. `core/lsp_manager.py`.
+List only intra-project imports or includes (same repo). Format as a bullet list of relative paths, e.g. `core/lsp_manager.py`.
+If the file type does not have imports (e.g. JSON, YAML, plain text), write `_N/A._`
 
 ## Dependents
 Leave this section as the exact placeholder text: `<!-- dependents: auto-filled by WikiManager -->`
 
 ## Notes
-Any notable architectural patterns, non-obvious design decisions, or warnings. \
+Any notable patterns, non-obvious design decisions, or warnings. \
 If there is nothing noteworthy, write `_None._`
 
 ---
-SOURCE FILE: {module_path}
-```python
+SOURCE FILE: {module_path} ({language})
+```
 {source}
 ```
 """
@@ -131,6 +132,33 @@ def _extract_summary(wiki_text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Language detection
+# ---------------------------------------------------------------------------
+
+_EXT_TO_LANGUAGE = {
+    ".py": "Python", ".js": "JavaScript", ".jsx": "JavaScript",
+    ".ts": "TypeScript", ".tsx": "TypeScript",
+    ".html": "HTML", ".htm": "HTML", ".css": "CSS",
+    ".scss": "SCSS", ".sass": "Sass", ".less": "Less",
+    ".json": "JSON", ".toml": "TOML", ".xml": "XML",
+    ".yml": "YAML", ".yaml": "YAML",
+    ".tf": "Terraform", ".tfvars": "Terraform", ".hcl": "HCL", ".nix": "Nix",
+    ".sh": "Bash", ".bash": "Bash", ".zsh": "Zsh", ".fish": "Fish",
+    ".pl": "Perl", ".pm": "Perl", ".lua": "Lua", ".rb": "Ruby", ".php": "PHP",
+    ".rs": "Rust", ".go": "Go", ".c": "C", ".h": "C",
+    ".cpp": "C++", ".hpp": "C++", ".java": "Java",
+    ".kt": "Kotlin", ".swift": "Swift",
+    ".md": "Markdown", ".rst": "reStructuredText",
+    ".txt": "Text", ".tex": "LaTeX", ".sql": "SQL",
+}
+
+def _language_for(path: Path) -> str:
+    """Return a human-readable language name for a source file."""
+    return _EXT_TO_LANGUAGE.get(path.suffix.lower(), path.suffix.lstrip(".").upper() or "text")
+
+
+
+# ---------------------------------------------------------------------------
 # WikiGenerator
 # ---------------------------------------------------------------------------
 
@@ -191,8 +219,10 @@ class WikiGenerator:
         if len(lines) > 800:
             source = "\n".join(lines[:800]) + "\n# ... (truncated)"
 
+        language = _language_for(source_path)
         prompt = _MODULE_PROMPT.format(
             module_path=str(rel),
+            language=language,
             source=source,
         )
         markdown = self._call_api(prompt)
@@ -261,9 +291,12 @@ class WikiGenerator:
         self, markdown: str, source: str, source_path: Path
     ) -> str:
         """
-        Replace the Dependencies section with AST-derived intra-project imports.
-        This overrides whatever the LLM produced to ensure accuracy.
+        For Python files: replace Dependencies section with AST-derived imports.
+        For all other file types: leave the LLM-generated section as-is.
         """
+        if source_path.suffix.lower() != ".py":
+            return markdown
+
         deps = _extract_imports(source, self.repo_root, source_path)
         if deps:
             dep_block = "\n".join(f"- `{d}`" for d in deps)
@@ -271,7 +304,6 @@ class WikiGenerator:
             dep_block = "_None._"
 
         new_section = f"## Dependencies\n{dep_block}"
-        # Replace the LLM's Dependencies section
         markdown = re.sub(
             r"## Dependencies\n.*?(?=\n##|\Z)",
             new_section + "\n",

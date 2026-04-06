@@ -55,7 +55,8 @@ class _UpdateWorker(QObject):
         updated: list[str] = []
         try:
             for src in self._files:
-                if not src.suffix == ".py":
+                from core.wiki_manager import _WIKI_EXTENSIONS
+                if src.suffix.lower() not in _WIKI_EXTENSIONS:
                     continue
                 was_updated = self._wm.update_file(src)
                 if was_updated:
@@ -210,7 +211,8 @@ class WikiWatcher(QObject):
             return
 
         changed = self._changed_files_since_last_commit()
-        py_files = [f for f in changed if f.suffix == ".py" and f.exists()]
+        from core.wiki_manager import _WIKI_EXTENSIONS
+        py_files = [f for f in changed if f.suffix.lower() in _WIKI_EXTENSIONS and f.exists()]
 
         if not py_files:
             return
