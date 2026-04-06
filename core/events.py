@@ -66,3 +66,21 @@ Emitted for each chunk of output from the terminal.
 kwargs:
     text (str) — raw text chunk from the PTY
 """
+
+EVT_RUN_FAILURE = "run_failure"
+"""
+kwargs:
+    run_event  (RunEvent) — the parsed failure event
+    code       (str)      — contents of the relevant file, if found
+    file_path  (str)      — absolute path to the relevant file, if found
+"""
+
+EVT_RUN_COMPLETE = "run_complete"
+"""
+Emitted when a run finishes (PLAY RECAP detected).
+
+kwargs:
+    tool    (str)  — "ansible" | "terraform"
+    success (bool) — True if no failures
+    summary (str)  — recap text
+"""

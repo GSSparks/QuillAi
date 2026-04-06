@@ -10,9 +10,9 @@ import os
 from PyQt6.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QListWidget, QListWidgetItem, QPushButton, QLabel,
-    QSizePolicy,
+    QSizePolicy, QFrame,
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QColor, QFont
 
 from ui.theme import get_theme, theme_signals, build_dock_stylesheet
@@ -29,8 +29,9 @@ _SEV_COLORS = {
 
 class RunAnalyzerPanel(QDockWidget):
 
-    # Emitted when user clicks a result with a file hint
-    jump_requested = pyqtSignal(str)   # search term
+    jump_requested    = pyqtSignal(str)       # search term
+    fix_requested     = pyqtSignal(object)    # RunEvent — ask AI to fix
+    chat_requested    = pyqtSignal(str, str)  # prompt, context
 
     def __init__(self, parent=None):
         super().__init__("Run Analyzer", parent)
@@ -47,8 +48,6 @@ class RunAnalyzerPanel(QDockWidget):
         self._build_ui()
         self._apply_theme(self._t)
         theme_signals.theme_changed.connect(self._apply_theme)
-
-    # ── UI ────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
         container = QWidget()
@@ -75,6 +74,28 @@ class RunAnalyzerPanel(QDockWidget):
 
         layout.addWidget(header)
 
+        # Inline suggestion banner — hidden until a failure occurs
+        self._banner = QFrame()
+        self._banner.setFrameShape(QFrame.Shape.NoFrame)
+        bl = QHBoxLayout(self._banner)
+        bl.setContentsMargins(8, 4, 8, 4)
+
+        self._banner_label = QLabel("")
+        self._banner_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self._banner_label.setWordWrap(True)
+        bl.addWidget(self._banner_label)
+
+        self._fix_btn = QPushButton("💡 Ask AI to fix")
+        self._fix_btn.setFixedHeight(26)
+        self._fix_btn.clicked.connect(self._on_fix_clicked)
+        bl.addWidget(self._fix_btn)
+
+        self._banner_event = None
+        self._banner.hide()
+        layout.addWidget(self._banner)
+
         # Event list
         self._list = QListWidget()
         self._list.setAlternatingRowColors(False)
@@ -84,12 +105,11 @@ class RunAnalyzerPanel(QDockWidget):
 
         self.setWidget(container)
 
-    # ── Theme ─────────────────────────────────────────────────────────────
-
     def _apply_theme(self, t: dict):
         self._t = t
         self.setStyleSheet(build_dock_stylesheet(t))
         self._restyle_list()
+        self._restyle_banner()
 
     def _restyle_list(self):
         t = self._t
@@ -108,21 +128,71 @@ class RunAnalyzerPanel(QDockWidget):
             }}
         """)
 
+    def _restyle_banner(self):
+        t = self._t
+        self._banner.setStyleSheet(f"""
+            QFrame {{
+                background: {t.get('bg1', '#3c3836')};
+                border-bottom: 1px solid {t.get('bg3', '#665c54')};
+            }}
+        """)
+        self._banner_label.setStyleSheet(
+            f"color: {t.get('yellow', '#fabd2f')}; font-size: 9pt;"
+        )
+        self._fix_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {t.get('bg2', '#504945')};
+                color: {t.get('fg1', '#ebdbb2')};
+                border: 1px solid {t.get('bg3', '#665c54')};
+                border-radius: 3px;
+                padding: 2px 10px;
+                font-size: 9pt;
+            }}
+            QPushButton:hover {{
+                background: {t.get('bg3', '#665c54')};
+            }}
+        """)
+
     # ── Public API ────────────────────────────────────────────────────────
 
     def add_event(self, event: RunEvent):
         self._events.append(event)
         self._add_item(event)
-        # Auto-show on first error
         if event.severity == Severity.ERROR and not self.isVisible():
             self.show()
             self.raise_()
         self._update_status()
 
+    def show_suggestion(self, event: RunEvent, past_fix: str = None):
+        """Show the inline AI suggestion banner for a failure."""
+        self._banner_event = event
+        if past_fix:
+            self._banner_label.setText(
+                f"⟳  Similar failure fixed before — AI has the context"
+            )
+        else:
+            task = event.task_name or event.title
+            self._banner_label.setText(
+                f"✗  Failed: {task[:60]}{'…' if len(task) > 60 else ''}"
+            )
+        self._banner.show()
+
+    def hide_suggestion(self):
+        self._banner.hide()
+        self._banner_event = None
+
     def clear(self):
         self._events.clear()
         self._list.clear()
+        self._banner.hide()
+        self._banner_event = None
         self._status.setText("Watching terminal output…")
+
+    # ── Banner ────────────────────────────────────────────────────────────
+
+    def _on_fix_clicked(self):
+        if self._banner_event:
+            self.fix_requested.emit(self._banner_event)
 
     # ── Item rendering ────────────────────────────────────────────────────
 
@@ -131,7 +201,6 @@ class RunAnalyzerPanel(QDockWidget):
         color_key, icon = _SEV_COLORS.get(event.severity, ("fg4", "▸"))
         color      = QColor(t.get(color_key, '#a89984'))
 
-        # Main line
         tool_badge = f"[{event.tool}] " if event.tool else ""
         text       = f"{icon}  {tool_badge}{event.title}"
         if event.detail:
@@ -170,11 +239,15 @@ class RunAnalyzerPanel(QDockWidget):
         t        = self._t
         if errors:
             self._status.setStyleSheet(f"color: {t.get('red', '#fb4934')};")
-            self._status.setText(f"{errors} error{'s' if errors > 1 else ''}  "
-                                  f"{warnings} warning{'s' if warnings != 1 else ''}")
+            self._status.setText(
+                f"{errors} error{'s' if errors > 1 else ''}  "
+                f"{warnings} warning{'s' if warnings != 1 else ''}"
+            )
         elif warnings:
             self._status.setStyleSheet(f"color: {t.get('yellow', '#fabd2f')};")
-            self._status.setText(f"{warnings} warning{'s' if warnings != 1 else ''}")
+            self._status.setText(
+                f"{warnings} warning{'s' if warnings != 1 else ''}"
+            )
         else:
             self._status.setStyleSheet(f"color: {t.get('green', '#b8bb26')};")
             self._status.setText(

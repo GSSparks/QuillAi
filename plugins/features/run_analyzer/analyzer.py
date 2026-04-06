@@ -7,7 +7,7 @@ emits structured RunEvents.
 
 import re
 from plugins.features.run_analyzer.parsers import (
-    AnsibleParser, TerraformParser, RunEvent
+    AnsibleParser, TerraformParser, RunEvent, Severity
 )
 
 
@@ -24,47 +24,46 @@ class RunAnalyzer:
     and routes lines to the appropriate parser.
     """
 
-    def __init__(self, on_event):
+    def __init__(self, on_event, on_failure=None, on_complete=None):
         """
         on_event: callable(RunEvent) — called for each detected event
         """
-        self._on_event  = on_event
-        self._buf       = ""
-        self._tool      = None   # "ansible" | "terraform" | None
-        self._ansible   = AnsibleParser()
-        self._terraform = TerraformParser()
+        self._on_event    = on_event
+        self._on_failure  = on_failure   
+        self._on_complete = on_complete 
+        self._buf         = ""
+        self._tool        = None
+        self._ansible     = AnsibleParser()
+        self._terraform   = TerraformParser()
+        self._had_failure = False
 
     def feed(self, text: str):
-        # Strip ANSI before buffering
         clean = _RE_ANSI.sub('', text)
         self._buf += clean
         while '\n' in self._buf:
             line, self._buf = self._buf.split('\n', 1)
             self._process_line(line)
-            
+
     def reset(self):
-        """Call when a new command starts."""
-        self._buf       = ""
-        self._tool      = None
-        self._ansible   = AnsibleParser()
-        self._terraform = TerraformParser()
+        self._buf         = ""
+        self._tool        = None
+        self._ansible     = AnsibleParser()
+        self._terraform   = TerraformParser()
+        self._had_failure = False
 
     def _process_line(self, line: str):
-        # Auto-detect tool from output
         if self._tool is None:
-            if _RE_ANSIBLE.search(line):
+            if re.search(r'ansible-playbook|ansible ', line):
                 self._tool = "ansible"
-            elif _RE_TERRAFORM.search(line):
+            elif re.search(r'\bterraform\b|\btofu\b', line):
                 self._tool = "terraform"
 
-        # Route to parser
         events = []
         if self._tool == "ansible":
             events = self._ansible.feed_line(line)
         elif self._tool == "terraform":
             events = self._terraform.feed_line(line)
         else:
-            # Try both parsers speculatively
             events = (
                 self._ansible.feed_line(line) or
                 self._terraform.feed_line(line)
@@ -72,3 +71,16 @@ class RunAnalyzer:
 
         for event in events:
             self._on_event(event)
+
+            if event.severity == Severity.ERROR:
+                self._had_failure = True
+                if self._on_failure:
+                    self._on_failure(event)
+
+            # Recap = run complete
+            if event.title.startswith("Recap:") and self._on_complete:
+                self._on_complete(
+                    self._tool or "ansible",
+                    not self._had_failure,
+                    event.detail,
+                )
