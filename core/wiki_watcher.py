@@ -164,18 +164,20 @@ class WikiWatcher(QObject):
             self._debounce_timer.stop()
         self._cleanup_thread()
 
-    def trigger_full_update(self, only_if_empty: bool = True) -> None:
+    def trigger_full_update(self, only_if_empty: bool = False) -> None:
         """
-        Trigger an incremental wiki update for stale files.
+        Scan for all stale files and process them in the background.
 
         The stale file scan runs on a background thread to avoid blocking
-        the Qt main thread on large repos.
+        the Qt main thread on large repos. When the worker finishes,
+        _on_worker_finished chains into another scan automatically until
+        no stale files remain.
 
         Parameters
         ----------
         only_if_empty : bool
-            If True (default), only bootstraps when wiki has no pages yet.
-            Set False to force a full rescan (e.g. after a pull).
+            If True, only runs when wiki has no pages yet (first bootstrap).
+            Default is False — always scan for stale files.
         """
         if self._busy:
             return
@@ -188,11 +190,24 @@ class WikiWatcher(QObject):
         def _scan_and_dispatch():
             stale = [self.repo_root / p for p in self._wm.stale_files()]
             if stale:
-                # Use QTimer to hop back onto the Qt thread before dispatching
                 from PyQt6.QtCore import QTimer as _QTimer
                 _QTimer.singleShot(0, lambda: self._dispatch_update(stale))
 
         _threading.Thread(target=_scan_and_dispatch, daemon=True).start()
+
+    def queue_file(self, source_path) -> None:
+        """
+        Queue a single file for wiki update if stale.
+        Used by open_file_in_tab for on-demand generation.
+        """
+        if self._busy:
+            return
+        from pathlib import Path as _Path
+        src = _Path(source_path).resolve()
+        if not self._wm.is_stale(src):
+            return
+        from PyQt6.QtCore import QTimer as _QTimer
+        _QTimer.singleShot(0, lambda: self._dispatch_update([src]))
 
     # ------------------------------------------------------------------
     # Private — git helpers
@@ -299,6 +314,8 @@ class WikiWatcher(QObject):
         self._busy = False
         self.update_finished.emit(updated)
         self._cleanup_thread()
+        # Chain — scan for any remaining stale files and keep going
+        self.trigger_full_update()
 
     def _on_worker_failed(self, error: str) -> None:
         self._busy = False

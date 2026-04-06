@@ -755,16 +755,10 @@ class CodeEditor(QMainWindow, ChatRenderer):
         # ── Wiki — generate page on demand if stale ───────────────────
         if (editor_to_focus
                 and hasattr(self, 'wiki_watcher')
-                and self.wiki_watcher
-                and not self.wiki_watcher._busy):
+                and self.wiki_watcher):
             _fp = getattr(editor_to_focus, 'file_path', None)
             if _fp:
-                import threading as _t
-                _t.Thread(
-                    target=self.wiki_manager.update_file,
-                    args=(Path(_fp),),
-                    daemon=True,
-                ).start()
+                self.wiki_watcher.queue_file(Path(_fp))
  
         if editor_to_focus and line_number is not None:
             cursor = editor_to_focus.textCursor()

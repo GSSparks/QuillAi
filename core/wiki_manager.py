@@ -345,6 +345,13 @@ class WikiManager:
                 result[rel] = self._generator.extract_summary(text)
         return result
 
+    def is_stale(self, source_path: Path) -> bool:
+        """Public check — True if *source_path* needs a wiki page regenerated."""
+        if not self.enabled:
+            return False
+        src = self._resolve(source_path)
+        return self._is_stale(src)
+
     def stale_files(self) -> list[str]:
         """Return relative paths of .py files whose wiki pages are out of date."""
         if not self.enabled:
