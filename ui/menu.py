@@ -65,6 +65,8 @@ def _new_project(window):
             window.load_project_chat()
         if hasattr(window, 'terminal_dock'):
             window.terminal_dock.set_cwd(folder_path)
+        if hasattr(window, '_init_wiki'): 
+            window._init_wiki(folder_path) 
 
         if open_file and os.path.exists(open_file):
             window.open_file_in_tab(open_file)
@@ -109,6 +111,8 @@ def _open_recent_project(folder_path, window):
         window.terminal_dock.set_cwd(folder_path)
     if hasattr(window, '_restore_session'):
         window._restore_session(project_path=folder_path)
+    if hasattr(window, '_init_wiki'):     
+        window._init_wiki(folder_path)     
 
 
 def _populate_recent_projects(menu, window):
@@ -593,12 +597,30 @@ def _wiki_rebuild_all(window):
     if reply != QMessageBox.StandardButton.Yes:
         return
 
-    if ww:
-        ww.trigger_full_update(only_if_empty=False)
-        # Also clear meta so everything is treated as stale
-        wm._meta.clear()
-        wm._save_meta()
-        window.statusBar().showMessage("Wiki: full rebuild started…", 3000)
+    if not ww:
+        window.statusBar().showMessage("Wiki watcher not running.", 3000)
+        return
+
+    if ww._busy:
+        window.statusBar().showMessage("Wiki: update already in progress.", 3000)
+        return
+
+    # Clear meta first so all files are treated as stale by stale_files()
+    wm._meta.clear()
+    wm._save_meta()
+
+    # Collect ALL source files directly — bypass stale check entirely
+    from core.wiki_manager import _collect_source_files
+    from pathlib import Path as _Path
+    all_files = _collect_source_files(wm.repo_root)
+    if not all_files:
+        window.statusBar().showMessage("Wiki: no source files found.", 3000)
+        return
+
+    window.statusBar().showMessage(
+        f"Wiki: rebuilding {len(all_files)} pages…", 5000
+    )
+    ww._dispatch_update(all_files)
 
 
 # ── Help ──────────────────────────────────────────────────────────────────────

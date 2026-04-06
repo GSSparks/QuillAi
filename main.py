@@ -751,6 +751,20 @@ class CodeEditor(QMainWindow, ChatRenderer):
             except Exception as e:
                 print(f"Could not open file: {e}")
                 return
+                
+        # ── Wiki — generate page on demand if stale ───────────────────
+        if (editor_to_focus
+                and hasattr(self, 'wiki_watcher')
+                and self.wiki_watcher
+                and not self.wiki_watcher._busy):
+            _fp = getattr(editor_to_focus, 'file_path', None)
+            if _fp:
+                import threading as _t
+                _t.Thread(
+                    target=self.wiki_manager.update_file,
+                    args=(Path(_fp),),
+                    daemon=True,
+                ).start()
  
         if editor_to_focus and line_number is not None:
             cursor = editor_to_focus.textCursor()

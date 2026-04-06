@@ -272,7 +272,7 @@ class WikiManager:
             return False
         with self._lock:
             src = self._resolve(source_path)
-            if not src.exists() or not str(src).endswith(".py"):
+            if not src.exists() or src.suffix.lower() not in _WIKI_EXTENSIONS:
                 return False
             if not self._is_stale(src):
                 return False

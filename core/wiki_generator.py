@@ -213,11 +213,13 @@ class WikiGenerator:
         rel = source_path.relative_to(self.repo_root)
         source = source_path.read_text(encoding="utf-8", errors="replace")
 
-        # Trim very large files to avoid blowing the context window.
-        # Keep first 800 lines — enough for structure + key symbols.
+        # Trim large files — local models need smaller context to stay fast.
+        # Keep first 300 lines or 8000 chars, whichever is smaller.
         lines = source.splitlines()
-        if len(lines) > 800:
-            source = "\n".join(lines[:800]) + "\n# ... (truncated)"
+        if len(lines) > 300:
+            source = "\n".join(lines[:300]) + "\n# ... (truncated)"
+        if len(source) > 8000:
+            source = source[:8000] + "\n# ... (truncated)"
 
         language = _language_for(source_path)
         prompt = _MODULE_PROMPT.format(
@@ -267,11 +269,13 @@ class WikiGenerator:
             "stream": False,
         }
 
+        # Local models are slower per token — give them more time
+        timeout = 300 if self.backend == "llama" else 120
         response = requests.post(
             self.api_url,
             json=payload,
             headers=headers,
-            timeout=120,
+            timeout=timeout,
         )
         response.raise_for_status()
         data = response.json()
