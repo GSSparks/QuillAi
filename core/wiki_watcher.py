@@ -54,8 +54,8 @@ class _UpdateWorker(QObject):
 
     def run(self) -> None:
         updated: list[str] = []
-        try:
-            for src in self._files:
+        for src in self._files:
+            try:
                 if src.suffix.lower() not in _WIKI_EXTENSIONS:
                     continue
                 was_updated = self._wm.update_file(src)
@@ -63,9 +63,10 @@ class _UpdateWorker(QObject):
                     rel = str(src.relative_to(self._wm.repo_root))
                     updated.append(rel)
                     self.file_updated.emit(rel)
-        except Exception as exc:
-            self.failed.emit(str(exc))
-            return
+            except Exception as exc:
+                # Single file failure — log and continue with the rest
+                print(f"[WikiWorker] skipping {src.name}: {exc}")
+                continue
         self.finished.emit(updated)
 
 
@@ -296,11 +297,16 @@ class WikiWatcher(QObject):
     # ------------------------------------------------------------------
 
     def _dispatch_update(self, files: list[Path]) -> None:
+        if not files:
+            return
         self._busy = True
+        # Process one file at a time — chaining in _on_worker_finished
+        # picks up the next stale file. This means a timeout on one large
+        # file only blocks for that file's timeout, not the whole queue.
         self.update_started.emit(len(files))
 
         self._thread = QThread()
-        self._worker = _UpdateWorker(self._wm, files)
+        self._worker = _UpdateWorker(self._wm, files[:1])
         self._worker.moveToThread(self._thread)
 
         self._thread.started.connect(self._worker.run)
@@ -321,6 +327,8 @@ class WikiWatcher(QObject):
         self._busy = False
         self.update_failed.emit(error)
         self._cleanup_thread()
+        # Chain even on failure — keep processing remaining stale files
+        self.trigger_full_update()
 
     def _cleanup_thread(self) -> None:
         if self._thread and self._thread.isRunning():
