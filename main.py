@@ -289,39 +289,23 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self._restore_window_state()
         self._restore_session()
 
+        self.wiki_manager = None
+        self.wiki_context_builder = None
+        self.wiki_watcher = None
+ 
+        project_root = (
+            self.git_dock.repo_path
+            if hasattr(self, "git_dock") and self.git_dock.repo_path
+            else None
+        )
+        if project_root:
+            self._init_wiki(project_root)
+
         self._lang_detect_timer = QTimer()
         self._lang_detect_timer.setSingleShot(True)
         self._lang_detect_timer.timeout.connect(self._fire_ai_lang_detect) 
         self._lang_detect_running = False
-        
-        project_root = (
-            self.git_dock.repo_path
-            if hasattr(self, "git_dock") and self.git_dock.repo_path
-            else os.getcwd()
-        )
-        
-        self.wiki_manager = WikiManager(
-            repo_root=Path(project_root),
-            model=self.settings_manager.get_chat_model(),
-            api_url=self.settings_manager.get_api_url(),
-            api_key=self.settings_manager.get_api_key(),
-            backend=self.settings_manager.get_backend(),
-        )
-        self.wiki_context_builder = WikiContextBuilder(
-            self.wiki_manager, char_budget=3000
-        )
-        self.wiki_watcher = WikiWatcher(
-            self.wiki_manager, repo_root=Path(project_root), parent=self
-        )
-        self.wiki_watcher.update_finished.connect(
-            lambda updated: self.statusBar().showMessage(
-                f"Wiki: {len(updated)} page(s) updated"
-                if updated else "Wiki: up to date", 3000
-            )
-        )
-        self.wiki_watcher.start()
-        QTimer.singleShot(2000, self.wiki_watcher.trigger_full_update)
-        
+       
     @pyqtSlot()
     def _on_repo_map_ready(self):
         self._startup.complete("Repo Map")
@@ -543,7 +527,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         # Build wiki context for all non-chat modes.                      
         # Chat mode gets it through ContextEngine.build() instead.        
         wiki_ctx = ""                                                      
-        if not is_chat and hasattr(self, "wiki_context_builder"):         
+        if not is_chat and hasattr(self, "wiki_context_builder") and self.wiki_context_builder:        
             editor = self.current_editor()                                
             fp = getattr(editor, "file_path", None) if editor else None  
             if fp:                                                         
@@ -1312,6 +1296,7 @@ Instructions:
             self._start_lsp(project_root=saved_project)
             self._init_repo_map(project_root=saved_project)
             self._init_vector_index(project_root=saved_project)
+            self._init_wiki(project_root=saved_project)
             if hasattr(self, 'update_git_branch'):
                 self.update_git_branch()
             self.plugin_manager.emit("project_opened", project_root=saved_project)
@@ -1595,6 +1580,44 @@ Instructions:
         self._vector_ready_timer.timeout.connect(self._check_vector_ready)
         self._vector_ready_timer.start()
 
+    def _init_wiki(self, project_root: str) -> None:
+        """Create or replace the wiki manager/watcher for a new project root.
+        No-ops silently if project_root is not a git repo."""
+        from pathlib import Path
+        from core.wiki_manager import WikiManager
+        from core.wiki_watcher import WikiWatcher
+        from core.wiki_context_builder import WikiContextBuilder
+ 
+        # Tear down any existing watcher
+        if hasattr(self, "wiki_watcher") and self.wiki_watcher:
+            self.wiki_watcher.stop()
+ 
+        self.wiki_manager = WikiManager(
+            repo_root=Path(project_root),
+            model=self.settings_manager.get_chat_model(),
+            api_url=self.settings_manager.get_api_url(),
+            api_key=self.settings_manager.get_api_key(),
+            backend=self.settings_manager.get_backend(),
+        )
+ 
+        if not self.wiki_manager.enabled:
+            self.wiki_context_builder = None
+            self.wiki_watcher = None
+            return
+ 
+        self.wiki_context_builder = WikiContextBuilder(
+            self.wiki_manager, char_budget=3000
+        )
+        self.wiki_watcher = WikiWatcher(self.wiki_manager, parent=self)
+        self.wiki_watcher.update_finished.connect(
+            lambda updated: self.statusBar().showMessage(
+                f"Wiki: {len(updated)} page(s) updated"
+                if updated else "Wiki: up to date", 3000
+            )
+        )
+        self.wiki_watcher.start()
+        QTimer.singleShot(2000, self.wiki_watcher.trigger_full_update)
+
     def _on_chat_message(self, user_text: str):
         self._last_user_message = user_text
         self._append_user_message(user_text)
@@ -1614,7 +1637,7 @@ Instructions:
         def _launch(lsp_ctx):
             # ── Wiki context (replaces vector index for chat) ────────     
             wiki_ctx = ""                                                  
-            if hasattr(self, "wiki_context_builder") and file_path:       
+            if hasattr(self, "wiki_context_builder") and self.wiki_context_builder and file_path:   
                 from pathlib import Path                                   
                 wiki_ctx = self.wiki_context_builder.for_prompt(           
                     user_text, source_path=Path(file_path)                

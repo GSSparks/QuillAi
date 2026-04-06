@@ -49,6 +49,16 @@ _DEPENDENTS_PLACEHOLDER = "<!-- dependents: auto-filled by WikiManager -->"
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _find_git_root(path: Path) -> Optional[Path]:
+    """Walk up from *path* to find the nearest .git directory.
+    Returns the repo root Path, or None if not inside a git repo."""
+    current = path.resolve()
+    for parent in [current, *current.parents]:
+        if (parent / ".git").exists():
+            return parent
+    return None
+
+
 def _file_hash(path: Path) -> str:
     """SHA-256 of a file's contents (hex string)."""
     h = hashlib.sha256()
@@ -143,6 +153,14 @@ class WikiManager:
         on_progress=None,
     ) -> None:
         self.repo_root = Path(repo_root).resolve()
+        self.enabled = _find_git_root(self.repo_root) is not None
+        if not self.enabled:
+            print(f"[WikiManager] {self.repo_root} is not a git repo — wiki disabled.")
+            self._on_progress = on_progress
+            self._lock = threading.Lock()
+            self._meta: dict[str, str] = {}
+            return
+
         self._generator = WikiGenerator(
             self.repo_root,
             model=model,
@@ -175,6 +193,8 @@ class WikiManager:
         list[str]
             Relative paths of files whose wiki pages were (re)generated.
         """
+        if not self.enabled:
+            return []
         with self._lock:
             py_files = _collect_python_files(self.repo_root)
             stale = [
@@ -215,6 +235,8 @@ class WikiManager:
 
         Returns True if the page was updated.
         """
+        if not self.enabled:
+            return False
         with self._lock:
             src = self._resolve(source_path)
             if not src.exists() or not str(src).endswith(".py"):
@@ -253,6 +275,8 @@ class WikiManager:
         str
             Concatenated Markdown wiki content, or empty string if no wiki exists.
         """
+        if not self.enabled:
+            return ""
         src = self._resolve(source_path)
         try:
             rel = str(src.relative_to(self.repo_root))
@@ -290,6 +314,8 @@ class WikiManager:
 
     def stale_files(self) -> list[str]:
         """Return relative paths of .py files whose wiki pages are out of date."""
+        if not self.enabled:
+            return []
         return [
             str(f.relative_to(self.repo_root))
             for f in _collect_python_files(self.repo_root)
