@@ -58,7 +58,7 @@ pages (module paths and their one-line summaries), produce a repo-level \
 
 The index MUST follow this exact format:
 
-# QuillAI — Codebase Wiki
+# {project_name} — Codebase Wiki
 
 ## Overview
 Two or three sentences describing the overall project architecture.
@@ -239,7 +239,8 @@ class WikiGenerator:
         module_list = "\n".join(
             f"- {path}: {summary}" for path, summary in sorted(page_summaries.items())
         )
-        prompt = _INDEX_PROMPT.format(module_list=module_list)
+        project_name = self.repo_root.name
+        prompt = _INDEX_PROMPT.format(module_list=module_list, project_name=project_name)
         return self._call_api(prompt)
 
     def extract_summary(self, wiki_text: str) -> str:
