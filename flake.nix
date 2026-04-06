@@ -61,12 +61,6 @@
           markdown
           pygments
           python-lsp-server
-          chromadb
-          sentence-transformers
-          # sentence-transformers and chromadb are optional —
-          # torch's build requirements conflict with the Nix sandbox.
-          # Install manually if you want vector indexing:
-          #   pip install sentence-transformers chromadb
         ];
 
         buildInputs = [
@@ -117,8 +111,6 @@
             requests
             markdown
             pygments
-            sentence-transformers
-            chromadb
           ]))
           pkgs.qt6.qtbase
           pkgs.qt6.qtwayland
@@ -157,8 +149,6 @@
           done
           echo ""
           echo "Vector index:"
-          python -c "from sentence_transformers import SentenceTransformer; print('  ✓ sentence-transformers')" 2>/dev/null || echo "  ✗ sentence-transformers"
-          python -c "import chromadb; print('  ✓ chromadb')" 2>/dev/null || echo "  ✗ chromadb"
         '';
       };
     };

@@ -29,7 +29,6 @@ from ai.context_engine import ContextEngine
 from ai.lsp_manager import LSPManager
 from ai.lsp_context import LSPContextProvider
 from ai.repo_map import RepoMap
-from ai.vector_index import VectorIndex
 
 from ui.theme import (apply_theme, get_theme, theme_signals,
                       build_status_bar_stylesheet,
@@ -135,7 +134,6 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.lsp_manager = None
         self.lsp_context_provider = None
         self._start_lsp()
-        self.vector_index = None
         self.repo_map = None
         # Built after session restore when the project root is known
 
@@ -886,22 +884,6 @@ class CodeEditor(QMainWindow, ChatRenderer):
             else None
         ))
     
-        # ── Vector index — accepted completions ──────────────────────
-        def _on_completion_accepted(text, ctx, e=editor):
-            if self.vector_index:
-                self.vector_index.index_completion(
-                    text, ctx, getattr(e, "file_path", "") or ""
-                )
-        editor.completion_accepted.connect(_on_completion_accepted)
-    
-        index = self.tabs.addTab(editor, name)
-        self.tabs.setCurrentIndex(index)
-        self._is_loading = False
-    
-        self._wire_editor_lsp(editor)
-    
-        return editor
-
     def _on_active_pane_changed(self, pane: EditorPane):
         """Called when a different pane becomes active."""
         self.tabs = pane   # update shim
@@ -1230,8 +1212,6 @@ Instructions:
             # Invalidate repo map so next chat gets fresh structure
             if self.repo_map and editor.file_path:
                 self.repo_map.invalidate(editor.file_path)
-            if self.vector_index and editor.file_path:
-                self.vector_index.index_file(editor.file_path)
 
             current_text = self.tabs.tabText(index)
             if current_text.endswith("*"):
@@ -1273,7 +1253,6 @@ Instructions:
     def _restore_session(self, project_path=None):
         self._startup.register("LSP")
         self._startup.register("Repo Map")
-        self._startup.register("Vector Index")
         if project_path is None and hasattr(self, 'git_dock') and self.git_dock.repo_path:
             project_path = self.git_dock.repo_path
 
@@ -1295,7 +1274,6 @@ Instructions:
                 self.memory_manager.set_project(saved_project)
             self._start_lsp(project_root=saved_project)
             self._init_repo_map(project_root=saved_project)
-            self._init_vector_index(project_root=saved_project)
             self._init_wiki(project_root=saved_project)
             if hasattr(self, 'update_git_branch'):
                 self.update_git_branch()
@@ -1344,13 +1322,6 @@ Instructions:
         editor = self.tabs.widget(index)
         if editor and hasattr(editor, 'file_path') and editor.file_path:
             self.intent_tracker.record_file_edit(editor.file_path)
-            if (self.vector_index
-                and hasattr(self, '_last_active_file')
-                and self._last_active_file
-                and self._last_active_file != editor.file_path):
-                self.vector_index.index_edit(
-                    self._last_active_file, editor.file_path
-                )
             self._last_active_file = editor.file_path
     
         # Breadcrumb — connect to new active editor
@@ -1559,27 +1530,7 @@ Instructions:
                 _Qt.ConnectionType.QueuedConnection,
             )
         threading.Thread(target=_build_and_notify, daemon=True).start()
-    def _check_vector_ready(self):
-        if self.vector_index and self.vector_index.is_ready:
-            self._vector_ready_timer.stop()
-            self._startup.complete("Vector Index")
             
-    def _init_vector_index(self, project_root: str):
-        """Create or replace the vector index for a new project root."""
-        if self.vector_index:
-            self.vector_index.close()
-        self.vector_index = VectorIndex(
-            project_root     = project_root,
-            settings_manager = self.settings_manager,
-        )
-        self.vector_index.index_project(project_root)
-    
-        # Poll until ready, then notify — avoids adding a signal to VectorIndex
-        self._vector_ready_timer = QTimer(self)
-        self._vector_ready_timer.setInterval(200)
-        self._vector_ready_timer.timeout.connect(self._check_vector_ready)
-        self._vector_ready_timer.start()
-
     def _init_wiki(self, project_root: str) -> None:
         """Create or replace the wiki manager/watcher for a new project root.
         No-ops silently if project_root is not a git repo."""
