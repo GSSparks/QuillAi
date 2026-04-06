@@ -226,6 +226,7 @@ class HighlighterRegistry:
     def __init__(self):
         self._language_plugins: dict = {}
         self._feature_plugins: list  = []
+        self._filename_map: dict[str, type] = {}
 
     # ── Language plugins ──────────────────────────────────────────
 
@@ -233,60 +234,41 @@ class HighlighterRegistry:
         """Manually register a language plugin for a file extension."""
         self._language_plugins[extension] = plugin_class
 
-    def get_highlighter(self, document, extension: str = ""):
-        """
-        Returns a QSyntaxHighlighter for the given document and extension.
-        Returns None if no plugin is registered — meaning no highlighting,
-        which is correct for unsaved or unknown file types.
-        """
-        if not extension:
-            return None
-
-        plugin_class = self._language_plugins.get(extension)
-        if plugin_class is None:
-            return None
-
-        # Standalone QSyntaxHighlighter subclasses (e.g. MarkdownPlugin)
-        # are instantiated directly rather than wrapped
-        if issubclass(plugin_class, QSyntaxHighlighter):
-            return plugin_class(document)
-
-        return UniversalHighlighter(document, plugin_class())
-
     def auto_register_languages(self, languages_dir: str):
         """
         Scans plugins/languages/ and registers every LanguagePlugin subclass
-        that declares an EXTENSIONS list.
-
+        that declares an EXTENSIONS or FILENAMES list.
+    
         To add a new language: drop a *_plugin.py in plugins/languages/
-        with EXTENSIONS = ['.xyz'] — zero other changes needed anywhere.
+        with EXTENSIONS = ['.xyz'] and/or FILENAMES = ['Dockerfile']
+        — zero other changes needed anywhere.
         """
         if not os.path.isdir(languages_dir):
             print(f"Language plugins directory not found: {languages_dir}")
             return
-
+    
         for filename in sorted(os.listdir(languages_dir)):
             if not filename.endswith('_plugin.py'):
                 continue
-
+    
             module_path = os.path.join(languages_dir, filename)
             module_name = f"plugins.languages.{filename[:-3]}"
-
+    
             try:
                 spec = importlib.util.spec_from_file_location(
                     module_name, module_path
                 )
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
-
+    
                 for _, obj in inspect.getmembers(module, inspect.isclass):
                     if not inspect.isclass(obj):
                         continue
-
+    
                     is_language = (
                         issubclass(obj, LanguagePlugin) and
                         obj is not LanguagePlugin and
-                        obj.EXTENSIONS
+                        (obj.EXTENSIONS or getattr(obj, 'FILENAMES', None))
                     )
                     is_standalone = (
                         issubclass(obj, QSyntaxHighlighter) and
@@ -294,13 +276,51 @@ class HighlighterRegistry:
                         hasattr(obj, 'EXTENSIONS') and
                         obj.EXTENSIONS
                     )
-
+    
                     if is_language or is_standalone:
+                        # Register by extension
                         for ext in obj.EXTENSIONS:
                             self.register(ext, obj)
-
+    
+                        # Register by exact filename
+                        for fname in getattr(obj, 'FILENAMES', []):
+                            self.register_filename(fname, obj)
+    
             except Exception as e:
                 print(f"Could not load language plugin '{filename}': {e}")
+                
+    def register_filename(self, filename: str, plugin_class):
+        """Register a highlighter for an exact filename (e.g. 'Dockerfile')."""
+        self._filename_map[filename.lower()] = plugin_class
+    
+    def get_highlighter(self, document, ext_or_path: str = ""):
+        """
+        Return a highlighter instance for the given extension or file path.
+        Checks exact filename first, then extension.
+        """
+        if not ext_or_path:
+            return None
+
+        # Check exact filename match first
+        basename = os.path.basename(ext_or_path).lower()
+        if basename in self._filename_map:
+            plugin_class = self._filename_map[basename]
+            if issubclass(plugin_class, QSyntaxHighlighter):
+                return plugin_class(document)
+            return UniversalHighlighter(document, plugin_class())
+
+        # Fall back to extension
+        ext = ext_or_path if ext_or_path.startswith('.') \
+            else os.path.splitext(ext_or_path)[1].lower()
+
+        plugin_class = self._language_plugins.get(ext)
+        if plugin_class is None:
+            return None
+
+        if issubclass(plugin_class, QSyntaxHighlighter):
+            return plugin_class(document)
+
+        return UniversalHighlighter(document, plugin_class())
 
     # ── Feature plugins ───────────────────────────────────────────
 
