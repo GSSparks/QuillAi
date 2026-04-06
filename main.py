@@ -611,7 +611,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
                 self.restoreGeometry(QByteArray.fromHex(geometry.encode()))
             except Exception:
                 pass
-
+    
         dock_state = self.settings_manager.get('dock_state')
         if dock_state:
             try:
@@ -619,15 +619,28 @@ class CodeEditor(QMainWindow, ChatRenderer):
                 self.restoreState(QByteArray.fromHex(dock_state.encode()))
             except Exception:
                 pass
-
+    
         if hasattr(self, 'md_preview_dock') and self.md_preview_dock is not None:
             if self.settings_manager.get('md_preview_visible'):
                 self.md_preview_dock.show()
             else:
                 self.md_preview_dock.hide()
-
+    
         if hasattr(self, 'chat_panel'):
             self.chat_panel.raise_()
+    
+        # Restore plugin dock visibility after Qt settles
+        plugin_dock_state = self.settings_manager.get('plugin_dock_state') or {}
+        def _restore_plugin_docks():
+            for dock_attr, visible in plugin_dock_state.items():
+                dock = getattr(self, dock_attr, None)
+                if dock is not None:
+                    if visible:
+                        dock.show()
+                        dock.raise_()
+                    else:
+                        dock.hide()
+        QTimer.singleShot(100, _restore_plugin_docks)
 
     # ── File management ───────────────────────────────────────────────────
 
@@ -1000,15 +1013,6 @@ Instructions:
         if event.isAccepted():
             self.autosave_manager.clear_all()
             registry.deactivate_all_features()
-            for plugin in self.plugin_manager._plugins:  # clean plugin teardown
-                try:
-                    plugin.deactivate()
-                except Exception as e:
-                    print(f"[PluginManager] Error deactivating {plugin.name}: {e}")
-            self._save_current_session()
-            # Clean exit — remove all autosave files
-            self.autosave_manager.clear_all()
-            registry.deactivate_all_features()
             self._save_current_session()
             self.settings_manager.set(
                 'dock_state', self.saveState().toHex().data().decode()
@@ -1020,6 +1024,20 @@ Instructions:
                 self.settings_manager.set(
                     'md_preview_visible', self.md_preview_dock.isVisible()
                 )
+            # Save plugin dock visibility BEFORE deactivating plugins
+            plugin_dock_state = {}
+            for label, (dock_attr, _) in self.plugin_manager.docks.items():
+                dock = getattr(self, dock_attr, None)
+                if dock is not None:
+                    plugin_dock_state[dock_attr] = dock.isVisible()
+            self.settings_manager.set('plugin_dock_state', plugin_dock_state)
+        
+            # Deactivate plugins LAST
+            for plugin in self.plugin_manager._plugins:
+                try:
+                    plugin.deactivate()
+                except Exception as e:
+                    print(f"[PluginManager] Error deactivating {plugin.name}: {e}")
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
