@@ -883,6 +883,13 @@ class CodeEditor(QMainWindow, ChatRenderer):
             ) if (getattr(e, 'file_path', '') or '').lower().endswith(('.md', '.markdown'))
             else None
         ))
+        index = self.tabs.addTab(editor, name)
+        self.tabs.setCurrentIndex(index)
+        self._is_loading = False
+
+        self._wire_editor_lsp(editor)
+
+        return editor
     
     def _on_active_pane_changed(self, pane: EditorPane):
         """Called when a different pane becomes active."""

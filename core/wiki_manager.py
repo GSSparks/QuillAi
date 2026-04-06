@@ -72,6 +72,12 @@ def _wiki_path_for(wiki_dir: Path, source_rel: Path) -> Path:
     return wiki_dir / md_rel
 
 
+# Extensions to explicitly skip even if they match a known type
+_WIKI_IGNORE_PATTERNS = {
+    "package-lock.json", "yarn.lock", "poetry.lock", "Pipfile.lock",
+    "*.min.js", "*.min.css", "*.map",
+}
+
 # All file extensions the wiki will document
 _WIKI_EXTENSIONS = {
     ".py", ".js", ".jsx", ".ts", ".tsx",
@@ -86,15 +92,28 @@ _WIKI_EXTENSIONS = {
     ".sql",
 }
 
+# Max files to wiki in a single repo — prevents runaway on monorepos
+_WIKI_MAX_FILES = 500
+
 def _collect_source_files(repo_root: Path) -> list[Path]:
     """Return all wiki-able source files in the repo, ignoring noise dirs."""
+    _ignore_names = {
+        "package-lock.json", "yarn.lock", "poetry.lock", "Pipfile.lock",
+    }
     result: list[Path] = []
     for root, dirs, files in os.walk(repo_root):
         root_path = Path(root)
         dirs[:] = [d for d in dirs if d not in _IGNORE_DIRS]
         for f in files:
-            if Path(f).suffix.lower() in _WIKI_EXTENSIONS:
+            p = Path(f)
+            if p.name in _ignore_names:
+                continue
+            if p.name.endswith((".min.js", ".min.css", ".map")):
+                continue
+            if p.suffix.lower() in _WIKI_EXTENSIONS:
                 result.append((root_path / f).resolve())
+            if len(result) >= _WIKI_MAX_FILES:
+                return sorted(result)
     return sorted(result)
 
 

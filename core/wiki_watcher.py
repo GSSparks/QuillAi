@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import QFileSystemWatcher, QObject, QThread, QTimer, pyqtSignal
+from core.wiki_manager import _WIKI_EXTENSIONS
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +56,6 @@ class _UpdateWorker(QObject):
         updated: list[str] = []
         try:
             for src in self._files:
-                from core.wiki_manager import _WIKI_EXTENSIONS
                 if src.suffix.lower() not in _WIKI_EXTENSIONS:
                     continue
                 was_updated = self._wm.update_file(src)
@@ -108,14 +108,22 @@ class WikiWatcher(QObject):
         self.repo_root = wiki_manager.repo_root
         self._debounce_ms = debounce_ms
 
-        self._fs_watcher = QFileSystemWatcher(self)
-        self._debounce_timer = QTimer(self)
-        self._debounce_timer.setSingleShot(True)
-        self._debounce_timer.timeout.connect(self._on_commit_detected)
+        # Deferred — created in start() once QApplication exists
+        self._fs_watcher: Optional[QFileSystemWatcher] = None
+        self._debounce_timer: Optional[QTimer] = None
 
         self._thread: Optional[QThread] = None
         self._worker: Optional[_UpdateWorker] = None
         self._busy = False
+
+    def _ensure_qt_objects(self) -> None:
+        """Create Qt objects that require a running QApplication."""
+        if self._fs_watcher is None:
+            self._fs_watcher = QFileSystemWatcher(self)
+        if self._debounce_timer is None:
+            self._debounce_timer = QTimer(self)
+            self._debounce_timer.setSingleShot(True)
+            self._debounce_timer.timeout.connect(self._on_commit_detected)
 
     # ------------------------------------------------------------------
     # Public API
@@ -128,6 +136,7 @@ class WikiWatcher(QObject):
         Returns True if the watch target exists and watching started,
         False if the repo has no git directory yet.
         """
+        self._ensure_qt_objects()
         commit_msg = self._commit_editmsg_path
         git_dir = self.repo_root / ".git"
 
@@ -147,22 +156,43 @@ class WikiWatcher(QObject):
 
     def stop(self) -> None:
         """Stop watching and clean up any running worker thread."""
-        paths = self._fs_watcher.files() + self._fs_watcher.directories()
-        if paths:
-            self._fs_watcher.removePaths(paths)
-        self._debounce_timer.stop()
+        if self._fs_watcher:
+            paths = self._fs_watcher.files() + self._fs_watcher.directories()
+            if paths:
+                self._fs_watcher.removePaths(paths)
+        if self._debounce_timer:
+            self._debounce_timer.stop()
         self._cleanup_thread()
 
-    def trigger_full_update(self) -> None:
+    def trigger_full_update(self, only_if_empty: bool = True) -> None:
         """
-        Manually trigger a full incremental update (all stale files).
-        Useful for the first run or after pulling remote changes.
+        Trigger an incremental wiki update for stale files.
+
+        The stale file scan runs on a background thread to avoid blocking
+        the Qt main thread on large repos.
+
+        Parameters
+        ----------
+        only_if_empty : bool
+            If True (default), only bootstraps when wiki has no pages yet.
+            Set False to force a full rescan (e.g. after a pull).
         """
         if self._busy:
             return
-        stale = [self.repo_root / p for p in self._wm.stale_files()]
-        if stale:
-            self._dispatch_update(stale)
+        if only_if_empty:
+            existing = list(self._wm._wiki_dir.rglob("*.md"))
+            if existing:
+                return
+
+        import threading as _threading
+        def _scan_and_dispatch():
+            stale = [self.repo_root / p for p in self._wm.stale_files()]
+            if stale:
+                # Use QTimer to hop back onto the Qt thread before dispatching
+                from PyQt6.QtCore import QTimer as _QTimer
+                _QTimer.singleShot(0, lambda: self._dispatch_update(stale))
+
+        _threading.Thread(target=_scan_and_dispatch, daemon=True).start()
 
     # ------------------------------------------------------------------
     # Private — git helpers
@@ -211,7 +241,6 @@ class WikiWatcher(QObject):
             return
 
         changed = self._changed_files_since_last_commit()
-        from core.wiki_manager import _WIKI_EXTENSIONS
         py_files = [f for f in changed if f.suffix.lower() in _WIKI_EXTENSIONS and f.exists()]
 
         if not py_files:
