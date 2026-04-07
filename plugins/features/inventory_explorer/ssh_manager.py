@@ -6,7 +6,9 @@ executes them in QuillAI's terminal.
 
 Handles:
   - ansible_host, ansible_user, ansible_port
-  - ansible_ssh_private_key_file (with Jinja2 var resolution prompt)
+  - ansible_ssh_private_key_file (with Jinja2 var resolution)
+  - ansible_ssh_private_key_dir  (auto-discovered from project)
+  - ansible_ssh_common_args      (ProxyCommand extraction)
   - ssh_proxy_enable + ssh_proxy_inventory_hostname (ProxyJump)
 """
 
@@ -106,6 +108,68 @@ def _build_stylesheet(t: dict) -> str:
     """
 
 
+# ── Key auto-discovery ────────────────────────────────────────────────────────
+
+# Common locations for SSH keys relative to project root
+_KEY_DIR_CANDIDATES = [
+    "playbooks/identities",
+    "identities",
+    "keys",
+    "ssh",
+    "ssh_keys",
+    ".ssh",
+    "playbooks/keys",
+    "ansible/keys",
+    "ansible/identities",
+]
+
+
+def discover_key_dir(project_root: str) -> str:
+    """
+    Search common locations for .pem or private key files relative to
+    project_root. Returns the directory path if found, else empty string.
+    """
+    if not project_root:
+        return ""
+    for candidate in _KEY_DIR_CANDIDATES:
+        full = os.path.join(project_root, candidate)
+        if not os.path.isdir(full):
+            continue
+        # Check if it contains any .pem or key files
+        try:
+            entries = os.listdir(full)
+            if any(
+                f.endswith((".pem", ".key", ".rsa")) or
+                (os.path.isfile(os.path.join(full, f)) and
+                 not f.endswith((".yml", ".yaml", ".txt", ".md")))
+                for f in entries
+            ):
+                return full
+        except OSError:
+            pass
+    return ""
+
+
+def discover_key_file(project_root: str, key_filename: str) -> str:
+    """
+    Given a bare filename like 'ca-central-1-sandbox.pem', search
+    common key directories and return the full path if found.
+    """
+    if not project_root or not key_filename:
+        return ""
+    key_dir = discover_key_dir(project_root)
+    if key_dir:
+        candidate = os.path.join(key_dir, key_filename)
+        if os.path.isfile(candidate):
+            return candidate
+    # Also try ~/.ssh
+    ssh_home = os.path.expanduser("~/.ssh")
+    candidate = os.path.join(ssh_home, key_filename)
+    if os.path.isfile(candidate):
+        return candidate
+    return ""
+
+
 # ── Jinja2 variable resolver ──────────────────────────────────────────────────
 
 _RE_JINJA_SIMPLE  = re.compile(r'\{\{\s*([\w_]+)\s*\}\}')
@@ -117,65 +181,129 @@ def _has_unresolved_vars(value: str) -> bool:
 
 
 def _is_complex_jinja(value: str) -> bool:
-    """True if value contains Jinja2 that can't be resolved by simple substitution."""
     for m in _RE_JINJA_COMPLEX.finditer(value):
         expr = m.group(0)
-        # Simple variable reference — we can handle this
         if _RE_JINJA_SIMPLE.fullmatch(expr.strip()):
             continue
-        # Anything else — lookup, filters, arithmetic, strings
         return True
     return False
 
 
 def _resolve_vars(value: str, known: dict) -> str:
-    """
-    Replace simple {{ var }} with known values.
-    Leaves complex Jinja2 expressions as empty string
-    so they get caught by the unresolved var prompt.
-    """
+    """Replace simple {{ var }} with known values."""
     def replace(m):
         full_expr = m.group(0)
-        # Simple variable — substitute if known
         simple = _RE_JINJA_SIMPLE.fullmatch(full_expr.strip())
         if simple:
             var_name = simple.group(1)
             return known.get(var_name, full_expr)
-        # Complex expression — return empty so caller knows it's unresolved
         return ''
     return _RE_JINJA_COMPLEX.sub(replace, value)
 
 
+def _auto_resolve_key_vars(eff: dict, project_root: str) -> dict:
+    """
+    Try to resolve ansible_ssh_private_key_dir automatically by
+    discovering it from the project structure. Returns a copy of eff
+    with the variable filled in if found.
+    """
+    resolved = dict(eff)
+
+    # If ansible_ssh_private_key_dir is already known, nothing to do
+    if resolved.get('ansible_ssh_private_key_dir'):
+        return resolved
+
+    # Check if the key file has an unresolved dir variable
+    key_file = resolved.get('ansible_ssh_private_key_file', '')
+    if not key_file or not _has_unresolved_vars(key_file):
+        return resolved
+
+    # Try to discover the key directory
+    key_dir = discover_key_dir(project_root)
+    if key_dir:
+        resolved['ansible_ssh_private_key_dir'] = key_dir
+        # Re-resolve the key file with the discovered dir
+        resolved_key = _resolve_vars(key_file, resolved)
+        if not _has_unresolved_vars(resolved_key):
+            resolved['ansible_ssh_private_key_file'] = resolved_key
+
+    return resolved
+
+
+# ── ProxyCommand parser ───────────────────────────────────────────────────────
+
+_RE_PROXY_HOST = re.compile(
+    r'ProxyCommand[^"\']*["\'].*?-W\s+%h:%p.*?'
+    r'(?:ec2-user@|user@|@)([^\s\'"]+)',
+    re.IGNORECASE
+)
+_RE_PROXY_USER_HOST = re.compile(
+    r'(?:ProxyCommand|ProxyJump)[^"\']*["\']?.*?'
+    r'([\w\-.]+)@([\w\-\.]+)',
+    re.IGNORECASE
+)
+
+
+def _parse_proxy_from_common_args(common_args: str) -> tuple[str, str]:
+    """
+    Extract (user, host) from ansible_ssh_common_args ProxyCommand.
+    Returns ('', '') if not found.
+    """
+    if not common_args:
+        return '', ''
+
+    # Try to find user@host pattern inside the ProxyCommand
+    m = _RE_PROXY_USER_HOST.search(common_args)
+    if m:
+        return m.group(1), m.group(2)
+
+    # Fallback — just look for the host
+    m = _RE_PROXY_HOST.search(common_args)
+    if m:
+        return 'ec2-user', m.group(1)
+
+    return '', ''
+
+
 # ── SSH command builder ───────────────────────────────────────────────────────
 
-def build_ssh_command(host, inventory, extra_vars: dict = None) -> str:
+def build_ssh_command(host, inventory, extra_vars: dict = None,
+                      project_root: str = None) -> str:
     from plugins.features.inventory_explorer.parser import resolve_host_vars
 
     eff   = resolve_host_vars(host, inventory)
     extra = extra_vars or {}
     eff.update(extra)
 
-    address = _resolve_vars(eff.get('ansible_host', host.name), eff)
+    # Auto-resolve ansible_ssh_private_key_dir from project structure
+    if project_root:
+        eff = _auto_resolve_key_vars(eff, project_root)
 
-    # Support both ansible_user (modern) and ansible_ssh_user (legacy)
-    user = _resolve_vars(
+    address = _resolve_vars(eff.get('ansible_host', host.name), eff)
+    user    = _resolve_vars(
         eff.get('ansible_user') or eff.get('ansible_ssh_user', ''), eff
     )
-
-    port     = _resolve_vars(str(eff.get('ansible_port', '22')), eff)
+    port    = _resolve_vars(str(eff.get('ansible_port', '22')), eff)
     key_file = _resolve_vars(
         eff.get('ansible_ssh_private_key_file', ''), eff
     )
-
-    if not key_file and 'ansible_ssh_private_key_file' in extra:
-        key_file = extra['ansible_ssh_private_key_file']
 
     if not address or _has_unresolved_vars(address):
         address = extra.get('ansible_host', host.name)
     if user and _has_unresolved_vars(user):
         user = extra.get('ansible_user') or extra.get('ansible_ssh_user', '')
 
-    proxy_host = _get_proxy_host(host, inventory, eff, extra)
+    # Expand ~ in key path
+    if key_file and not _has_unresolved_vars(key_file):
+        key_file = os.path.expanduser(key_file)
+        # If path doesn't exist yet, try discovering the file
+        if not os.path.isfile(key_file) and project_root:
+            basename = os.path.basename(key_file)
+            discovered = discover_key_file(project_root, basename)
+            if discovered:
+                key_file = discovered
+
+    proxy_jump = _get_proxy_jump(host, inventory, eff, extra, project_root)
 
     parts = ['ssh']
 
@@ -183,73 +311,83 @@ def build_ssh_command(host, inventory, extra_vars: dict = None) -> str:
         parts += ['-p', port]
 
     if key_file and not _has_unresolved_vars(key_file):
-        key_file = os.path.expanduser(key_file)
         parts += ['-i', key_file]
 
-    if proxy_host:
-        parts += ['-J', proxy_host]
+    if proxy_jump:
+        parts += ['-J', proxy_jump]
 
     parts += ['-o', 'StrictHostKeyChecking=accept-new']
 
-    # Only add user if explicitly set — never fall back to system user
     target = f"{user}@{address}" if user else address
     parts.append(target)
 
     return ' '.join(parts)
 
-def _get_proxy_host(host, inventory, eff: dict,
-                    extra: dict) -> str:
+
+def _get_proxy_jump(host, inventory, eff: dict,
+                    extra: dict, project_root: str = None) -> str:
     """
-    Build the ProxyJump string if ssh_proxy_enable=True.
+    Build the ProxyJump string. Checks both:
+    1. ssh_proxy_enable + ssh_proxy_inventory_hostname (explicit)
+    2. ansible_ssh_common_args ProxyCommand (parsed)
     Returns empty string if no proxy needed.
     """
+    # ── Method 1: explicit ssh_proxy_enable ──────────────────────────────
     proxy_enable = eff.get('ssh_proxy_enable', 'False')
-    if str(proxy_enable).lower() not in ('true', '1', 'yes'):
-        return ''
+    if str(proxy_enable).lower() in ('true', '1', 'yes'):
+        proxy_hostname = eff.get('ssh_proxy_inventory_hostname', '')
+        if proxy_hostname:
+            proxy_host = inventory.hosts.get(proxy_hostname)
+            if proxy_host:
+                from plugins.features.inventory_explorer.parser import resolve_host_vars
+                proxy_eff = resolve_host_vars(proxy_host, inventory)
+                proxy_eff.update(extra)
+                if project_root:
+                    proxy_eff = _auto_resolve_key_vars(proxy_eff, project_root)
 
-    proxy_hostname = eff.get('ssh_proxy_inventory_hostname', '')
-    if not proxy_hostname:
-        return ''
+                proxy_addr = _resolve_vars(
+                    proxy_eff.get('ansible_host', proxy_hostname), proxy_eff
+                )
+                proxy_user = _resolve_vars(
+                    proxy_eff.get('ansible_user') or
+                    proxy_eff.get('ansible_ssh_user', ''), proxy_eff
+                )
+                proxy_key  = _resolve_vars(
+                    proxy_eff.get('ansible_ssh_private_key_file', ''), proxy_eff
+                )
+                if proxy_key and not _has_unresolved_vars(proxy_key):
+                    proxy_key = os.path.expanduser(proxy_key)
+                    if not os.path.isfile(proxy_key) and project_root:
+                        discovered = discover_key_file(
+                            project_root, os.path.basename(proxy_key)
+                        )
+                        if discovered:
+                            proxy_key = discovered
 
-    # Look up the proxy host in inventory
-    proxy_host = inventory.hosts.get(proxy_hostname)
-    if not proxy_host:
-        return proxy_hostname  # use as-is if not in inventory
+                jump = f"{proxy_user}@{proxy_addr}" if proxy_user else proxy_addr
+                return jump
+            else:
+                return proxy_hostname
 
-    from plugins.features.inventory_explorer.parser import resolve_host_vars
-    proxy_eff = resolve_host_vars(proxy_host, inventory)
-    proxy_eff.update(extra)
+    # ── Method 2: parse ansible_ssh_common_args ───────────────────────────
+    common_args = eff.get('ansible_ssh_common_args', '')
+    if common_args:
+        proxy_user, proxy_host_addr = _parse_proxy_from_common_args(common_args)
+        if proxy_host_addr:
+            return f"{proxy_user}@{proxy_host_addr}" if proxy_user else proxy_host_addr
 
-    proxy_addr = _resolve_vars(
-        proxy_eff.get('ansible_host', proxy_hostname), proxy_eff
-    )
-    proxy_user = _resolve_vars(
-        proxy_eff.get('ansible_user') or
-        proxy_eff.get('ansible_ssh_user', ''), proxy_eff
-    )
-    proxy_key  = _resolve_vars(
-        proxy_eff.get('ansible_ssh_private_key_file', ''), proxy_eff
-    )
-
-    if proxy_user:
-        jump = f"{proxy_user}@{proxy_addr}"
-    else:
-        jump = proxy_addr
-
-    # If proxy also needs a key, include it
-    if proxy_key and not _has_unresolved_vars(proxy_key):
-        proxy_key = os.path.expanduser(proxy_key)
-        # SSH -J doesn't support -i per jump host directly
-        # Use ssh_config style or just the key for the proxy
-        jump = f"-i {proxy_key} {jump}"
-
-    return jump
+    return ''
 
 
-def collect_unresolved_vars(host, inventory) -> list[str]:
+def collect_unresolved_vars(host, inventory,
+                             project_root: str = None) -> list[str]:
     from plugins.features.inventory_explorer.parser import resolve_host_vars
 
     eff = resolve_host_vars(host, inventory)
+
+    # Try auto-resolution before flagging anything as unresolved
+    if project_root:
+        eff = _auto_resolve_key_vars(eff, project_root)
 
     unresolved = set()
 
@@ -259,32 +397,27 @@ def collect_unresolved_vars(host, inventory) -> list[str]:
         val = str(eff.get(key, ''))
         if not val:
             continue
-
         for m in _RE_JINJA_SIMPLE.finditer(val):
             var_name = m.group(1)
             if var_name not in eff:
                 unresolved.add(var_name)
-
         if _is_complex_jinja(val):
             unresolved.add(key)
 
     return sorted(unresolved)
 
+
 # ── Prompt dialog ─────────────────────────────────────────────────────────────
 
 class SSHConnectDialog(QDialog):
-    """
-    Shown when a host has unresolved Jinja2 variables.
-    Lets the user supply values before connecting.
-    """
+    connect_requested = pyqtSignal(str)
 
-    connect_requested = pyqtSignal(str)   # final ssh command
-
-    def __init__(self, host, inventory, parent=None):
+    def __init__(self, host, inventory, parent=None, project_root: str = None):
         super().__init__(parent)
-        self._host      = host
-        self._inventory = inventory
-        self._inputs    = {}   # var_name → QLineEdit
+        self._host         = host
+        self._inventory    = inventory
+        self._project_root = project_root
+        self._inputs       = {}
 
         self.setWindowTitle(f"Connect to {host.name}")
         self.setWindowFlags(
@@ -292,9 +425,12 @@ class SSHConnectDialog(QDialog):
             Qt.WindowType.FramelessWindowHint
         )
         self.setModal(True)
-        self.setMinimumWidth(440)
+        self.setMinimumWidth(480)
 
-        self._unresolved = collect_unresolved_vars(host, inventory)
+        self._unresolved = collect_unresolved_vars(
+            host, inventory, project_root
+        )
+        self._prefill    = self._compute_prefill()
 
         self._build_ui()
         self._update_preview()
@@ -302,6 +438,36 @@ class SSHConnectDialog(QDialog):
         theme_signals.theme_changed.connect(
             lambda t: self.setStyleSheet(_build_stylesheet(t))
         )
+
+    def _compute_prefill(self) -> dict:
+        """
+        Pre-fill dialog fields with auto-discovered values where possible.
+        """
+        prefill = {}
+        if not self._project_root:
+            return prefill
+
+        # If ansible_ssh_private_key_dir is unresolved, discover it
+        if 'ansible_ssh_private_key_dir' in self._unresolved:
+            key_dir = discover_key_dir(self._project_root)
+            if key_dir:
+                prefill['ansible_ssh_private_key_dir'] = key_dir
+
+        # If the whole key file is unresolved, try to find the .pem
+        if 'ansible_ssh_private_key_file' in self._unresolved:
+            from plugins.features.inventory_explorer.parser import resolve_host_vars
+            eff      = resolve_host_vars(self._host, self._inventory)
+            key_tmpl = eff.get('ansible_ssh_private_key_file', '')
+            # Extract filename from the template
+            # e.g. "{{ dir }}/ca-central-1-sandbox.pem" → "ca-central-1-sandbox.pem"
+            basename = re.sub(_RE_JINJA_COMPLEX, '', key_tmpl).strip().lstrip('/')
+            basename = os.path.basename(basename)
+            if basename:
+                found = discover_key_file(self._project_root, basename)
+                if found:
+                    prefill['ansible_ssh_private_key_file'] = found
+
+        return prefill
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -320,11 +486,12 @@ class SSHConnectDialog(QDialog):
         layout.addWidget(title)
 
         sub = QLabel(f"  {display}")
-        sub.setStyleSheet(f"color: {get_theme().get('fg4', '#a89984')};"
-                          f"font-size: 9pt; padding-bottom: 4px;")
+        sub.setStyleSheet(
+            f"color: {get_theme().get('fg4', '#a89984')};"
+            f"font-size: 9pt; padding-bottom: 4px;"
+        )
         layout.addWidget(sub)
 
-        # Unresolved vars — show form to fill them in
         if self._unresolved:
             needs_label = QLabel("Missing variables:")
             needs_label.setObjectName("section")
@@ -337,33 +504,45 @@ class SSHConnectDialog(QDialog):
                 QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
             )
 
+            _friendly = {
+                'ansible_ssh_private_key_file': 'SSH Key Path',
+                'ansible_ssh_private_key_dir':  'SSH Key Directory',
+                'ansible_host':                 'Host Address',
+                'ansible_user':                 'SSH User',
+                'ansible_port':                 'SSH Port',
+                'ssh_proxy_inventory_hostname': 'Proxy Host',
+            }
+
             for var in self._unresolved:
                 inp = QLineEdit()
-            
-                # Is this a full key name (complex Jinja2) or a var name?
-                if var in ('ansible_ssh_private_key_file',
-                           'ansible_host', 'ansible_user',
-                           'ansible_port', 'ssh_proxy_inventory_hostname'):
-                    # The whole value was a complex expression
-                    friendly = {
-                        'ansible_ssh_private_key_file': 'SSH Key Path',
-                        'ansible_host':                 'Host Address',
-                        'ansible_user':                 'SSH User',
-                        'ansible_port':                 'SSH Port',
-                        'ssh_proxy_inventory_hostname': 'Proxy Host',
-                    }.get(var, var)
-                    inp.setPlaceholderText(
-                        f"e.g. ~/.ssh/my_key  (was complex Jinja2)"
+                # Pre-fill if auto-discovered
+                if var in self._prefill:
+                    inp.setText(self._prefill[var])
+                    inp.setStyleSheet(
+                        inp.styleSheet() +
+                        f"border-color: {get_theme().get('green', '#98971a')};"
                     )
                 else:
-                    friendly = var.replace('_', ' ').title()
                     inp.setPlaceholderText(f"Value for {var}")
-            
+
                 inp.textChanged.connect(self._update_preview)
                 self._inputs[var] = inp
+                friendly = _friendly.get(var, var.replace('_', ' ').title())
                 form.addRow(f"{friendly}:", inp)
 
             layout.addLayout(form)
+
+            # Show discovery hint if key dir was found
+            if 'ansible_ssh_private_key_dir' in self._prefill or \
+               'ansible_ssh_private_key_file' in self._prefill:
+                hint = QLabel(
+                    f"✓ Key auto-discovered from project structure"
+                )
+                hint.setStyleSheet(
+                    f"color: {get_theme().get('green', '#98971a')};"
+                    f"font-size: 8pt; padding: 2px 0;"
+                )
+                layout.addWidget(hint)
         else:
             ok_label = QLabel("✓  All variables resolved")
             ok_label.setStyleSheet(
@@ -391,9 +570,7 @@ class SSHConnectDialog(QDialog):
         layout.addWidget(extra_label)
 
         self._extra_args = QLineEdit()
-        self._extra_args.setPlaceholderText(
-            "e.g. -L 8080:localhost:8080"
-        )
+        self._extra_args.setPlaceholderText("e.g. -L 8080:localhost:8080")
         self._extra_args.textChanged.connect(self._update_preview)
         layout.addWidget(self._extra_args)
 
@@ -421,7 +598,8 @@ class SSHConnectDialog(QDialog):
         try:
             cmd = build_ssh_command(
                 self._host, self._inventory,
-                extra_vars=self._extra_vars()
+                extra_vars=self._extra_vars(),
+                project_root=self._project_root,
             )
             extra = self._extra_args.text().strip() if hasattr(
                 self, '_extra_args') else ''
@@ -434,7 +612,8 @@ class SSHConnectDialog(QDialog):
     def _on_connect(self):
         cmd = build_ssh_command(
             self._host, self._inventory,
-            extra_vars=self._extra_vars()
+            extra_vars=self._extra_vars(),
+            project_root=self._project_root,
         )
         extra = self._extra_args.text().strip()
         if extra:
@@ -450,21 +629,27 @@ class SSHConnectDialog(QDialog):
         super().closeEvent(event)
 
 
-# ── Direct connect (no unresolved vars) ──────────────────────────────────────
+# ── Direct connect ────────────────────────────────────────────────────────────
 
-def connect_to_host(host, inventory, parent_widget=None) -> str | None:
+def connect_to_host(host, inventory, parent_widget=None,
+                    project_root: str = None) -> str | None:
     """
-    Build SSH command for a host. If there are unresolved Jinja2 vars,
-    show the prompt dialog. Otherwise return the command immediately.
+    Build SSH command for a host. If there are unresolved Jinja2 vars
+    after auto-resolution, show the prompt dialog.
     Returns the ssh command string, or None if cancelled.
     """
-    unresolved = collect_unresolved_vars(host, inventory)
+    unresolved = collect_unresolved_vars(host, inventory, project_root)
 
     if unresolved:
         result = [None]
-        dlg    = SSHConnectDialog(host, inventory, parent_widget)
+        dlg    = SSHConnectDialog(
+            host, inventory, parent_widget,
+            project_root=project_root
+        )
         dlg.connect_requested.connect(lambda cmd: result.__setitem__(0, cmd))
         dlg.exec()
         return result[0]
     else:
-        return build_ssh_command(host, inventory)
+        return build_ssh_command(
+            host, inventory, project_root=project_root
+        )

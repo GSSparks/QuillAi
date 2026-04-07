@@ -366,7 +366,8 @@ class InventoryExplorerPanel(QDockWidget):
         print(f"[ssh] eff keys with user = {[k for k in eff if 'user' in k.lower()]}")
     
         from plugins.features.inventory_explorer.ssh_manager import connect_to_host
-        cmd = connect_to_host(host, self._inventory, self)
+        cmd = connect_to_host(host, self._inventory, self,
+                              project_root=getattr(self, '_project_root', None))
         if cmd:
             self.ssh_connect_requested.emit(cmd)
 
