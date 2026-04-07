@@ -51,8 +51,10 @@ class WikiIndexer:
         wiki_manager,
         on_file_done: Optional[Callable[[str, bool], None]] = None,
         sleep_between: float = 0.5,
+        memory_manager=None,
     ) -> None:
         self._wm = wiki_manager
+        self._mm = memory_manager   # optional — for fact staleness review
         self._on_file_done = on_file_done
         self._sleep_between = sleep_between
 
@@ -143,6 +145,14 @@ class WikiIndexer:
                 success = was_updated
                 if was_updated:
                     print(f"[WikiIndexer] ✓ {rel}")
+                    # Review facts tagged to this file against the new wiki page
+                    if self._mm:
+                        try:
+                            wiki_page = self._wm._read_page(rel)
+                            if wiki_page:
+                                self._mm.review_facts_for_file(rel, wiki_page)
+                        except Exception as e:
+                            print(f"[WikiIndexer] fact review failed for {rel}: {e}")
                 else:
                     print(f"[WikiIndexer] – {rel} (already current)")
             except Exception as exc:

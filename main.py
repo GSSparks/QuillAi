@@ -1619,6 +1619,7 @@ Instructions:
             self.wiki_manager,
             on_file_done=_on_file_done,
             sleep_between=0.5,
+            memory_manager=self.memory_manager,
         )
         self.wiki_indexer.start()
     
