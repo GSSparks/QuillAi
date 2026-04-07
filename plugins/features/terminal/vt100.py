@@ -702,6 +702,22 @@ class VT100:
             else:
                 self.cursor_col = self.cols - 1
 
+        # Insert mode — shift existing characters right before placing
+        if self._insert_mode:
+            row = self.cursor_row
+            # Shift cells right from the last column down to cursor+1
+            for c in range(self.cols - 1, self.cursor_col, -1):
+                src_cell = self.screen.cell(row, c - 1)
+                dst_cell = self.screen.cell(row, c)
+                dst_cell.char      = src_cell.char
+                dst_cell.fg        = src_cell.fg
+                dst_cell.bg        = src_cell.bg
+                dst_cell.bold      = src_cell.bold
+                dst_cell.dim       = src_cell.dim
+                dst_cell.underline = src_cell.underline
+                dst_cell.reverse   = src_cell.reverse
+                dst_cell.blink     = src_cell.blink
+
         cell = self.screen.cell(self.cursor_row, self.cursor_col)
         cell.char      = ch
         cell.fg        = self._attrs.fg
