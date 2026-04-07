@@ -41,7 +41,13 @@ _INDEX_PAGE = "index.md"
 _IGNORE_DIRS = {
     ".git", "__pycache__", ".quillai", "venv", ".venv",
     "node_modules", "dist", "build", ".mypy_cache", ".ruff_cache",
+    # Git tooling dirs
+    ".data", ".github", ".gitlab", ".husky", ".hooks",
+    "hooks", "git-hooks",
 }
+
+# Directory name fragments — any dir whose name contains these is skipped
+_IGNORE_DIR_FRAGMENTS = {"git"}
 _DEPENDENTS_PLACEHOLDER = "<!-- dependents: auto-filled by WikiManager -->"
 
 
@@ -103,7 +109,11 @@ def _collect_source_files(repo_root: Path) -> list[Path]:
     result: list[Path] = []
     for root, dirs, files in os.walk(repo_root):
         root_path = Path(root)
-        dirs[:] = [d for d in dirs if d not in _IGNORE_DIRS]
+        dirs[:] = [
+            d for d in dirs
+            if d not in _IGNORE_DIRS
+            and not any(frag in d.lower() for frag in _IGNORE_DIR_FRAGMENTS)
+        ]
         for f in files:
             p = Path(f)
             if p.name in _ignore_names:
