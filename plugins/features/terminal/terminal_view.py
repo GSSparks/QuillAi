@@ -76,12 +76,12 @@ class TerminalView(QWidget):
         self._rows = 24
         self._vt   = VT100(self._rows, self._cols)
 
-        # Cursor blink
-        self._cursor_visible = True
+        # Cursor blink — only runs when focused
+        self._cursor_visible = False   # hidden until focused
         self._blink_timer    = QTimer(self)
         self._blink_timer.setInterval(500)
         self._blink_timer.timeout.connect(self._blink_tick)
-        self._blink_timer.start()
+        # Timer starts in focusInEvent, not here
 
         # Selection
         self._sel_start: QPoint | None = None
@@ -332,22 +332,28 @@ class TerminalView(QWidget):
                         cell.char
                     )
     
-        # Cursor — only when not scrolled back
+        # Cursor — only when focused and not scrolled back
         if self._scroll_offset == 0 and self._cursor_visible and self._vt._cursor_visible:
             cr     = self._vt.cursor_row
             cc     = self._vt.cursor_col
             cx     = cc * cw
             cy     = cr * ch
             accent = QColor(t.get('accent', '#fabd2f'))
-            painter.fillRect(cx, cy, cw, ch, accent)
-            cell = self._vt.screen.cell(cr, cc)
-            if cell.char != ' ':
-                painter.setPen(def_bg)
-                painter.setFont(self._font)
-                painter.drawText(
-                    cx, cy + QFontMetrics(self._font).ascent(),
-                    cell.char
-                )
+            insert = getattr(self._vt, '_insert_mode', False)
+            if insert:
+                # Thin beam cursor in insert mode
+                painter.fillRect(cx, cy, 2, ch, accent)
+            else:
+                # Block cursor in overwrite mode (default)
+                painter.fillRect(cx, cy, cw, ch, accent)
+                cell = self._vt.screen.cell(cr, cc)
+                if cell.char != ' ':
+                    painter.setPen(def_bg)
+                    painter.setFont(self._font)
+                    painter.drawText(
+                        cx, cy + QFontMetrics(self._font).ascent(),
+                        cell.char
+                    )
     
         # Scrollback indicator — outside the cursor block
         if self._scroll_offset > 0:
@@ -394,6 +400,20 @@ class TerminalView(QWidget):
                 sel_color,
             )
 
+    # ── Focus handling ───────────────────────────────────────────────────
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        self._cursor_visible = True
+        self._blink_timer.start()
+        self.update()
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        self._cursor_visible = False
+        self._blink_timer.stop()
+        self.update()
+
     # ── Cursor blink ──────────────────────────────────────────────────────
 
     def _blink_tick(self):
@@ -425,6 +445,17 @@ class TerminalView(QWidget):
         # Reset blink on keypress
         self._cursor_visible = True
         self._blink_timer.start()
+
+        key  = event.key()
+        mods = event.modifiers()
+        ctrl = bool(mods & Qt.KeyboardModifier.ControlModifier)
+        shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
+
+        # Toggle insert/overwrite mode
+        if key == Qt.Key.Key_Insert and not ctrl and not shift:
+            self._vt._insert_mode = not self._vt._insert_mode
+            self.update()
+            return
 
         # Scroll back to bottom on any keypress
         self._scroll_offset = 0
