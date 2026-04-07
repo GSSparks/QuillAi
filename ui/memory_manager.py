@@ -24,6 +24,28 @@ FACT_MAX_AGE_DAYS    = 180   # hard cap — facts older than this are pruned reg
 
 
 # ---------------------------------------------------------------------------
+# Signals  (Qt-safe cross-thread notifications)
+# ---------------------------------------------------------------------------
+
+from PyQt6.QtCore import QObject, pyqtSignal as _pyqtSignal
+
+class _MemorySignals(QObject):
+    """Singleton — emit from background threads, connect from UI."""
+    facts_changed = _pyqtSignal()          # any fact added/removed/updated
+    conversations_changed = _pyqtSignal()  # conversation list changed
+
+    _instance = None
+
+    @classmethod
+    def instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+memory_signals = _MemorySignals.instance()
+
+
+# ---------------------------------------------------------------------------
 # LLM prompts
 # ---------------------------------------------------------------------------
 
@@ -557,6 +579,7 @@ class MemoryManager:
             self._save_project()
         else:
             self._save_global()
+        memory_signals.facts_changed.emit()
 
     def _reinforce_similar_fact(self, fact_text: str, target: dict):
         """Bump last_seen and confidence on a fact that was confirmed as duplicate."""
@@ -579,6 +602,7 @@ class MemoryManager:
                 self._save_project()
             else:
                 self._save_global()
+            memory_signals.facts_changed.emit()
 
     def get_facts(self, include_project=True) -> list:
         """Return list of fact text strings for context building."""
@@ -676,6 +700,7 @@ class MemoryManager:
                     self._save_project()
                 else:
                     self._save_global()
+                memory_signals.facts_changed.emit()
 
     # ─────────────────────────────────────────────────────────────
     # Chat history HTML
@@ -724,6 +749,7 @@ class MemoryManager:
         if len(target["conversations"]) > MAX_CONVERSATIONS:
             target["conversations"] = target["conversations"][-MAX_CONVERSATIONS:]
         self._save_active()
+        memory_signals.conversations_changed.emit()
 
     def get_conversations(self) -> list:
         convs = list(self.global_memory["conversations"])

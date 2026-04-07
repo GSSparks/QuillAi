@@ -9,6 +9,7 @@ from PyQt6.QtGui import QColor
 from ui.theme import (get_theme, theme_signals,
                       build_memory_panel_stylesheet,
                       build_memory_panel_parts)
+from ui.memory_manager import memory_signals
 
 
 class MemoryPanel(QWidget):
@@ -23,12 +24,31 @@ class MemoryPanel(QWidget):
 
         theme_signals.theme_changed.connect(self._on_theme_changed)
 
+        # Live refresh when background threads update memory
+        memory_signals.facts_changed.connect(self._on_facts_changed)
+        memory_signals.conversations_changed.connect(self._on_conversations_changed)
+
+    # ── Signal handlers ───────────────────────────────────────────────────
+
+    def _on_facts_changed(self):
+        """Refresh just the facts lists — called from Qt main thread via signal."""
+        self.global_facts_list.clear()
+        for fact in self.mm.get_global_facts():
+            self.global_facts_list.addItem(QListWidgetItem(fact))
+
+        self.project_facts_list.clear()
+        for fact in self.mm.get_project_facts():
+            self.project_facts_list.addItem(QListWidgetItem(fact))
+
+    def _on_conversations_changed(self):
+        """Refresh just the conversation list."""
+        self._filter_conversations(self.conv_search.text())
+
     # ── Theme handling ────────────────────────────────────────────────────
 
     def _on_theme_changed(self, t: dict):
         self._p = build_memory_panel_parts(t)
         self.apply_styles(t)
-        # Re-populate conv list so item foreground colors update
         self._filter_conversations(self.conv_search.text())
 
     def apply_styles(self, t: dict):
@@ -126,7 +146,6 @@ class MemoryPanel(QWidget):
         btn_layout.addWidget(self._clear_all_btn)
         layout.addLayout(btn_layout)
 
-        # Apply all styles once all widget refs exist
         self.apply_styles(get_theme())
 
     # ── Conversation callbacks ────────────────────────────────────────────
@@ -167,20 +186,12 @@ class MemoryPanel(QWidget):
     # ── Data operations ───────────────────────────────────────────────────
 
     def refresh(self):
-        self.global_facts_list.clear()
-        for fact in self.mm.get_global_facts():
-            self.global_facts_list.addItem(QListWidgetItem(fact))
-
-        self.project_facts_list.clear()
-        for fact in self.mm.get_project_facts():
-            self.project_facts_list.addItem(QListWidgetItem(fact))
-
+        self._on_facts_changed()
         if self.mm.project_path:
             name = os.path.basename(self.mm.project_path)
             self.facts_tabs.setTabText(1, f"Project: {name}")
         else:
             self.facts_tabs.setTabText(1, "Project")
-
         self._filter_conversations(self.conv_search.text())
 
     def add_fact(self):
@@ -188,7 +199,7 @@ class MemoryPanel(QWidget):
         if text:
             self.mm.add_fact(text, project_scoped=self.project_scope_check.isChecked())
             self.fact_input.clear()
-            self.refresh()
+            # _on_facts_changed fires automatically via memory_signals
 
     def delete_fact(self):
         is_project = self.facts_tabs.currentIndex() == 1
@@ -197,7 +208,7 @@ class MemoryPanel(QWidget):
         row = list_widget.currentRow()
         if row >= 0:
             self.mm.remove_fact(row, project_scoped=is_project)
-            self.refresh()
+            # _on_facts_changed fires automatically via memory_signals
 
     def clear_conversations(self):
         reply = QMessageBox.question(
@@ -224,6 +235,8 @@ class MemoryPanel(QWidget):
     def closeEvent(self, event):
         try:
             theme_signals.theme_changed.disconnect(self._on_theme_changed)
+            memory_signals.facts_changed.disconnect(self._on_facts_changed)
+            memory_signals.conversations_changed.disconnect(self._on_conversations_changed)
         except RuntimeError:
             pass
         super().closeEvent(event)
