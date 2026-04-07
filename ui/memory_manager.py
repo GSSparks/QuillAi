@@ -2,33 +2,80 @@ import hashlib
 import json
 import os
 import re
+import threading
 from datetime import datetime
 
 
 MEMORY_DIR = os.path.join(os.path.expanduser("~"), ".config", "quillai", "memory")
 GLOBAL_MEMORY_FILE = os.path.join(MEMORY_DIR, "global.json")
 
-MAX_CONVERSATIONS  = 50
-MAX_FACTS          = 100
-MAX_TURNS          = 20   # raw turns kept in the turn buffer before compression
-RECENT_TURNS_IN_CTX = 6   # how many recent turns are always injected verbatim
-COMPRESS_THRESHOLD  = 20  # compress oldest half when buffer exceeds this
+MAX_CONVERSATIONS   = 50
+MAX_FACTS           = 100
+MAX_TURNS           = 20
+RECENT_TURNS_IN_CTX = 6
+COMPRESS_THRESHOLD  = 20
+
+
+# ---------------------------------------------------------------------------
+# LLM prompts
+# ---------------------------------------------------------------------------
+
+_FACT_EXTRACTION_PROMPT = """\
+Analyze this conversation exchange and extract any facts worth remembering.
+
+For each fact decide its scope:
+- "global"  : about the user's preferences, habits, tools, or skills that apply across ALL projects
+- "project" : specific to THIS codebase — its language, architecture, libraries, conventions, or goals
+- "none"    : not worth remembering (casual chat, questions, one-off requests, test messages)
+
+Rules:
+- Extract ONLY genuinely useful, durable facts — not questions, not one-off requests
+- Phrase each fact as a clear statement, not a raw quote
+- If nothing is worth remembering, return an empty list
+- Return ONLY valid JSON, no markdown, no explanation
+
+Return format:
+[{{"fact": "...", "scope": "global|project|none"}}, ...]
+
+USER: {user_text}
+ASSISTANT: {ai_response}
+"""
+
+_CONVERSATION_SCORE_PROMPT = """\
+Decide if this conversation exchange is worth saving as a long-term memory summary.
+
+Save it if it:
+- Resolved a non-trivial bug or architectural question
+- Established a pattern, convention, or decision for the codebase
+- Revealed something important about how the project works
+- Produced significant code that was accepted
+
+Skip it if it:
+- Was a simple factual question
+- Was casual chat or a test message
+- Was a one-liner that didn't resolve anything
+
+Return ONLY valid JSON, no markdown, no explanation:
+{{"save": true|false, "summary": "2-3 sentence summary if save=true, else null"}}
+
+USER: {user_text}
+ASSISTANT: {ai_response}
+"""
 
 
 class MemoryManager:
     def __init__(self, project_path=None, llm_fn=None):
         """
         llm_fn: optional callable(prompt: str) -> str
-                Used for LLM-based compression of old turns into summaries.
-                Falls back to a simple heuristic summary if not provided.
+                Used for LLM-based fact extraction and conversation scoring.
+                Falls back to heuristics if not provided.
         """
         os.makedirs(MEMORY_DIR, exist_ok=True)
-        self.project_path = project_path
-        self.llm_fn       = llm_fn
+        self.project_path   = project_path
+        self.llm_fn         = llm_fn
         self.global_memory  = self._load(GLOBAL_MEMORY_FILE)
         self.project_memory = self._load(self._project_file()) if project_path else None
 
-        # Ensure turn buffer key exists in loaded data
         self._ensure_turns_key(self.global_memory)
         if self.project_memory is not None:
             self._ensure_turns_key(self.project_memory)
@@ -38,7 +85,6 @@ class MemoryManager:
     # ─────────────────────────────────────────────────────────────
 
     def _ensure_turns_key(self, memory: dict):
-        """Back-compat: add 'turns' key if loading an older memory file."""
         if "turns" not in memory:
             memory["turns"] = []
 
@@ -50,7 +96,6 @@ class MemoryManager:
         return os.path.join(MEMORY_DIR, f"{name}_{path_hash}.json")
 
     def _active_memory(self):
-        """Return the memory dict that should receive new turns/conversations."""
         if self.project_path and self.project_memory is not None:
             return self.project_memory
         return self.global_memory
@@ -62,7 +107,6 @@ class MemoryManager:
             self._save(self.global_memory, GLOBAL_MEMORY_FILE)
 
     def set_project(self, project_path):
-        """Call this when the user opens a folder."""
         self.project_path   = project_path
         self.project_memory = self._load(self._project_file())
         self._ensure_turns_key(self.project_memory)
@@ -90,62 +134,63 @@ class MemoryManager:
         if self.project_memory is not None:
             self._save(self.project_memory, self._project_file())
 
+    def _call_llm(self, prompt: str) -> str:
+        """Call llm_fn safely, returning empty string on any failure."""
+        if not self.llm_fn:
+            return ""
+        try:
+            return self.llm_fn(prompt).strip()
+        except Exception as e:
+            print(f"[MemoryManager] LLM call failed: {e}")
+            return ""
+
+    def _parse_json(self, text: str):
+        """Strip markdown fences and parse JSON, returning None on failure."""
+        text = re.sub(r"^```[a-z]*\n?", "", text.strip())
+        text = re.sub(r"\n?```$", "", text.strip())
+        try:
+            return json.loads(text)
+        except Exception:
+            return None
+
     # ─────────────────────────────────────────────────────────────
-    # Turn Buffer  (replaces chat_history_store.py)
+    # Turn Buffer
     # ─────────────────────────────────────────────────────────────
 
     def add_turn(self, role: str, content: str):
-        """
-        Record a single message turn (role: 'user' or 'assistant').
-        Automatically compresses old turns once the buffer grows large.
-        Call this after every user message and every assistant response.
-        """
         mem = self._active_memory()
         mem["turns"].append({
             "role":    role,
             "content": content.strip(),
             "ts":      datetime.now().isoformat(),
         })
-
-        # Hard cap — trim to MAX_TURNS before compression check
         if len(mem["turns"]) > MAX_TURNS:
             mem["turns"] = mem["turns"][-MAX_TURNS:]
-
         self._save_active()
         self.maybe_compress()
 
     def get_recent_turns(self, n: int = RECENT_TURNS_IN_CTX) -> list:
-        """Return the last n turns from the active memory store."""
         return self._active_memory()["turns"][-n:]
 
     def clear_turns(self):
-        """Clear the turn buffer for the active scope (new session)."""
         self._active_memory()["turns"] = []
         self._save_active()
 
     # ─────────────────────────────────────────────────────────────
-    # Compression  (turns → conversation summaries)
+    # Compression
     # ─────────────────────────────────────────────────────────────
 
     def maybe_compress(self):
-        """
-        When the turn buffer exceeds COMPRESS_THRESHOLD, compress the
-        oldest half into a conversation summary and prune those turns.
-        Uses the LLM if available, otherwise falls back to a heuristic.
-        """
         mem   = self._active_memory()
         turns = mem["turns"]
-
         if len(turns) < COMPRESS_THRESHOLD:
             return
-
-        mid         = len(turns) // 2
-        to_compress = turns[:mid]
-        mem["turns"] = turns[mid:]   # keep the recent half
+        mid          = len(turns) // 2
+        to_compress  = turns[:mid]
+        mem["turns"] = turns[mid:]
 
         summary = self._summarize_turns(to_compress)
         if summary:
-            # Reuse existing add_conversation — stores to the right scope
             user_msgs = [t["content"] for t in to_compress if t["role"] == "user"]
             ai_msgs   = [t["content"] for t in to_compress if t["role"] == "assistant"]
             self.add_conversation(
@@ -154,31 +199,23 @@ class MemoryManager:
                 ai_response  = ai_msgs[-1]   if ai_msgs   else "",
                 tags         = ["auto-compressed"],
             )
-
         self._save_active()
 
     def _summarize_turns(self, turns: list) -> str:
-        """
-        Summarize a list of turn dicts into a single string.
-        Uses LLM if available, otherwise extracts the first user message
-        and first assistant sentence as a heuristic summary.
-        """
         block = "\n".join(
             f"{t['role'].upper()}: {t['content']}" for t in turns
         )
-
         if self.llm_fn:
             prompt = (
                 "Summarize the following coding assistant conversation concisely "
                 "(2-3 sentences). Focus on: decisions made, code changed, "
                 "problems solved, open questions.\n\n" + block
             )
-            try:
-                return self.llm_fn(prompt).strip()
-            except Exception:
-                pass
+            result = self._call_llm(prompt)
+            if result:
+                return result
 
-        # Heuristic fallback — first user message + first assistant sentence
+        # Heuristic fallback
         user_line = next(
             (t["content"][:120] for t in turns if t["role"] == "user"), ""
         )
@@ -190,7 +227,121 @@ class MemoryManager:
         return ""
 
     # ─────────────────────────────────────────────────────────────
-    # Chat history HTML  (project-scoped, replaces chat_history_store.py)
+    # Smart extraction  (LLM-based, runs async)
+    # ─────────────────────────────────────────────────────────────
+
+    def process_exchange_async(self, user_text: str, ai_response: str):
+        """
+        Fire-and-forget: extract facts and score the conversation in a
+        background thread. Safe to call from the Qt main thread after
+        each completed AI response.
+        """
+        if not user_text.strip() or not ai_response.strip():
+            return
+        t = threading.Thread(
+            target=self._process_exchange,
+            args=(user_text, ai_response),
+            daemon=True,
+        )
+        t.start()
+
+    def _process_exchange(self, user_text: str, ai_response: str):
+        """Background thread: extract facts then score conversation."""
+        self._extract_and_store_facts(user_text, ai_response)
+        self._score_and_store_conversation(user_text, ai_response)
+
+    def _extract_and_store_facts(self, user_text: str, ai_response: str):
+        """
+        Ask the LLM to extract facts from the exchange and classify each
+        as global, project, or none. Falls back to heuristic extraction
+        if no LLM is available.
+        """
+        if self.llm_fn:
+            prompt = _FACT_EXTRACTION_PROMPT.format(
+                user_text=user_text[:2000],
+                ai_response=ai_response[:2000],
+            )
+            raw = self._call_llm(prompt)
+            data = self._parse_json(raw)
+
+            if isinstance(data, list):
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+                    fact  = item.get("fact", "").strip()
+                    scope = item.get("scope", "none").lower()
+                    if not fact or scope == "none":
+                        continue
+                    project_scoped = (
+                        scope == "project"
+                        and self.project_path
+                        and self.project_memory is not None
+                    )
+                    self.add_fact(fact, project_scoped=project_scoped)
+                return
+
+        # Heuristic fallback — only if no LLM
+        for fact in self._heuristic_facts(user_text):
+            self.add_fact(fact, project_scoped=False)
+
+    def _score_and_store_conversation(self, user_text: str, ai_response: str):
+        """
+        Ask the LLM whether this exchange is worth saving as a long-term
+        conversation summary. Skips trivial exchanges automatically.
+        """
+        if not self.llm_fn:
+            # Without LLM, use a simple length heuristic —
+            # only save if both sides said something substantial
+            if len(user_text) > 80 and len(ai_response) > 200:
+                self.add_conversation(
+                    summary      = user_text[:120].strip(),
+                    user_message = user_text,
+                    ai_response  = ai_response,
+                )
+            return
+
+        prompt = _CONVERSATION_SCORE_PROMPT.format(
+            user_text=user_text[:2000],
+            ai_response=ai_response[:2000],
+        )
+        raw  = self._call_llm(prompt)
+        data = self._parse_json(raw)
+
+        if not isinstance(data, dict):
+            return
+        if not data.get("save"):
+            return
+
+        summary = (data.get("summary") or "").strip()
+        if not summary:
+            return
+
+        self.add_conversation(
+            summary      = summary,
+            user_message = user_text,
+            ai_response  = ai_response,
+        )
+
+    def _heuristic_facts(self, user_text: str) -> list:
+        """Regex fallback when no LLM is available."""
+        facts    = []
+        patterns = [
+            r"i (always|prefer|like to|want to)\s+([^.!?\n]{5,60})",
+            r"i('m| am) using\s+([^.!?\n]{5,60})",
+            r"we (always|prefer|use)\s+([^.!?\n]{5,60})",
+            r"this project (uses|is built with|requires)\s+([^.!?\n]{5,60})",
+        ]
+        for pattern in patterns:
+            for match in re.finditer(pattern, user_text.lower()):
+                start   = max(0, match.start() - 10)
+                end     = min(len(user_text), match.end() + 20)
+                snippet = user_text[start:end].strip().capitalize()
+                if len(snippet) > 10:
+                    facts.append(snippet)
+        return facts[:3]
+
+    # ─────────────────────────────────────────────────────────────
+    # Chat history HTML
     # ─────────────────────────────────────────────────────────────
 
     def get_chat_history_file(self) -> str:
@@ -201,7 +352,6 @@ class MemoryManager:
         return os.path.join(MEMORY_DIR, "chat_global.html")
 
     def save_chat_history(self, html: str):
-        """Persist chat panel HTML for the current project."""
         os.makedirs(MEMORY_DIR, exist_ok=True)
         try:
             with open(self.get_chat_history_file(), "w", encoding="utf-8") as f:
@@ -210,7 +360,6 @@ class MemoryManager:
             print(f"Could not save chat history: {e}")
 
     def load_chat_history(self) -> str:
-        """Load chat panel HTML for the current project."""
         path = self.get_chat_history_file()
         if os.path.exists(path):
             try:
@@ -268,7 +417,7 @@ class MemoryManager:
         return self.project_memory["facts"] if self.project_memory else []
 
     # ─────────────────────────────────────────────────────────────
-    # Conversations (summaries of past exchanges)
+    # Conversations
     # ─────────────────────────────────────────────────────────────
 
     def add_conversation(self, summary: str, user_message: str = "",
@@ -319,28 +468,7 @@ class MemoryManager:
         self._save_project()
 
     # ─────────────────────────────────────────────────────────────
-    # Auto-extraction  (heuristic fact mining from exchanges)
-    # ─────────────────────────────────────────────────────────────
-
-    def extract_facts_from_exchange(self, user_text: str, ai_response: str) -> list:
-        facts    = []
-        patterns = [
-            (r"i (always|prefer|like to|want to|use)\s+([^.!?\n]{5,60})", user_text),
-            (r"i('m| am) using\s+([^.!?\n]{5,60})",                        user_text),
-            (r"we (always|prefer|use)\s+([^.!?\n]{5,60})",                 user_text),
-            (r"this project (uses|is built with|requires)\s+([^.!?\n]{5,60})", user_text),
-        ]
-        for pattern, source in patterns:
-            for match in re.finditer(pattern, source.lower()):
-                start   = max(0, match.start() - 10)
-                end     = min(len(source), match.end() + 20)
-                snippet = source[start:end].strip().capitalize()
-                if len(snippet) > 10:
-                    facts.append(snippet)
-        return facts[:3]
-
-    # ─────────────────────────────────────────────────────────────
-    # Context Builder  (called by ContextEngine)
+    # Context Builder
     # ─────────────────────────────────────────────────────────────
 
     def build_memory_context(self, query: str = "") -> str:
@@ -353,7 +481,6 @@ class MemoryManager:
         """
         parts = []
 
-        # ── Layer 1: Facts ─────────────────────────────────────────
         global_facts  = self.get_global_facts()
         project_facts = self.get_project_facts()
 
@@ -370,7 +497,6 @@ class MemoryManager:
                 + "\n".join(f"- {f}" for f in project_facts)
             )
 
-        # ── Layer 2: Recent turns (verbatim) ───────────────────────
         recent = self.get_recent_turns(RECENT_TURNS_IN_CTX)
         if recent:
             lines = "\n".join(
@@ -378,7 +504,6 @@ class MemoryManager:
             )
             parts.append(f"[Recent conversation]\n{lines}")
 
-        # ── Layer 3: Relevant past summaries ───────────────────────
         relevant = (
             self.search_conversations(query, limit=3)
             if query

@@ -127,7 +127,30 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.settings_manager = SettingsManager()
 
         # 2. Load memory
-        self.memory_manager = MemoryManager()
+        def _llm_fn(prompt: str) -> str:
+            import requests
+            response = requests.post(
+                self.settings_manager.get_api_url(),
+                json={
+                    "model": self.settings_manager.get_chat_model(),
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    "max_tokens": 500,
+                },
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.settings_manager.get_api_key()}",
+                },
+                timeout=30,
+            )
+            data = response.json()
+            choices = data.get("choices", [])
+            if choices:
+                return choices[0].get("message", {}).get("content", "")
+            content = data.get("content", [])
+            return content[0].get("text", "") if content else ""
+        
+        self.memory_manager = MemoryManager(llm_fn=_llm_fn)
         self.intent_tracker = init_tracker(self.memory_manager)
         
         # 3. LSP (graceful — works fine if pylsp not installed)

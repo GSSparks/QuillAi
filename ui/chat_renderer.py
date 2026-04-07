@@ -138,11 +138,10 @@ class ChatRenderer:
 
         if full_response.strip():
             self.memory_manager.add_turn("assistant", full_response)
-            self._summarize_conversation_to_memory(full_response)
-            if self.vector_index:
-                self.vector_index.index_conversation(
-                    self._last_user_message, full_response
-                )
+            self.memory_manager.process_exchange_async(
+                self._last_user_message,
+                full_response,
+            )
 
         self.memory_manager.save_chat_history(self.chat_history.toHtml())
         self.current_ai_raw_text  = ""
@@ -273,32 +272,6 @@ class ChatRenderer:
         return result.replace("&quot;", '"')
 
     # ── Memory & conversation ─────────────────────────────────────────────
-
-    def _summarize_conversation_to_memory(self, ai_response: str):
-        try:
-            last_user = getattr(self, "_last_user_message", "")
-            if not last_user:
-                return
-            extracted = self.memory_manager.extract_facts_from_exchange(
-                last_user, ai_response
-            )
-            for fact in extracted:
-                self.memory_manager.add_fact(fact, project_scoped=False)
-            if extracted and hasattr(self, "memory_panel"):
-                self.memory_panel.refresh()
-            self.intent_tracker.record_chat_exchange(last_user, ai_response[:500])
-            summary = last_user[:80] + ("..." if len(last_user) > 80 else "")
-            self.memory_manager.add_conversation(
-                summary      = summary,
-                user_message = last_user,
-                ai_response  = ai_response[:2000],
-            )
-            if hasattr(self, "memory_panel"):
-                self.memory_panel.refresh()
-        except Exception as e:
-            import traceback
-            print(f"_summarize_conversation_to_memory error: {e}")
-            traceback.print_exc()
 
     def _restore_conversation(self, user_message: str, ai_response: str):
         self.chat_panel.expand()
