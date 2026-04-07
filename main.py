@@ -135,6 +135,8 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.lsp_context_provider = None
         self._start_lsp()
         self.repo_map = None
+        self.wiki_indexer = None
+        
         # Built after session restore when the project root is known
 
         # 4. Basic App State
@@ -754,11 +756,11 @@ class CodeEditor(QMainWindow, ChatRenderer):
                 
         # ── Wiki — generate page on demand if stale ───────────────────
         if (editor_to_focus
-                and hasattr(self, 'wiki_watcher')
-                and self.wiki_watcher):
+                and hasattr(self, 'wiki_indexer')
+                and self.wiki_indexer):
             _fp = getattr(editor_to_focus, 'file_path', None)
             if _fp:
-                self.wiki_watcher.queue_file(Path(_fp))
+                self.wiki_indexer.prioritize(Path(_fp))
  
         if editor_to_focus and line_number is not None:
             cursor = editor_to_focus.textCursor()
@@ -1548,17 +1550,18 @@ Instructions:
         threading.Thread(target=_build_and_notify, daemon=True).start()
             
     def _init_wiki(self, project_root: str) -> None:
-        """Create or replace the wiki manager/watcher for a new project root.
-        No-ops silently if project_root is not a git repo."""
         from pathlib import Path
         from core.wiki_manager import WikiManager
+        from core.wiki_indexer import WikiIndexer
         from core.wiki_watcher import WikiWatcher
         from core.wiki_context_builder import WikiContextBuilder
- 
-        # Tear down any existing watcher
+    
+        # Tear down existing
         if hasattr(self, "wiki_watcher") and self.wiki_watcher:
             self.wiki_watcher.stop()
- 
+        if hasattr(self, "wiki_indexer") and self.wiki_indexer:
+            self.wiki_indexer.stop()
+    
         self.wiki_manager = WikiManager(
             repo_root=Path(project_root),
             model=self.settings_manager.get_chat_model(),
@@ -1566,24 +1569,46 @@ Instructions:
             api_key=self.settings_manager.get_api_key(),
             backend=self.settings_manager.get_backend(),
         )
- 
+    
         if not self.wiki_manager.enabled:
             self.wiki_context_builder = None
+            self.wiki_indexer = None
             self.wiki_watcher = None
             return
- 
+    
         self.wiki_context_builder = WikiContextBuilder(
             self.wiki_manager, char_budget=3000
         )
-        self.wiki_watcher = WikiWatcher(self.wiki_manager, parent=self)
-        self.wiki_watcher.update_finished.connect(
-            lambda updated: self.statusBar().showMessage(
-                f"Wiki: {len(updated)} page(s) updated"
-                if updated else "Wiki: up to date", 3000
+    
+        # Indexer — background crawl, plain daemon thread
+        def _on_file_done(rel, success):
+            if success:
+                from PyQt6.QtCore import QMetaObject, Qt as _Qt, Q_ARG
+                QMetaObject.invokeMethod(
+                    self.statusBar(),
+                    "showMessage",
+                    _Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, f"Wiki: indexed {rel}"),
+                    Q_ARG(int, 2000),
+                )
+    
+        self.wiki_indexer = WikiIndexer(
+            self.wiki_manager,
+            on_file_done=_on_file_done,
+            sleep_between=0.5,
+        )
+        self.wiki_indexer.start()
+    
+        # Watcher — react to git commits only
+        self.wiki_watcher = WikiWatcher(
+            self.wiki_manager, self.wiki_indexer, parent=self
+        )
+        self.wiki_watcher.commit_detected.connect(
+            lambda files: self.statusBar().showMessage(
+                f"Wiki: queued {len(files)} changed file(s)", 3000
             )
         )
         self.wiki_watcher.start()
-        QTimer.singleShot(2000, self.wiki_watcher.trigger_full_update)
 
     def _on_chat_message(self, user_text: str):
         self._last_user_message = user_text

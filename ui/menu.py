@@ -568,22 +568,21 @@ def _setup_wiki_menu(window):
 
 
 def _wiki_update(window):
+    wi = getattr(window, 'wiki_indexer', None)
     wm = getattr(window, 'wiki_manager', None)
-    ww = getattr(window, 'wiki_watcher', None)
     if not wm or not wm.enabled:
         window.statusBar().showMessage("Wiki not available for this project.", 3000)
         return
-    if ww:
-        # Use watcher's thread infrastructure
-        ww.trigger_full_update(only_if_empty=False)
-        window.statusBar().showMessage("Wiki: scanning for stale pages…", 3000)
-    else:
-        window.statusBar().showMessage("Wiki watcher not running.", 3000)
+    if not wi:
+        window.statusBar().showMessage("Wiki indexer not running.", 3000)
+        return
+    wi.restart()
+    window.statusBar().showMessage("Wiki: scanning for stale pages…", 3000)
 
 
 def _wiki_rebuild_all(window):
     wm = getattr(window, 'wiki_manager', None)
-    ww = getattr(window, 'wiki_watcher', None)
+    wi = getattr(window, 'wiki_indexer', None)
     if not wm or not wm.enabled:
         window.statusBar().showMessage("Wiki not available for this project.", 3000)
         return
@@ -597,30 +596,20 @@ def _wiki_rebuild_all(window):
     if reply != QMessageBox.StandardButton.Yes:
         return
 
-    if not ww:
-        window.statusBar().showMessage("Wiki watcher not running.", 3000)
+    if not wi:
+        window.statusBar().showMessage("Wiki indexer not running.", 3000)
         return
 
-    if ww._busy:
-        window.statusBar().showMessage("Wiki: update already in progress.", 3000)
-        return
-
-    # Clear meta first so all files are treated as stale by stale_files()
+    # Clear meta so every file is treated as stale
     wm._meta.clear()
     wm._save_meta()
 
-    # Collect ALL source files directly — bypass stale check entirely
-    from core.wiki_manager import _collect_source_files
-    from pathlib import Path as _Path
-    all_files = _collect_source_files(wm.repo_root)
-    if not all_files:
-        window.statusBar().showMessage("Wiki: no source files found.", 3000)
-        return
+    # Restart the indexer — it will pick up all stale files automatically
+    wi.restart()
 
-    window.statusBar().showMessage(
-        f"Wiki: rebuilding {len(all_files)} pages…", 5000
-    )
-    ww._dispatch_update(all_files)
+    from core.wiki_manager import _collect_source_files
+    count = len(_collect_source_files(wm.repo_root))
+    window.statusBar().showMessage(f"Wiki: rebuilding {count} pages…", 5000)
 
 
 # ── Help ──────────────────────────────────────────────────────────────────────
