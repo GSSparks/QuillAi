@@ -261,16 +261,27 @@ class CodeEditor(QMainWindow, ChatRenderer):
         
         self._startup = StartupProgress(self.status_bar, parent=self)
 
-        self.filetype_label   = QLabel("")
-        self.indent_label     = QLabel("")
-        self.encoding_label   = QLabel("UTF-8")
-        self.lineending_label = QLabel("LF")
-        self.cursor_label     = QLabel("Ln 1, Col 1")
+        from ui.status_bar_buttons import (
+            setup_ins_ovr_btn, setup_indent_btn,
+            setup_encoding_btn, setup_lineending_btn, setup_filetype_btn,
+        )
 
-        for lbl in (self.filetype_label, self.indent_label,
-                    self.encoding_label, self.lineending_label,
-                    self.cursor_label):
-            self.status_bar.addPermanentWidget(lbl)
+        self.cursor_label     = QLabel("Ln 1, Col 1")
+        self.filetype_btn     = setup_filetype_btn(self)
+        self.indent_btn       = setup_indent_btn(self)
+        self.encoding_btn     = setup_encoding_btn(self)
+        self.lineending_btn   = setup_lineending_btn(self)
+        self.ins_ovr_btn      = setup_ins_ovr_btn(self)
+
+        for w in (self.cursor_label, self.filetype_btn, self.indent_btn,
+                  self.encoding_btn, self.lineending_btn, self.ins_ovr_btn):
+            self.status_bar.addPermanentWidget(w)
+
+        # Keep legacy label aliases so any code still referencing them won't crash
+        self.filetype_label   = self.filetype_btn
+        self.indent_label     = self.indent_btn
+        self.encoding_label   = self.encoding_btn
+        self.lineending_label = self.lineending_btn
 
         self.ai_mode_btn = QPushButton("🏠 LOCAL")
         self.ai_mode_btn.setCheckable(False)
@@ -456,23 +467,23 @@ class CodeEditor(QMainWindow, ChatRenderer):
                 # CI/CD
                 '.gitlab-ci.yml':  'GitLab CI',
             }
-            self.filetype_label.setText(
+            self.filetype_btn.setText(
                 type_map.get(ext, ext.lstrip('.').upper() or 'Plain Text')
             )
         else:
-            self.filetype_label.setText('Plain Text')
+            self.filetype_btn.setText('Plain Text')
     
         text = editor.toPlainText()
         tab_count   = sum(1 for l in text.split('\n') if l.startswith('\t'))
         space_count = sum(1 for l in text.split('\n') if l.startswith('    '))
-        self.indent_label.setText("Tabs" if tab_count > space_count else "Spaces: 4")
+        self.indent_btn.setText("Tabs" if tab_count > space_count else "Spaces: 4")
     
         if '\r\n' in text:
-            self.lineending_label.setText("CRLF")
+            self.lineending_btn.setText("CRLF")
         elif '\r' in text:
-            self.lineending_label.setText("CR")
+            self.lineending_btn.setText("CR")
         else:
-            self.lineending_label.setText("LF")
+            self.lineending_btn.setText("LF")
     
         if path and os.path.exists(path):
             try:
@@ -482,11 +493,15 @@ class CodeEditor(QMainWindow, ChatRenderer):
                 detected = chardet.detect(raw_bytes)
                 enc = (detected.get('encoding') or 'UTF-8').upper()
                 enc = enc.replace('UTF-8-SIG', 'UTF-8 BOM').replace('ASCII', 'UTF-8')
-                self.encoding_label.setText(enc)
+                self.encoding_btn.setText(enc)
             except ImportError:
-                self.encoding_label.setText("UTF-8")
+                self.encoding_btn.setText("UTF-8")
         else:
-            self.encoding_label.setText("UTF-8")
+            self.encoding_btn.setText("UTF-8")
+
+        # Refresh INS/OVR button to match current editor mode
+        if hasattr(self, 'ins_ovr_btn') and hasattr(self.ins_ovr_btn, '_refresh'):
+            self.ins_ovr_btn._refresh(editor)
 
     def update_git_branch(self):
         repo_path = None

@@ -189,6 +189,7 @@ class GhostEditor(LspEditorMixin, QPlainTextEdit):
         self.function_cursor = None
         self.function_active = False
         self.function_output = ""
+        self._insert_mode = False   # False = insert (default), True = overwrite
 
         font = QFont(QFONT_CODE)
         font.setPointSize(10)
@@ -1818,6 +1819,32 @@ Answer concisely. If you include code, use a single fenced code block."""
             if hasattr(self, '_lsp_manager') and self._lsp_active():
                 self.trigger_rename()
                 return
+
+        # Insert key — toggle insert/overwrite mode
+        if event.key() == Qt.Key.Key_Insert and not event.modifiers():
+            self._insert_mode = not self._insert_mode
+            # Notify main window to update the INS/OVR button
+            mw = self.window()
+            if hasattr(mw, 'ins_ovr_btn') and hasattr(mw.ins_ovr_btn, '_refresh'):
+                mw.ins_ovr_btn._refresh(self)
+            self.viewport().update()
+            return
+
+        # Overwrite mode — delete the character under the cursor before inserting
+        if (self._insert_mode
+                and event.text()
+                and not event.modifiers() & (
+                    Qt.KeyboardModifier.ControlModifier |
+                    Qt.KeyboardModifier.AltModifier
+                )):
+            cursor = self.textCursor()
+            if not cursor.hasSelection():
+                # Only overwrite if not at end of line
+                block_text = cursor.block().text()
+                col = cursor.positionInBlock()
+                if col < len(block_text):
+                    cursor.deleteChar()
+                    self.setTextCursor(cursor)
 
         super().keyPressEvent(event)
         self.clear_ghost_text()
