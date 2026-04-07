@@ -124,10 +124,43 @@ _KEY_DIR_CANDIDATES = [
 ]
 
 
+# Directories to skip when searching the project for key files
+_KEY_SEARCH_SKIP_DIRS = {
+    ".git", "__pycache__", "node_modules", "venv", ".venv",
+    "dist", "build", ".tox", ".mypy_cache",
+}
+
+def find_key_in_project(project_root: str, key_filename: str) -> str:
+    """
+    Walk the project tree searching for key_filename (e.g. 'ca-central-1-sandbox.pem').
+    Returns the full path if found, else empty string.
+    Skips noise directories. Checks ~/.ssh as a final fallback.
+    """
+    if not project_root or not key_filename:
+        return ""
+
+    for dirpath, dirnames, filenames in os.walk(project_root):
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in _KEY_SEARCH_SKIP_DIRS and not d.startswith('.')
+        ]
+        if key_filename in filenames:
+            return os.path.join(dirpath, key_filename)
+
+    # Final fallback — ~/.ssh
+    ssh_home = os.path.expanduser("~/.ssh")
+    candidate = os.path.join(ssh_home, key_filename)
+    if os.path.isfile(candidate):
+        return candidate
+
+    return ""
+
+
 def discover_key_dir(project_root: str) -> str:
     """
     Search common locations for .pem or private key files relative to
     project_root. Returns the directory path if found, else empty string.
+    Used when we need a directory rather than a specific file.
     """
     if not project_root:
         return ""
@@ -135,13 +168,10 @@ def discover_key_dir(project_root: str) -> str:
         full = os.path.join(project_root, candidate)
         if not os.path.isdir(full):
             continue
-        # Check if it contains any .pem or key files
         try:
             entries = os.listdir(full)
             if any(
-                f.endswith((".pem", ".key", ".rsa")) or
-                (os.path.isfile(os.path.join(full, f)) and
-                 not f.endswith((".yml", ".yaml", ".txt", ".md")))
+                f.endswith((".pem", ".key", ".rsa"))
                 for f in entries
             ):
                 return full
@@ -152,22 +182,10 @@ def discover_key_dir(project_root: str) -> str:
 
 def discover_key_file(project_root: str, key_filename: str) -> str:
     """
-    Given a bare filename like 'ca-central-1-sandbox.pem', search
-    common key directories and return the full path if found.
+    Find a key file by name — searches the whole project tree then ~/.ssh.
+    Wrapper around find_key_in_project for call sites that have a filename.
     """
-    if not project_root or not key_filename:
-        return ""
-    key_dir = discover_key_dir(project_root)
-    if key_dir:
-        candidate = os.path.join(key_dir, key_filename)
-        if os.path.isfile(candidate):
-            return candidate
-    # Also try ~/.ssh
-    ssh_home = os.path.expanduser("~/.ssh")
-    candidate = os.path.join(ssh_home, key_filename)
-    if os.path.isfile(candidate):
-        return candidate
-    return ""
+    return find_key_in_project(project_root, key_filename)
 
 
 # ── Jinja2 variable resolver ──────────────────────────────────────────────────
@@ -203,29 +221,38 @@ def _resolve_vars(value: str, known: dict) -> str:
 
 def _auto_resolve_key_vars(eff: dict, project_root: str) -> dict:
     """
-    Try to resolve ansible_ssh_private_key_dir automatically by
-    discovering it from the project structure. Returns a copy of eff
-    with the variable filled in if found.
+    Try to resolve ansible_ssh_private_key_dir automatically by:
+    1. Running the lookup("pipe",...) script if referenced in the value
+    2. Discovering common key directory locations
+    Returns a copy of eff with the variable filled in if found.
     """
     resolved = dict(eff)
 
-    # If ansible_ssh_private_key_dir is already known, nothing to do
-    if resolved.get('ansible_ssh_private_key_dir'):
+    # If already a plain path (not Jinja2), nothing to do
+    key_dir_val = resolved.get('ansible_ssh_private_key_dir', '')
+    if key_dir_val and not _has_unresolved_vars(key_dir_val):
         return resolved
 
-    # Check if the key file has an unresolved dir variable
+    # Check if the key file has an unresolved template
     key_file = resolved.get('ansible_ssh_private_key_file', '')
     if not key_file or not _has_unresolved_vars(key_file):
         return resolved
 
-    # Try to discover the key directory
-    key_dir = discover_key_dir(project_root)
-    if key_dir:
-        resolved['ansible_ssh_private_key_dir'] = key_dir
-        # Re-resolve the key file with the discovered dir
-        resolved_key = _resolve_vars(key_file, resolved)
-        if not _has_unresolved_vars(resolved_key):
-            resolved['ansible_ssh_private_key_file'] = resolved_key
+    # Extract the bare filename from the template —
+    # e.g. "{{ ansible_ssh_private_key_dir }}/ca-central-1-sandbox.pem"
+    #   or "{{ some_dir }}/subdir/my-key.pem"
+    # Strip all {{ ... }} blocks and grab the last path component.
+    stripped = re.sub(_RE_JINJA_COMPLEX, '', key_file)
+    basename = os.path.basename(stripped.strip().strip('/'))
+
+    if not basename:
+        return resolved
+
+    # Search the entire project for this filename
+    found = find_key_in_project(project_root, basename)
+    if found:
+        resolved['ansible_ssh_private_key_file'] = found
+        print(f"[ssh] auto-resolved key: {found}")
 
     return resolved
 

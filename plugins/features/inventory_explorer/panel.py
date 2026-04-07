@@ -364,7 +364,10 @@ class InventoryExplorerPanel(QDockWidget):
         print(f"[ssh] host.user = {repr(host.user)}")
         print(f"[ssh] eff ansible_user = {repr(eff.get('ansible_user', 'NOT SET'))}")
         print(f"[ssh] eff keys with user = {[k for k in eff if 'user' in k.lower()]}")
-    
+        
+        from plugins.features.inventory_explorer.parser import resolve_host_vars
+        eff = resolve_host_vars(host, self._inventory)
+
         from plugins.features.inventory_explorer.ssh_manager import connect_to_host
         cmd = connect_to_host(host, self._inventory, self,
                               project_root=getattr(self, '_project_root', None))
