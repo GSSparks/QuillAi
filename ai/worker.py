@@ -80,6 +80,8 @@ class AIWorker(QObject):
                 "in the provided context. "
                 "If memory or past conversations are provided, use them to give "
                 "more personalised and relevant responses."
+                "If you are uncertain about implementation details, say so rather than guessing. "
+                "Only describe code behavior you can see in the provided context. "
             )
             # Wiki injected into user message so the model attends to it
             # alongside the actual question, not buried in system.
