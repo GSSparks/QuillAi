@@ -1,12 +1,37 @@
-- name: Install Nginx
-  hosts: webservers
-  become: yes
+---
+- name: Install and start Nginx, MariaDB, and HAProxy on AlmaLinux 9
+  hosts: all
+  become: true
   tasks:
-    - name: Ensure Nginx is at the latest version
-      apt:
+    - name: Ensure Nginx is installed and at the latest version
+      dnf:
         name: nginx
         state: latest
-    - name: Start Nginx service
-      service:
-        name: "{{ service_name }}"
+
+    - name: Ensure Nginx service is started and enabled
+      systemd:
+        name: nginx
         state: started
+        enabled: yes
+
+    - name: Ensure MariaDB server is installed and at the latest version
+      dnf:
+        name: mariadb-server
+        state: latest
+
+    - name: Ensure MariaDB service is started and enabled
+      systemd:
+        name: mariadb
+        state: started
+        enabled: yes
+
+    - name: Ensure HAProxy is installed and at the latest version
+      dnf:
+        name: haproxy
+        state: latest
+
+    - name: Ensure HAProxy service is started and enabled
+      systemd:
+        name: haproxy
+        state: started
+        enabled: yes
