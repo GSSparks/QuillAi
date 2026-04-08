@@ -78,6 +78,65 @@ def _relevance_score(query_tokens: set[str], rel: str, summary: str) -> int:
     return score
 
 
+# Patterns that indicate a symbol reference in a query
+_RE_DEF       = re.compile(r'def\s+([A-Za-z_][A-Za-z0-9_]*)')
+_RE_CLASS_KW  = re.compile(r'class\s+([A-Za-z_][A-Za-z0-9_]*)')
+_RE_METHOD    = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)\s*\(')
+_RE_SNAKE     = re.compile(r'([a-z_][a-z0-9_]{3,})')
+_RE_CAMEL_ID  = re.compile(r'([A-Z][a-zA-Z0-9]{2,})')
+
+
+def _extract_symbol_names(text: str) -> list[str]:
+    """
+    Extract likely symbol names (methods, classes, functions) from a query.
+    Returns them in priority order:
+      1. Explicit `def foo` / `class Foo` mentions
+      2. CamelCase identifiers (class names)
+      3. snake_case identifiers with underscores (method names)
+      4. Anything followed by `(` (function calls)
+
+    Filters out common English words and very short tokens.
+    """
+    _STOPWORDS = {
+        'the', 'and', 'for', 'not', 'with', 'this', 'that', 'have',
+        'from', 'they', 'will', 'been', 'what', 'when', 'where', 'how',
+        'does', 'did', 'can', 'could', 'should', 'would', 'like', 'just',
+        'about', 'into', 'also', 'some', 'than', 'then', 'there', 'its',
+        'def', 'class', 'return', 'self', 'true', 'false', 'none', 'pass',
+        'print', 'open', 'list', 'dict', 'set', 'str', 'int', 'bool',
+    }
+
+    seen:    set[str]  = set()
+    results: list[str] = []
+
+    def _add(name: str):
+        if name and name.lower() not in _STOPWORDS and name not in seen:
+            seen.add(name)
+            results.append(name)
+
+    # Explicit keyword references — highest confidence
+    for m in _RE_DEF.finditer(text):
+        _add(m.group(1))
+    for m in _RE_CLASS_KW.finditer(text):
+        _add(m.group(1))
+
+    # CamelCase (class names)
+    for m in _RE_CAMEL_ID.finditer(text):
+        _add(m.group(1))
+
+    # snake_case names (method names) — require underscore to filter English words
+    for m in _RE_SNAKE.finditer(text):
+        name = m.group(1)
+        if '_' in name:   # must contain underscore to avoid plain English words
+            _add(name)
+
+    # Anything followed by () — function calls
+    for m in _RE_METHOD.finditer(text):
+        _add(m.group(1))
+
+    return results
+
+
 class WikiContextBuilder:
     """
     Fetches wiki pages from WikiManager and trims them to fit a character
@@ -100,10 +159,12 @@ class WikiContextBuilder:
         wiki_manager,
         char_budget: int = 6000,
         include_index: bool = True,
+        repo_map=None,
     ) -> None:
-        self._wm = wiki_manager
-        self._budget = char_budget
+        self._wm       = wiki_manager
+        self._budget   = char_budget
         self._include_index = include_index
+        self._repo_map = repo_map   # optional RepoMap for symbol lookup
 
     # ------------------------------------------------------------------
     # Public API
@@ -173,7 +234,26 @@ class WikiContextBuilder:
                 remaining -= len(trimmed)
                 seen.add(str(source_path.name))
 
-        # 3. Score all summaries against the query and pick the best ones
+        # 3. Symbol-aware lookup — highest priority
+        # Extract method/class names from the query and resolve to files via
+        # the repo map. Injected before generic scoring because the user
+        # explicitly named a symbol they want to know about.
+        if self._repo_map:
+            for sym_name in _extract_symbol_names(prompt_text):
+                if remaining <= 300:
+                    break
+                for rel in self._repo_map.find_symbol(sym_name):
+                    if Path(rel).name in seen or remaining <= 300:
+                        continue
+                    page = self._wm._read_page(rel)
+                    if not page:
+                        continue
+                    trimmed = self._trim_section(page, min(remaining, 2000))
+                    parts.append(trimmed)
+                    remaining -= len(trimmed)
+                    seen.add(Path(rel).name)
+
+        # 4. Score all summaries against the query and pick the best ones
         query_tokens = _query_tokens(prompt_text)
         summaries    = self._wm.all_summaries()   # dict: rel → summary str
 

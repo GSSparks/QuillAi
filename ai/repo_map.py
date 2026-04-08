@@ -97,6 +97,26 @@ class RepoMap:
             else:
                 self._dirty.update(self._cache.keys())
 
+    def find_symbol(self, name: str) -> list[str]:
+        """
+        Search the cache for any symbol whose name matches *name*
+        (case-insensitive, exact or suffix match).
+        Returns a list of rel_path strings where the symbol was found.
+
+        Used by WikiContextBuilder to resolve method/class names in queries
+        to their source files regardless of which file is open.
+        """
+        name_lower = name.lower().lstrip("_")
+        results = []
+        with self._lock:
+            for rel_path, entry in self._cache.items():
+                for sym in entry.symbols:
+                    sym_lower = sym.name.lower().lstrip("_")
+                    if sym_lower == name_lower or sym_lower.endswith(name_lower):
+                        results.append(rel_path)
+                        break
+        return results
+
     def get_context(self, query: str = "", token_budget: int = MAX_MAP_TOKENS) -> str:
         """
         Return a filtered map string ready for LLM injection.

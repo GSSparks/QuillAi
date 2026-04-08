@@ -1810,7 +1810,9 @@ Instructions:
             return
     
         self.wiki_context_builder = WikiContextBuilder(
-            self.wiki_manager, char_budget=3000
+            self.wiki_manager,
+            char_budget=6000,
+            repo_map=self.repo_map if hasattr(self, 'repo_map') else None,
         )
     
         # Indexer — background crawl, plain daemon thread
