@@ -79,11 +79,11 @@ def _relevance_score(query_tokens: set[str], rel: str, summary: str) -> int:
 
 
 # Patterns that indicate a symbol reference in a query
-_RE_DEF       = re.compile(r'def\s+([A-Za-z_][A-Za-z0-9_]*)')
-_RE_CLASS_KW  = re.compile(r'class\s+([A-Za-z_][A-Za-z0-9_]*)')
-_RE_METHOD    = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)\s*\(')
-_RE_SNAKE     = re.compile(r'([a-z_][a-z0-9_]{3,})')
-_RE_CAMEL_ID  = re.compile(r'([A-Z][a-zA-Z0-9]{2,})')
+_RE_DEF       = re.compile(r'def\s+([A-Za-z_][A-Za-z0-9_]*)')
+_RE_CLASS_KW  = re.compile(r'class\s+([A-Za-z_][A-Za-z0-9_]*)')
+_RE_METHOD    = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)\s*\(')
+_RE_SNAKE     = re.compile(r'([a-z_][a-z0-9_]{3,})')
+_RE_CAMEL_ID  = re.compile(r'([A-Z][a-zA-Z0-9]{2,})')
 
 
 def _extract_symbol_names(text: str) -> list[str]:
@@ -239,6 +239,8 @@ class WikiContextBuilder:
         # via the repo map, then fetch the EXACT implementation from disk
         # using AST. Real source beats wiki summaries for "what does X do".
         if self._repo_map:
+            print(f"[WikiCtx] _repo_map OK, prompt='{prompt_text[:60]}'")
+            print(f"[WikiCtx] symbols={_extract_symbol_names(prompt_text)}")
             for sym_name in _extract_symbol_names(prompt_text):
                 if remaining <= 300:
                     break
