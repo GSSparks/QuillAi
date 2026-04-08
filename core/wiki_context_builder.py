@@ -239,8 +239,6 @@ class WikiContextBuilder:
         # via the repo map, then fetch the EXACT implementation from disk
         # using AST. Real source beats wiki summaries for "what does X do".
         if self._repo_map:
-            print(f"[WikiCtx] _repo_map OK, prompt='{prompt_text[:60]}'")
-            print(f"[WikiCtx] symbols={_extract_symbol_names(prompt_text)}")
             for sym_name in _extract_symbol_names(prompt_text):
                 if remaining <= 300:
                     break
