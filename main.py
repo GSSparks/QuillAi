@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QProgressBar, QLabel,
                              QVBoxLayout, QWidget, QLineEdit, QTabWidget,
                              QPushButton, QHBoxLayout, QMessageBox, QFileDialog,
                              QTextBrowser, QSizePolicy, QSplitter)
-from PyQt6.QtCore import QTimer, QThread, Qt, QDir, QProcess, QUrl, pyqtSlot
+from PyQt6.QtCore import QTimer, QThread, Qt, QDir, QProcess, QUrl, pyqtSlot, QFileSystemWatcher
 from PyQt6.QtGui import (QFileSystemModel, QAction, QKeySequence, QTextCursor,
                          QIcon, QPixmap, QPainter, QColor, QShortcut,
                          QSyntaxHighlighter, QTextCharFormat, QFont)
@@ -185,6 +185,11 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.chat_worker = None
         self.active_threads = []
         
+        # External file change watcher
+        self._file_watcher = QFileSystemWatcher(self)
+        self._file_watcher.fileChanged.connect(self._on_file_changed_externally)
+        self._watch_debounce: dict[str, QTimer] = {}   # path → debounce timer
+
         # Autosave / crash recovery
         self.autosave_manager = AutosaveManager(
             get_editors_fn = self._get_all_editors_indexed,
@@ -792,6 +797,14 @@ class CodeEditor(QMainWindow, ChatRenderer):
                 print(f"Could not open file: {e}")
                 return
                 
+        # ── External file watcher — track newly opened files ────────
+        if editor_to_focus:
+            fp = getattr(editor_to_focus, 'file_path', None)
+            if fp and os.path.exists(fp):
+                watched = self._file_watcher.files()
+                if fp not in watched:
+                    self._file_watcher.addPath(fp)
+
         # ── Wiki — generate page on demand if stale ───────────────────
         if (editor_to_focus
                 and hasattr(self, 'wiki_indexer')
@@ -1091,6 +1104,175 @@ Instructions:
         thread.started.connect(self.chat_worker.run)
         thread.start()
 
+    # ── External file change handling ────────────────────────────────────────
+
+    def _on_file_changed_externally(self, path: str):
+        """
+        Called by QFileSystemWatcher when a watched file changes on disk.
+        Debounced 500ms to handle editors that write in multiple passes.
+        """
+        if path in self._watch_debounce:
+            self._watch_debounce[path].stop()
+        else:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda p=path: self._handle_file_changed(p))
+            self._watch_debounce[path] = timer
+
+        self._watch_debounce[path].start(500)
+
+    def _handle_file_changed(self, path: str):
+        """
+        Process an external file change after debounce.
+        Finds all editors showing this file across all panes.
+        """
+        # Clean up debounce timer
+        if path in self._watch_debounce:
+            del self._watch_debounce[path]
+
+        # File deleted — warn and stop watching
+        if not os.path.exists(path):
+            self._file_watcher.removePath(path)
+            for pane in self.split_container.all_panes():
+                for i in range(pane.count()):
+                    editor = pane.widget(i)
+                    if getattr(editor, 'file_path', None) == path:
+                        name = os.path.basename(path)
+                        self.statusBar().showMessage(
+                            f"⚠  {name} was deleted externally — "
+                            f"unsaved in editor", 8000
+                        )
+                        # Mark dirty so the user knows they need to save
+                        editor.original_text = ""
+            return
+
+        # Re-add watch (some editors replace the file rather than modify it,
+        # which causes the inode to change and the watcher to drop it)
+        if path not in self._file_watcher.files():
+            self._file_watcher.addPath(path)
+
+        # Read new content from disk
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                new_content = f.read()
+        except Exception as e:
+            self.statusBar().showMessage(f"Could not read {path}: {e}", 5000)
+            return
+
+        name = os.path.basename(path)
+
+        # Update every editor showing this file
+        for pane in self.split_container.all_panes():
+            for i in range(pane.count()):
+                editor = pane.widget(i)
+                if getattr(editor, 'file_path', None) != path:
+                    continue
+
+                current_content = editor.toPlainText()
+                if current_content == new_content:
+                    return  # already up to date — probably our own save
+
+                if not editor.is_dirty():
+                    # ── Clean editor → silent reload ─────────────────────
+                    self._reload_editor(editor, new_content, path)
+                    self.statusBar().showMessage(
+                        f"Reloaded: {name} (changed externally)", 4000
+                    )
+                else:
+                    # ── Dirty editor → ask the user ──────────────────────
+                    self._show_external_change_bar(editor, path, new_content, name)
+
+    def _reload_editor(self, editor, new_content: str, path: str):
+        """Reload editor content, preserving cursor position as best we can."""
+        cursor = editor.textCursor()
+        pos = cursor.position()
+
+        editor.blockSignals(True)
+        editor.setPlainText(new_content)
+        editor.set_original_state(new_content)
+        editor.blockSignals(False)
+
+        # Restore cursor, clamped to new length
+        cursor = editor.textCursor()
+        cursor.setPosition(min(pos, len(new_content)))
+        editor.setTextCursor(cursor)
+        editor.highlight_current_line()
+
+    def _show_external_change_bar(self, editor, path: str,
+                                   new_content: str, name: str):
+        """
+        Show a non-blocking notification bar on the editor asking what to do.
+        Uses a QWidget injected into the editor's parent layout.
+        """
+        from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel, QPushButton
+        from ui.theme import get_theme
+
+        t = get_theme()
+
+        # Find the splitter/container that holds the editor's pane
+        bar = QWidget(editor.parent())
+        bar.setFixedHeight(32)
+        bar.setStyleSheet(f"""
+            QWidget {{
+                background: {t.get('bg2', '#504945')};
+                border-top: 1px solid {t.get('orange', '#d65d0e')};
+            }}
+        """)
+
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(10, 0, 6, 0)
+        layout.setSpacing(8)
+
+        label = QLabel(f"⚠  {name} was modified externally.")
+        label.setStyleSheet(f"color: {t.get('fg1', '#ebdbb2')}; font-size: 9pt; background: transparent;")
+        layout.addWidget(label)
+        layout.addStretch()
+
+        reload_btn = QPushButton("Reload")
+        reload_btn.setFixedSize(64, 22)
+        reload_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {t.get('orange', '#d65d0e')};
+                color: {t.get('bg0', '#282828')};
+                border: none; border-radius: 3px;
+                font-size: 9pt; font-weight: bold;
+            }}
+            QPushButton:hover {{ background: {t.get('yellow', '#fabd2f')}; }}
+        """)
+
+        keep_btn = QPushButton("Keep mine")
+        keep_btn.setFixedSize(72, 22)
+        keep_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {t.get('bg3', '#665c54')};
+                color: {t.get('fg1', '#ebdbb2')};
+                border: none; border-radius: 3px;
+                font-size: 9pt;
+            }}
+            QPushButton:hover {{ background: {t.get('bg4', '#7c6f64')}; }}
+        """)
+
+        layout.addWidget(reload_btn)
+        layout.addWidget(keep_btn)
+
+        def _on_reload():
+            self._reload_editor(editor, new_content, path)
+            bar.deleteLater()
+            self.statusBar().showMessage(f"Reloaded: {name}", 3000)
+
+        def _on_keep():
+            bar.deleteLater()
+            self.statusBar().showMessage(f"Kept local version of {name}", 3000)
+
+        reload_btn.clicked.connect(_on_reload)
+        keep_btn.clicked.connect(_on_keep)
+
+        # Overlay the bar at the top of the editor viewport
+        bar.setParent(editor)
+        bar.setGeometry(0, 0, editor.width(), 32)
+        bar.show()
+        bar.raise_()
+
     def closeEvent(self, event):
         # Final autosave flush before checking for unsaved changes
         self.autosave_manager.save_all()
@@ -1193,6 +1375,13 @@ Instructions:
     
         # Teardown and cleanup — get file_path BEFORE removing
         file_path = getattr(editor, "file_path", None)
+
+        # Stop watching this file
+        if file_path and file_path in self._file_watcher.files():
+            self._file_watcher.removePath(file_path)
+        if file_path and file_path in self._watch_debounce:
+            self._watch_debounce[file_path].stop()
+            del self._watch_debounce[file_path]
     
         if hasattr(editor, "teardown_lsp"):
             editor.teardown_lsp()
@@ -1260,6 +1449,9 @@ Instructions:
 
         try:
             code = editor.toPlainText()
+            # Temporarily stop watching so our own save doesn't trigger reload
+            if editor.file_path in self._file_watcher.files():
+                self._file_watcher.removePath(editor.file_path)
             with open(editor.file_path, "w", encoding="utf-8") as f:
                 f.write(code)
 
@@ -1285,6 +1477,9 @@ Instructions:
 
             self.statusBar().showMessage(f"Saved: {editor.file_path}", 3000)
             self.autosave_manager.clear(editor.file_path)
+            # Re-add watch after save
+            if editor.file_path not in self._file_watcher.files():
+                self._file_watcher.addPath(editor.file_path)
             return True
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Could not save file: {e}")
