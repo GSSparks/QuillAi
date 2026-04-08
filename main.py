@@ -348,6 +348,12 @@ class CodeEditor(QMainWindow, ChatRenderer):
     @pyqtSlot()
     def _on_repo_map_ready(self):
         self._startup.complete("Repo Map")
+        # Now that the repo map is built, wire it into the context builder
+        # (it was None when _init_wiki() ran because the build is async)
+        if (hasattr(self, 'wiki_context_builder')
+                and self.wiki_context_builder is not None
+                and self.repo_map is not None):
+            self.wiki_context_builder._repo_map = self.repo_map
 
     # ── Theme handling ────────────────────────────────────────────────────
 
