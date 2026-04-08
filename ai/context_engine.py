@@ -130,8 +130,11 @@ class ContextEngine:
         used += self.estimate_tokens(active_block)
 
         # ── Imports ───────────────────────────────────────────────
-        # All top-level imports are included — filtered imports dropped too much signal
-        if used < TOKEN_BUDGET:
+        # Skip for chat — imports are already visible in [Active Code] and
+        # the wiki/repo-map context covers inter-file relationships better.
+        # Only inject for inline completions where the model needs exact symbols.
+        _is_chat_request = not bool(cursor_pos)   # chat has no cursor pos
+        if not _is_chat_request and used < TOKEN_BUDGET:
             import_ctx = self.get_all_imports(active_code)
             if import_ctx:
                 import_block = "[Imports]\n" + import_ctx
@@ -343,12 +346,18 @@ class ContextEngine:
     def get_cursor_window(self, code: str, cursor_pos=None, window=100) -> str:
         """
         Return a window of lines centered on the cursor position.
-        Falls back to the last `window` lines if no cursor is available.
+        Falls back to the middle of the file (not top/bottom) when no cursor,
+        since chat questions are usually about logic not imports.
         """
         lines = code.splitlines()
 
         if cursor_pos is None:
-            return "\n".join(lines[-window:])
+            # No cursor — use middle of file as it usually contains more
+            # logic than the import-heavy top or trailing boilerplate bottom
+            mid   = len(lines) // 2
+            start = max(0, mid - window // 2)
+            end   = min(len(lines), mid + window // 2)
+            return "\n".join(lines[start:end])
 
         mid   = code[:cursor_pos].count("\n")
         start = max(0, mid - window // 2)

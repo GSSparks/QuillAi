@@ -47,6 +47,16 @@ ANSIBLE_IMPORT_KEYS = {
 # Ansible directories that are always relevant to map
 ANSIBLE_DIRS = {"playbooks", "roles", "group_vars", "host_vars", "tasks", "handlers"}
 
+# ── Query tokenisation (CamelCase + snake_case aware) ─────────────────────────
+import re as _re
+_RE_CAMEL = _re.compile(r'(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])')
+_RE_SPLIT = _re.compile(r'[\s_\-/\\.]+')
+
+def _tokenise(text: str) -> set:
+    """Split CamelCase and snake_case into lowercase tokens, filter short ones."""
+    text = _RE_CAMEL.sub(' ', text)
+    return {t for t in _RE_SPLIT.split(text.lower()) if len(t) > 2}
+
 
 class RepoMap:
     """
@@ -101,7 +111,7 @@ class RepoMap:
         if not entries:
             return ""
 
-        q_words = set(query.lower().split()) if query else set()
+        q_words = _tokenise(query) if query else set()
         scored  = self._score_entries(entries, q_words)
 
         if not scored:
@@ -125,17 +135,27 @@ class RepoMap:
     # ─────────────────────────────────────────────────────────────
 
     def _score_entries(self, entries: dict, q_words: set) -> list:
+        """
+        Score entries by token overlap.  q_words are already tokenised by
+        get_context() using _tokenise(), so CamelCase has been split.
+        Each symbol name is also tokenised before matching so
+        "get_context" matches query token "context", etc.
+        """
         scored = []
 
         for rel_path, entry in entries.items():
             if q_words:
-                score = sum(
-                    1 for sym in entry.symbols
-                    if any(w in sym.name.lower() for w in q_words)
-                )
-                # Also score on the file path itself — e.g. "webserver" matches
-                # roles/webserver/tasks/main.yml even if no task name matches
-                score += sum(1 for w in q_words if w in rel_path.lower())
+                # Path tokens — "ai/repo_map.py" → {"ai","repo","map"}
+                path_tokens = _tokenise(rel_path)
+                path_score  = len(q_words & path_tokens) * 2   # path match worth more
+
+                # Symbol token overlap
+                sym_score = 0
+                for sym in entry.symbols:
+                    sym_tokens = _tokenise(sym.name)
+                    sym_score += len(q_words & sym_tokens)
+
+                score = path_score + sym_score
                 if score == 0:
                     continue
             else:

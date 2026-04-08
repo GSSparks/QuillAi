@@ -50,7 +50,8 @@ memory_signals = _MemorySignals.instance()
 # ---------------------------------------------------------------------------
 
 _FACT_EXTRACTION_PROMPT = """\
-Analyze this conversation exchange and extract any facts worth remembering.
+Analyze ONLY the USER message below and extract any facts worth remembering.
+Ignore the ASSISTANT response entirely — never extract facts from it.
 
 For each fact decide its scope:
 - "global"  : about the user's preferences, habits, tools, or skills — applies across ALL projects
@@ -61,9 +62,10 @@ Also list which source files (relative paths) the fact was derived from, if any 
 If no specific files are mentioned, return an empty list for source_files.
 
 Rules:
+- Extract ONLY from the USER message — never from the ASSISTANT response
 - Extract ONLY genuinely useful, durable facts — not questions or one-off requests
-- Phrase each fact as a clear declarative statement
-- If nothing is worth remembering, return an empty list
+- Phrase each fact as a clear declarative statement about the user or project
+- If nothing in the user message is worth remembering, return an empty list
 - Return ONLY valid JSON, no markdown, no explanation
 
 Return format:
