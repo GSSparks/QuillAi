@@ -235,23 +235,31 @@ class WikiContextBuilder:
                 seen.add(str(source_path.name))
 
         # 3. Symbol-aware lookup — highest priority
-        # Extract method/class names from the query and resolve to files via
-        # the repo map. Injected before generic scoring because the user
-        # explicitly named a symbol they want to know about.
+        # Extract method/class names from the query, resolve to source files
+        # via the repo map, then fetch the EXACT implementation from disk
+        # using AST. Real source beats wiki summaries for "what does X do".
         if self._repo_map:
             for sym_name in _extract_symbol_names(prompt_text):
                 if remaining <= 300:
                     break
                 for rel in self._repo_map.find_symbol(sym_name):
-                    if Path(rel).name in seen or remaining <= 300:
-                        continue
-                    page = self._wm._read_page(rel)
-                    if not page:
-                        continue
-                    trimmed = self._trim_section(page, min(remaining, 2000))
-                    parts.append(trimmed)
-                    remaining -= len(trimmed)
-                    seen.add(Path(rel).name)
+                    if remaining <= 300:
+                        break
+                    # Get exact source from disk via AST
+                    source_block = self._repo_map.get_symbol_source(rel, sym_name)
+                    if source_block:
+                        trimmed = self._trim_section(source_block, min(remaining, 2000))
+                        parts.append(trimmed)
+                        remaining -= len(trimmed)
+                    # Also inject the wiki summary for broader context
+                    # but only if we haven't used this file already
+                    if Path(rel).name not in seen:
+                        page = self._wm._read_page(rel)
+                        if page:
+                            trimmed = self._trim_section(page, min(remaining, 800))
+                            parts.append(trimmed)
+                            remaining -= len(trimmed)
+                        seen.add(Path(rel).name)
 
         # 4. Score all summaries against the query and pick the best ones
         query_tokens = _query_tokens(prompt_text)

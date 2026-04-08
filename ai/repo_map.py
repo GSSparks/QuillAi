@@ -97,6 +97,40 @@ class RepoMap:
             else:
                 self._dirty.update(self._cache.keys())
 
+    def get_symbol_source(self, rel: str, symbol_name: str) -> str:
+        """
+        Read *rel* from disk, locate *symbol_name* using AST, and return
+        its exact source lines. Returns empty string if not found.
+
+        This gives the chat AI real source code instead of wiki summaries
+        when the user asks about a specific method or class.
+        """
+        full = Path(self.project_root) / rel
+        if not full.exists():
+            return ""
+        try:
+            source = full.read_text(encoding="utf-8", errors="replace")
+            tree   = ast.parse(source)
+        except Exception:
+            return ""
+
+        lines      = source.splitlines()
+        name_lower = symbol_name.lower().lstrip("_")
+
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                     ast.ClassDef)):
+                continue
+            node_lower = node.name.lower().lstrip("_")
+            if node_lower != name_lower and not node_lower.endswith(name_lower):
+                continue
+            start = node.lineno - 1
+            end   = getattr(node, "end_lineno", node.lineno + 40)
+            chunk = "\n".join(lines[start:end])
+            return f"# {rel} — {node.name}\n```python\n{chunk}\n```"
+
+        return ""
+
     def find_symbol(self, name: str) -> list[str]:
         """
         Search the cache for any symbol whose name matches *name*
