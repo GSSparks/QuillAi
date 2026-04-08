@@ -41,6 +41,16 @@ def _autodetect_changes(
         '.tf', '.hcl', '.nix', '.md', '.rst', '.txt', '.sql',
     }
 
+    _PERL_EXTS = {'.pl', '.pm', '.t'}
+    _FULL_EXTS = {
+        '.yml', '.yaml', '.json', '.toml', '.xml',
+        '.ini', '.cfg', '.conf',
+        '.sh', '.bash', '.zsh', '.fish',
+        '.html', '.htm', '.css', '.js', '.ts',
+        '.rs', '.go', '.c', '.cpp', '.h', '.hpp', '.java',
+        '.tf', '.hcl', '.nix', '.md', '.rst', '.txt', '.sql',
+    }
+
     # Split on triple-backtick fences
     chunks = text.split("```")
     for i in range(1, len(chunks), 2):
@@ -52,16 +62,6 @@ def _autodetect_changes(
 
         applicable = False
         mode = 'full'
-
-        _PERL_EXTS = {'.pl', '.pm', '.t'}
-        _FULL_EXTS = {
-            '.yml', '.yaml', '.json', '.toml', '.xml',
-            '.ini', '.cfg', '.conf',
-            '.sh', '.bash', '.zsh', '.fish',
-            '.html', '.htm', '.css', '.js', '.ts',
-            '.rs', '.go', '.c', '.cpp', '.h', '.hpp', '.java',
-            '.tf', '.hcl', '.nix', '.md', '.rst', '.txt', '.sql',
-        }
 
         if ext in _FUNCTION_EXTS:
             try:
@@ -282,7 +282,7 @@ class ChatRenderer:
             self.memory_manager.add_turn("assistant", clean_response)
             self.memory_manager.process_exchange_async(
                 self._last_user_message,
-                full_response,
+                clean_response,
             )
 
         self.memory_manager.save_chat_history(self.chat_history.toHtml())

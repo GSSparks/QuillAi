@@ -103,7 +103,9 @@ _WIKI_MAX_FILES = 5000
 
 def _load_wiki_ignore(repo_root: Path) -> list[str]:
     """
-    Load per-project exclusion patterns from .quillai/wiki_ignore.
+    Load exclusion patterns from two sources, merged in order:
+      1. ~/.config/quillai/wiki_ignore  — global (per user, not in repo)
+      2. <project>/.quillai/wiki_ignore — per-project (can be committed)
     One pattern per line. Lines starting with # are comments.
     Patterns are matched against relative paths using fnmatch.
     Example patterns:
@@ -111,14 +113,18 @@ def _load_wiki_ignore(repo_root: Path) -> list[str]:
         playbooks/molecule
         tests/*
     """
-    ignore_file = repo_root / ".quillai" / "wiki_ignore"
-    if not ignore_file.exists():
-        return []
+    sources = [
+        Path.home() / ".config" / "quillai" / "wiki_ignore",
+        repo_root / ".quillai" / "wiki_ignore",
+    ]
     patterns = []
-    for line in ignore_file.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#"):
-            patterns.append(line)
+    for ignore_file in sources:
+        if not ignore_file.exists():
+            continue
+        for line in ignore_file.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                patterns.append(line)
     return patterns
 
 
