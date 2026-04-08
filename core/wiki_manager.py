@@ -99,7 +99,42 @@ _WIKI_EXTENSIONS = {
 }
 
 # Max files to wiki in a single repo — prevents runaway on monorepos
-_WIKI_MAX_FILES = 500
+_WIKI_MAX_FILES = 5000
+
+def _load_wiki_ignore(repo_root: Path) -> list[str]:
+    """
+    Load per-project exclusion patterns from .quillai/wiki_ignore.
+    One pattern per line. Lines starting with # are comments.
+    Patterns are matched against relative paths using fnmatch.
+    Example patterns:
+        playbooks/vendor/*
+        playbooks/molecule
+        tests/*
+    """
+    ignore_file = repo_root / ".quillai" / "wiki_ignore"
+    if not ignore_file.exists():
+        return []
+    patterns = []
+    for line in ignore_file.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            patterns.append(line)
+    return patterns
+
+
+def _is_wiki_ignored(rel_path: str, patterns: list[str]) -> bool:
+    """Return True if rel_path matches any wiki_ignore pattern."""
+    import fnmatch
+    rel_path = rel_path.replace("\\", "/")
+    for pattern in patterns:
+        pattern = pattern.rstrip("/")
+        if fnmatch.fnmatch(rel_path, pattern):
+            return True
+        # Also match if rel_path starts with pattern (directory exclusion)
+        if rel_path.startswith(pattern.rstrip("*").rstrip("/")):
+            return True
+    return False
+
 
 def _collect_source_files(repo_root: Path) -> list[Path]:
     """Return all wiki-able source files in the repo, ignoring noise dirs."""
@@ -107,12 +142,17 @@ def _collect_source_files(repo_root: Path) -> list[Path]:
         "package-lock.json", "yarn.lock", "poetry.lock", "Pipfile.lock",
     }
     result: list[Path] = []
+    ignore_patterns = _load_wiki_ignore(repo_root)
     for root, dirs, files in os.walk(repo_root):
         root_path = Path(root)
         dirs[:] = [
             d for d in dirs
             if d not in _IGNORE_DIRS
             and not any(frag in d.lower() for frag in _IGNORE_DIR_FRAGMENTS)
+            and not _is_wiki_ignored(
+                str((root_path / d).relative_to(repo_root)).replace(os.sep, '/'),
+                ignore_patterns
+            )
         ]
         for f in files:
             p = Path(f)

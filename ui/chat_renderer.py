@@ -72,8 +72,12 @@ def _autodetect_changes(
                     for node in tree.body
                 )
                 if has_sym:
+                    # Multiple top-level symbols → full file replace
+                    top_syms = [n for n in tree.body
+                                if isinstance(n, (ast.FunctionDef,
+                                    ast.AsyncFunctionDef, ast.ClassDef))]
+                    mode = 'function' if len(top_syms) == 1 else 'full'
                     applicable = True
-                    mode = 'function'
                 elif tree.body:
                     applicable = True
             except SyntaxError:
@@ -255,7 +259,7 @@ class ChatRenderer:
         clean_response, file_changes = _extract_file_changes(full_response)
 
         # Render full response so code blocks stay visible in chat
-        rendered = self._render_ai_response(clean_response or full_response)
+        rendered = self._render_ai_response(clean_response if clean_response.strip() else full_response.replace('<file_change', '<!--').replace('</file_change>', '-->'))
 
         # Auto-detect applicable code blocks if no explicit tags
         if not file_changes:

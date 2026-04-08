@@ -164,6 +164,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
 
         # 4. Basic App State
         self.setWindowTitle("QuillAI")
+
         try:
             icon_path = os.path.join(
                 os.path.dirname(__file__), 'images', 'quillai_logo_min.svg'
@@ -345,6 +346,14 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self._lang_detect_timer.timeout.connect(self._fire_ai_lang_detect) 
         self._lang_detect_running = False
        
+    def _update_window_title(self, project_path: str = None):
+        """Update title bar to show current project name."""
+        if project_path:
+            name = os.path.basename(project_path.rstrip("/\\"))
+            self.setWindowTitle(f"{name} — QuillAI")
+        else:
+            self.setWindowTitle("QuillAI")
+
     @pyqtSlot()
     def _on_repo_map_ready(self):
         self._startup.complete("Repo Map")
@@ -1534,6 +1543,7 @@ Instructions:
             self._init_wiki(project_root=saved_project)
             if hasattr(self, 'update_git_branch'):
                 self.update_git_branch()
+            self._update_window_title(saved_project)
             self.plugin_manager.emit("project_opened", project_root=saved_project)
 
         restored = 0
@@ -2243,7 +2253,7 @@ Instructions:
 
 if __name__ == "__main__":
     QApplication.setApplicationName("QuillAI")
-    QApplication.setApplicationDisplayName("QuillAI")
+    # ApplicationDisplayName intentionally not set — prevents Qt appending it to window title
     QApplication.setOrganizationName("GSSparks")
 
     app = QApplication(sys.argv)

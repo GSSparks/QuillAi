@@ -60,14 +60,23 @@ def apply_function(file_path: str, new_source: str,
     orig_lines = original.splitlines(keepends=True)
     target_node = None
 
-    for node in ast.walk(orig_tree):
+    for node in orig_tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             if node.name == sym_name:
                 target_node = node
                 break
 
     if target_node is None:
-        return False, f"Could not find '{sym_name}' in {path.name}."
+        # Symbol doesn't exist yet — append as new function
+        new_lines = _reindent(new_source.strip() + '\n', '')
+        appended = original.rstrip() + '\n\n\n' + ''.join(new_lines)
+        try:
+            ast.parse(appended)
+        except SyntaxError as e:
+            return False, f'New code has a syntax error: {e}'
+        _undo_stack[str(path.resolve())] = original
+        path.write_text(appended, encoding='utf-8')
+        return True, f"Added '{sym_name}' to {path.name}."
 
     # Validate new_source parses cleanly
     try:
@@ -85,7 +94,7 @@ def apply_function(file_path: str, new_source: str,
 
     # Rebuild file
     before = orig_lines[:start_line]
-    after  = orig_lines[end_line:]   # end_lineno is inclusive so skip it
+    after  = orig_lines[end_line + 1:]   # end_lineno is inclusive so skip it
 
     # Ensure new_lines ends with newline
     if new_lines and not new_lines[-1].endswith("\n"):
