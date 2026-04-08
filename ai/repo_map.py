@@ -105,7 +105,8 @@ class RepoMap:
         This gives the chat AI real source code instead of wiki summaries
         when the user asks about a specific method or class.
         """
-        full = Path(self.project_root) / rel
+        from pathlib import Path as _Path
+        full = _Path(self.project_root) / rel
         if not full.exists():
             return ""
         try:
