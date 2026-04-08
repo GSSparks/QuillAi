@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QScrollArea, QLabel, QPushButton, QSizePolicy,
     QFrame, QTextEdit, QSplitter, QApplication,
-    QRubberBand,
+    QRubberBand, QTabWidget,
 )
 from PyQt6.QtCore import (
     Qt, pyqtSignal, QPoint, QPointF, QRect, QSize,
@@ -41,6 +41,13 @@ HEADER_H      = 28
 SWIMLANE_GAP  = 32
 SWIMLANE_HDR  = 24
 
+# Port geometry
+PORT_R        = 5    # port circle radius
+PORT_HIT      = 12   # click detection radius
+PORT_OUT_X    = CARD_W - PORT_R   # output port x (right edge)
+PORT_IN_X     = PORT_R            # input port x (left edge)
+PORT_Y        = CARD_H // 2       # port y (vertical center)
+
 
 # ── Job Card ──────────────────────────────────────────────────────────────────
 
@@ -56,15 +63,19 @@ class JobCard(QFrame):
         self._t        = theme
         self._selected = False
         self._drag_pos = None
+        self._hovered  = False
 
         self.setFixedSize(CARD_W, CARD_H)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip(self._tooltip())
+        self.setMouseTracking(True)
         self._style()
 
     def _style(self):
         t = self._t
-        if self.job.trigger:
+        if getattr(self.job, 'is_template', False):
+            border = t.get('bg4',    '#7c6f64')
+        elif self.job.trigger:
             border = t.get('purple', '#b16286')
         elif self.job.is_deploy:
             border = t.get('blue',   '#458588')
@@ -75,14 +86,17 @@ class JobCard(QFrame):
         else:
             border = t.get('bg3',    '#665c54')
 
+        is_tmpl = getattr(self.job, 'is_template', False)
         bg = t.get('bg2' if self._selected else 'bg1',
                    '#504945' if self._selected else '#3c3836')
 
+        opacity = '0.6' if is_tmpl else '1.0'
         self.setStyleSheet(f"""
             QFrame {{
                 background: {bg};
                 border: 2px solid {border};
                 border-radius: 6px;
+                opacity: {opacity};
             }}
         """)
 
@@ -144,6 +158,20 @@ class JobCard(QFrame):
             p.drawText(QRect(6, 30, 152, 16),
                        Qt.AlignmentFlag.AlignVCenter, sub)
 
+        # Parallel count badge
+        pc = getattr(self.job, 'parallel_count', 0)
+        if pc > 0:
+            badge_w = 28
+            f.setPointSize(7); f.setBold(True); p.setFont(f)
+            badge_color = QColor(t.get('purple', '#b16286'))
+            p.setBrush(QBrush(badge_color))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawRoundedRect(CARD_W - badge_w - 4, 4, badge_w, 14, 3, 3)
+            p.setPen(QColor(t.get('bg0', '#282828')))
+            p.drawText(QRect(CARD_W - badge_w - 4, 4, badge_w, 14),
+                       Qt.AlignmentFlag.AlignCenter, f"×{pc}")
+            f.setBold(False)
+
         # Needs / trigger hint
         if self.job.needs:
             f.setPointSize(7); p.setFont(f)
@@ -159,6 +187,28 @@ class JobCard(QFrame):
             p.drawText(QRect(6, 48, 152, 12),
                        Qt.AlignmentFlag.AlignVCenter,
                        f"⤵ {self.job.trigger.include}")
+
+        # Draw connection ports when hovered
+        if self._hovered:
+            port_color = QColor(t.get('aqua', '#689d6a'))
+            p.setBrush(QBrush(port_color))
+            p.setPen(QPen(QColor(t.get('bg0', '#282828')), 1.5))
+            # Output port (right edge)
+            p.drawEllipse(PORT_OUT_X - PORT_R, PORT_Y - PORT_R,
+                          PORT_R * 2, PORT_R * 2)
+            # Input port (left edge)
+            p.drawEllipse(PORT_IN_X - PORT_R, PORT_Y - PORT_R,
+                          PORT_R * 2, PORT_R * 2)
+
+    def enterEvent(self, event):
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -243,6 +293,7 @@ class PipelineCanvas(QWidget):
     job_edit        = pyqtSignal(object)         # PipelineJob
     stage_changed   = pyqtSignal(object, str)    # PipelineJob, new_stage
     card_drag_start = pyqtSignal(object, str)    # job_name, source_stage
+    needs_changed   = pyqtSignal(object, str, bool)  # job, need_name, add(True)/remove(False)
 
     def __init__(self, label: str = "", parent=None):
         super().__init__(parent)
@@ -253,7 +304,12 @@ class PipelineCanvas(QWidget):
         self._t         = get_theme()
         self._label     = label
 
+        # Wire drag state
+        self._wire_source: str | None    = None   # job name
+        self._wire_pos:    QPointF | None = None   # current mouse pos
+
         self.setAcceptDrops(True)
+        self.setMouseTracking(True)
         theme_signals.theme_changed.connect(self._on_theme)
 
     def load_pipeline(self, pipeline: Pipeline, label: str = ""):
@@ -320,6 +376,121 @@ class PipelineCanvas(QWidget):
                 self._cards[job.name] = card
 
         self.update()
+
+    # ── Port / wire interaction ───────────────────────────────────────
+
+    def _card_output_port_pos(self, job_name: str) -> QPointF | None:
+        """Global position of a card's output port."""
+        card = self._cards.get(job_name)
+        if not card:
+            return None
+        return QPointF(card.x() + PORT_OUT_X, card.y() + PORT_Y)
+
+    def _card_input_port_pos(self, job_name: str) -> QPointF | None:
+        """Global position of a card's input port."""
+        card = self._cards.get(job_name)
+        if not card:
+            return None
+        return QPointF(card.x() + PORT_IN_X, card.y() + PORT_Y)
+
+    def _job_near_output_port(self, pos: QPointF) -> str | None:
+        """Return job name if pos is within PORT_HIT of any output port."""
+        for name in self._cards:
+            p = self._card_output_port_pos(name)
+            if p and (pos - p).manhattanLength() <= PORT_HIT:
+                return name
+        return None
+
+    def _job_near_input_port(self, pos: QPointF) -> str | None:
+        """Return job name if pos is within PORT_HIT of any input port."""
+        for name in self._cards:
+            p = self._card_input_port_pos(name)
+            if p and (pos - p).manhattanLength() <= PORT_HIT:
+                return name
+        return None
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            pos = QPointF(event.position())
+            hit = self._job_near_output_port(pos)
+            if hit:
+                self._wire_source = hit
+                self._wire_pos    = pos
+                self.setCursor(Qt.CursorShape.CrossCursor)
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._wire_source:
+            self._wire_pos = QPointF(event.position())
+            self.update()
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._wire_source and event.button() == Qt.MouseButton.LeftButton:
+            pos = QPointF(event.position())
+            target = self._job_near_input_port(pos)
+            if target and target != self._wire_source:
+                if self._pipeline:
+                    job = self._pipeline.jobs.get(target)
+                    if job and self._wire_source not in job.needs:
+                        self.needs_changed.emit(
+                            job, self._wire_source, True
+                        )
+            self._wire_source = None
+            self._wire_pos    = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.update()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def contextMenuEvent(self, event):
+        """Right-click on an arrow to remove a dependency."""
+        if not self._pipeline:
+            return
+        pos = QPointF(event.pos())
+        # Find if pos is near any dependency arrow
+        hit_job, hit_need = self._arrow_hit_test(pos)
+        if hit_job and hit_need:
+            from PyQt6.QtWidgets import QMenu
+            menu = QMenu(self)
+            act  = menu.addAction(
+                f'Remove dependency: {hit_job.name} ← {hit_need}'
+            )
+            if menu.exec(event.globalPos()) == act:
+                self.needs_changed.emit(hit_job, hit_need, False)
+
+    def _arrow_hit_test(
+        self, pos: QPointF, tol: float = 8.0
+    ) -> tuple:
+        """Return (job, need_name) if pos is near a dependency arrow."""
+        if not self._pipeline:
+            return None, None
+        for job in self._pipeline.jobs.values():
+            for need in job.needs:
+                src = self._card_output_port_pos(need)
+                dst = self._card_input_port_pos(job.name)
+                if not src or not dst:
+                    continue
+                # Sample points along the bezier and check distance
+                cx = (src.x() + dst.x()) / 2
+                for t in [i / 10 for i in range(11)]:
+                    u  = 1 - t
+                    bx = (u**3 * src.x() +
+                          3*u**2*t * cx +
+                          3*u*t**2 * cx +
+                          t**3 * dst.x())
+                    by = (u**3 * src.y() +
+                          3*u**2*t * src.y() +
+                          3*u*t**2 * dst.y() +
+                          t**3 * dst.y())
+                    if abs(bx - pos.x()) + abs(by - pos.y()) < tol:
+                        return job, need
+        return None, None
 
     def _on_card_dropped(self, job_name_or_job, stage: str):
         # May receive job_name string from drop event
@@ -410,6 +581,39 @@ class PipelineCanvas(QWidget):
 
         # Dependency arrows
         self._draw_arrows(painter, stages, stage_jobs)
+
+        # Live wire while dragging
+        if self._wire_source and self._wire_pos:
+            src = self._card_output_port_pos(self._wire_source)
+            if src:
+                wire_color = QColor(t.get('yellow', '#d79921'))
+                wire_color.setAlpha(200)
+                pen2 = QPen(wire_color, 2)
+                pen2.setStyle(Qt.PenStyle.DashLine)
+                painter.setPen(pen2)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                cx  = (src.x() + self._wire_pos.x()) / 2
+                path = QPainterPath()
+                path.moveTo(src)
+                path.cubicTo(
+                    cx, src.y(),
+                    cx, self._wire_pos.y(),
+                    self._wire_pos.x(), self._wire_pos.y()
+                )
+                painter.drawPath(path)
+                # Target port highlight
+                target = self._job_near_input_port(self._wire_pos)
+                if target:
+                    tp = self._card_input_port_pos(target)
+                    if tp:
+                        painter.setBrush(QBrush(wire_color))
+                        painter.setPen(Qt.PenStyle.NoPen)
+                        painter.drawEllipse(
+                            int(tp.x()) - PORT_R - 2,
+                            int(tp.y()) - PORT_R - 2,
+                            (PORT_R + 2) * 2,
+                            (PORT_R + 2) * 2
+                        )
 
     def _draw_arrows(self, painter, stages, stage_jobs):
         t           = self._t
@@ -508,7 +712,7 @@ class PipelineViewerPanel(QDockWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # Toolbar
+        # Toolbar (above tabs, always visible)
         toolbar = QWidget()
         toolbar.setFixedHeight(32)
         tl = QHBoxLayout(toolbar)
@@ -540,6 +744,17 @@ class PipelineViewerPanel(QDockWidget):
 
         main_layout.addWidget(toolbar)
 
+        # Tab widget
+        self._tabs = QTabWidget()
+        self._tabs.setDocumentMode(True)
+        main_layout.addWidget(self._tabs)
+
+        # ── Graph tab ──────────────────────────────────────────────────
+        graph_widget = QWidget()
+        graph_layout = QVBoxLayout(graph_widget)
+        graph_layout.setContentsMargins(0, 0, 0, 0)
+        graph_layout.setSpacing(0)
+
         # Scroll area containing swimlanes
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -555,14 +770,22 @@ class PipelineViewerPanel(QDockWidget):
         self._swimlane_layout.addStretch()
 
         self._scroll.setWidget(self._swimlane_container)
-        main_layout.addWidget(self._scroll)
+        graph_layout.addWidget(self._scroll)
 
-        # Detail panel
+        # Detail panel (bottom of graph tab)
         self._detail = QTextEdit()
         self._detail.setReadOnly(True)
         self._detail.setFixedHeight(130)
         self._detail.setPlaceholderText("Click a job to see details…")
-        main_layout.addWidget(self._detail)
+        graph_layout.addWidget(self._detail)
+
+        self._tabs.addTab(graph_widget, "Graph")
+
+        # ── Info tab ───────────────────────────────────────────────────
+        self._info_view = QTextEdit()
+        self._info_view.setReadOnly(True)
+        self._info_view.setPlaceholderText("Load a pipeline to see info…")
+        self._tabs.addTab(self._info_view, "Info")
 
         self.setWidget(container)
 
@@ -592,6 +815,18 @@ class PipelineViewerPanel(QDockWidget):
             if item.widget():
                 item.widget().deleteLater()
 
+        # Template jobs swimlane (dot-prefixed jobs)
+        templates = getattr(pipeline, 'templates', {})
+        if templates:
+            # Create a fake pipeline just for the templates
+            from plugins.features.pipeline_viewer.parsers import Pipeline, PipelineType
+            tmpl_stages = list({j.stage for j in templates.values()})
+            tmpl_pipeline = Pipeline(
+                PipelineType.GITLAB, tmpl_stages, templates,
+                file_path=file_path
+            )
+            self._add_swimlane(tmpl_pipeline, "⬡ Templates", file_path)
+
         # Parent pipeline swimlane
         self._add_swimlane(pipeline, "Parent pipeline", file_path)
 
@@ -607,6 +842,9 @@ class PipelineViewerPanel(QDockWidget):
             f"{name}  ·  {jobs} jobs"
             + (f"  ·  {total_children} child jobs" if total_children else "")
         )
+
+        # Populate Info tab
+        self._populate_info_tab(pipeline)
 
     def _add_swimlane(self, pipeline: Pipeline,
                       label: str, file_path: str):
@@ -636,6 +874,10 @@ class PipelineViewerPanel(QDockWidget):
         canvas.stage_changed.connect(
             lambda job, stage, fp=file_path:
             self._on_stage_changed(job, stage, fp)
+        )
+        canvas.needs_changed.connect(
+            lambda job, need, add, fp=file_path:
+            self._on_needs_changed(job, need, add, fp)
         )
         wl.addWidget(canvas)
 
@@ -679,7 +921,8 @@ class PipelineViewerPanel(QDockWidget):
         pipeline = self._find_pipeline_for_job(job)
         stages   = pipeline.stages if pipeline else []
 
-        dlg = JobEditorDialog(job, stages, self)
+        all_jobs = list(pipeline.jobs.keys()) if pipeline else []
+        dlg = JobEditorDialog(job, stages, all_jobs=all_jobs, parent=self)
         dlg.job_changed.connect(self._on_job_changed)
 
         # Position near the card
@@ -713,12 +956,38 @@ class PipelineViewerPanel(QDockWidget):
             elif field == 'allow_failure':
                 patcher.set_job_allow_failure(job_name, value)
             elif field == 'script':
-                # Script is a list — write it back as a block
                 patcher.set_job_script(job_name, value)
+            elif field == 'needs':
+                # value is the complete new needs list
+                # Find what was added and removed
+                job = self._find_job_by_name(job_name)
+                old_needs = set(job.needs if job else [])
+                new_needs = set(value)
+                for n in new_needs - old_needs:
+                    patcher.add_need(job_name, n)
+                for n in old_needs - new_needs:
+                    patcher.remove_need(job_name, n)
             else:
                 patcher.set_job_field(job_name, field, str(value))
 
         # Reload pipeline from disk
+        QTimer.singleShot(100, self._refresh)
+
+    def _on_needs_changed(
+        self, job, need_name: str, add: bool, file_path: str
+    ):
+        """Add or remove a needs: dependency."""
+        if isinstance(job, str):
+            job = self._find_job_by_name(job)
+        if not job:
+            return
+        patcher = self._get_patcher(file_path or self._file_path)
+        if not patcher:
+            return
+        if add:
+            patcher.add_need(job.name, need_name)
+        else:
+            patcher.remove_need(job.name, need_name)
         QTimer.singleShot(100, self._refresh)
 
     def _on_stage_changed(self, job, stage: str, file_path: str):
@@ -758,7 +1027,7 @@ class PipelineViewerPanel(QDockWidget):
         QTimer.singleShot(100, self._refresh)
 
     def _on_add_stage(self):
-        from PyQt6.QtWidgets import QInputDialog
+        from PyQt6.QtWidgets import QInputDialog, QMessageBox
         if not self._pipeline or not self._patcher:
             return
 
@@ -767,8 +1036,31 @@ class PipelineViewerPanel(QDockWidget):
         )
         if not ok or not name.strip():
             return
+        stage_name = name.strip()
 
-        self._patcher.add_stage(name.strip())
+        self._patcher.add_stage(stage_name)
+
+        # A stage with no jobs won't appear as a column.
+        # Offer to add a placeholder job so the column is visible.
+        reply = QMessageBox.question(
+            self,
+            "Add placeholder job?",
+            f"Stage '{stage_name}' added.\n\n"
+            f"Stages only appear as columns when they have jobs.\n"
+            f"Add a placeholder job to '{stage_name}'?",
+            QMessageBox.StandardButton.Yes |
+            QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            job_name, ok2 = QInputDialog.getText(
+                self, "Placeholder job",
+                "Job name:",
+                text=f"{stage_name}_job"
+            )
+            if ok2 and job_name.strip():
+                self._patcher.insert_job(job_name.strip(), stage_name)
+
         QTimer.singleShot(100, self._refresh)
 
     # ── Detail panel ──────────────────────────────────────────────────────
@@ -862,6 +1154,128 @@ class PipelineViewerPanel(QDockWidget):
         self._detail.setTextCursor(cursor)
         self._detail.moveCursor(
             self._detail.textCursor().MoveOperation.Start
+        )
+
+    # ── Info tab ──────────────────────────────────────────────────────
+
+    def _populate_info_tab(self, pipeline):
+        """Render includes, workflow rules, and variables into the Info tab."""
+        t = self._t
+        self._info_view.clear()
+        cursor = self._info_view.textCursor()
+
+        from PyQt6.QtGui import QTextCharFormat, QTextBlockFormat, QColor, QFont
+
+        def char_fmt(fg_key, bold=False, italic=False, size=9, mono=False):
+            f = QTextCharFormat()
+            f.setForeground(QColor(t.get(fg_key, '#ebdbb2')))
+            f.setBackground(QColor(t.get('bg0', '#282828')))
+            font = QFont()
+            font.setPointSize(size)
+            font.setBold(bold)
+            font.setItalic(italic)
+            if mono:
+                font.setFamily('monospace')
+            f.setFont(font)
+            return f
+
+        def block_fmt(left_margin=0, top=2, bottom=2):
+            bf = QTextBlockFormat()
+            bf.setLeftMargin(left_margin)
+            bf.setTopMargin(top)
+            bf.setBottomMargin(bottom)
+            bf.setBackground(QColor(t.get('bg0', '#282828')))
+            return bf
+
+        def section(icon, title, count=None):
+            cursor.insertBlock(block_fmt(top=8, bottom=4))
+            label = f'{icon}  {title}'
+            if count is not None:
+                label += f'  ({count})'
+            cursor.insertText(label, char_fmt('yellow', bold=True, size=10))
+
+        def row(key, val, key_color='fg4', val_color='fg1',
+                indent=16, mono_val=False):
+            cursor.insertBlock(block_fmt(left_margin=indent))
+            cursor.insertText(f'{key}', char_fmt(key_color, italic=True))
+            if val:
+                cursor.insertText('  ', char_fmt('bg3'))
+                cursor.insertText(f'  {val}',
+                    char_fmt(val_color, mono=mono_val))
+
+        def muted(text, indent=16):
+            cursor.insertBlock(block_fmt(left_margin=indent))
+            cursor.insertText(text, char_fmt('bg4', italic=True))
+
+        # Includes
+        includes = getattr(pipeline, 'includes', [])
+        section('📦', 'Includes', len(includes) if includes else None)
+        if includes:
+            for inc in includes:
+                if isinstance(inc, dict):
+                    if 'project' in inc:
+                        row('remote', inc['project'], val_color='purple')
+                        if 'file' in inc:
+                            row('  └─ file', inc['file'],
+                                val_color='aqua', indent=32)
+                        if 'ref' in inc:
+                            row('  └─ ref', inc['ref'],
+                                val_color='fg4', indent=32)
+                    elif 'local' in inc:
+                        row('local', inc['local'], val_color='green')
+                    elif 'template' in inc:
+                        row('template', inc['template'], val_color='blue')
+                    elif 'remote' in inc:
+                        row('url', inc['remote'], val_color='blue')
+                    else:
+                        row('include', str(inc), val_color='fg1')
+                elif isinstance(inc, str):
+                    row('local', inc, val_color='green')
+        else:
+            muted('None')
+
+        # Workflow
+        workflow = getattr(pipeline, 'workflow', [])
+        section('🔀', 'Workflow — Pipeline runs when',
+                len(workflow) if workflow else None)
+        if workflow:
+            for rule in workflow:
+                when = rule.get('when', 'on_success')
+                cond = rule.get('if', '')
+                icon_c = '✗' if when == 'never' else '✓'
+                key_c  = 'red' if when == 'never' else 'green'
+                val_c  = 'fg4' if when == 'never' else 'fg1'
+                suffix = f'  → {when}' if when != 'on_success' else ''
+                cursor.insertBlock(block_fmt(left_margin=16))
+                cursor.insertText(f'{icon_c} ',
+                    char_fmt(key_c, bold=True))
+                cursor.insertText(cond,
+                    char_fmt(val_c, mono=True, size=8))
+                if suffix:
+                    cursor.insertText(suffix,
+                        char_fmt('orange', italic=True, size=8))
+        else:
+            muted('No workflow rules — pipeline always runs')
+
+        # Variables
+        variables = getattr(pipeline, 'variables', {})
+        section('📋', 'Variables', len(variables) if variables else None)
+        if variables:
+            max_key = max((len(k) for k in variables), default=10)
+            for key, val in sorted(variables.items()):
+                is_secret = any(s in key.upper()
+                    for s in ('PASSWORD', 'TOKEN', 'SECRET', 'KEY', 'PASS'))
+                is_runtime = ('$CI_' in val or '${CI_' in val
+                               or val.startswith('$'))
+                display_val = '●●●●●●●●' if is_secret else val
+                val_color   = 'fg4' if is_runtime else 'aqua'
+                row(key.ljust(max_key), display_val,
+                    val_color=val_color, mono_val=True)
+        else:
+            muted('No pipeline-level variables defined')
+
+        self._info_view.moveCursor(
+            self._info_view.textCursor().MoveOperation.Start
         )
 
     # ── Refresh ───────────────────────────────────────────────────────────
@@ -1006,6 +1420,44 @@ class PipelineViewerPanel(QDockWidget):
             if sep.frameShape() == QFrame.Shape.HLine:
                 sep.setStyleSheet(f"background: {t['bg3']};")
     
+        # Tab widget styling
+        if hasattr(self, '_tabs'):
+            self._tabs.setStyleSheet(f"""
+                QTabWidget::pane {{
+                    border: none;
+                    background: {t['bg0']};
+                }}
+                QTabBar::tab {{
+                    background: {t['bg1']};
+                    color: {t['fg4']};
+                    padding: 4px 16px;
+                    border: none;
+                    border-right: 1px solid {t['bg3']};
+                    font-size: 9pt;
+                }}
+                QTabBar::tab:selected {{
+                    background: {t['bg2']};
+                    color: {t['yellow']};
+                    border-bottom: 2px solid {t['yellow']};
+                }}
+                QTabBar::tab:hover:!selected {{
+                    background: {t['bg2']};
+                    color: {t['fg1']};
+                }}
+            """)
+
+        # Info view styling
+        if hasattr(self, '_info_view'):
+            self._info_view.setStyleSheet(f"""
+                QTextEdit {{
+                    background: {t['bg0']};
+                    color: {t['fg1']};
+                    border: none;
+                    padding: 8px;
+                    font-size: 9pt;
+                }}
+            """)
+
         # Propagate to all canvases
         for canvas in self._canvases.values():
             canvas._on_theme(t)

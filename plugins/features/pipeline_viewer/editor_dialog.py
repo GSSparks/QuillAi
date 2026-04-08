@@ -126,11 +126,13 @@ class JobEditorDialog(QDialog):
 
     job_changed = pyqtSignal(str, dict)   # job_name, changes
 
-    def __init__(self, job, stages: list, parent=None):
+    def __init__(self, job, stages: list,
+                 all_jobs: list = None, parent=None):
         super().__init__(parent)
-        self.job    = job
-        self.stages = stages
-        self._orig  = {}
+        self.job      = job
+        self.stages   = stages
+        self.all_jobs = [j for j in (all_jobs or []) if j != job.name]
+        self._orig    = {}
 
         self.setWindowTitle(f"Edit job: {job.name}")
         self.setWindowFlags(
@@ -221,6 +223,48 @@ class JobEditorDialog(QDialog):
 
         layout.addLayout(form)
 
+        # Needs section
+        if self.all_jobs:
+            from PyQt6.QtWidgets import QListWidget, QListWidgetItem
+            needs_label = QLabel("Needs:")
+            needs_label.setObjectName("sectionLabel")
+            layout.addWidget(needs_label)
+
+            self._needs_list = QListWidget()
+            self._needs_list.setMaximumHeight(100)
+            self._needs_list.setSelectionMode(
+                QListWidget.SelectionMode.MultiSelection
+            )
+            self._needs_list.setStyleSheet(f"""
+                QListWidget {{
+                    background: {get_theme()['bg0']};
+                    color: {get_theme()['fg1']};
+                    border: 1px solid {get_theme()['bg3']};
+                    border-radius: 3px;
+                    font-size: 9pt;
+                }}
+                QListWidget::item:selected {{
+                    background: {get_theme()['bg3']};
+                    color: {get_theme()['aqua']};
+                }}
+            """)
+            for jname in self.all_jobs:
+                item = QListWidgetItem(jname)
+                self._needs_list.addItem(item)
+                if jname in (self.job.needs or []):
+                    item.setSelected(True)
+            self._orig['needs'] = list(self.job.needs or [])
+            layout.addWidget(self._needs_list)
+
+            needs_hint = QLabel(
+                "Ctrl+click to select multiple. "
+                "Or drag ports on the canvas."
+            )
+            needs_hint.setStyleSheet("font-size: 8pt;")
+            layout.addWidget(needs_hint)
+        else:
+            self._needs_list = None
+
         # Script section
         script_label = QLabel("Script:")
         script_label.setObjectName("sectionLabel")
@@ -295,6 +339,15 @@ class JobEditorDialog(QDialog):
         script = self._script.toPlainText().strip()
         if script != self._orig.get('script', ''):
             changes['script'] = script
+
+        if self._needs_list is not None:
+            new_needs = [
+                self._needs_list.item(i).text()
+                for i in range(self._needs_list.count())
+                if self._needs_list.item(i).isSelected()
+            ]
+            if new_needs != self._orig.get('needs', []):
+                changes['needs'] = new_needs
 
         if changes:
             self.job_changed.emit(self.job.name, changes)

@@ -191,21 +191,60 @@ class YAMLPatcher:
         return True
 
     def add_stage(self, stage_name: str) -> bool:
-        """Add a new stage to the stages: list."""
+        """Add a new stage to the stages: list.
+        Handles block list, inline [a,b,c], and missing stages key.
+        """
         for i, line in enumerate(self._lines):
-            if re.match(r'^stages\s*:', line):
-                # Find end of stages block
-                j = i + 1
-                while (j < len(self._lines) and
-                       re.match(r'^\s+-\s+', self._lines[j])):
-                    existing = self._lines[j].strip().lstrip('- ')
-                    if existing == stage_name:
-                        return True  # already exists
-                    j += 1
-                self._lines.insert(j, f"  - {stage_name}\n")
+            if not re.match(r'^stages\s*:', line):
+                continue
+
+            rest = line.split(':', 1)[1].strip()
+
+            # Inline format: stages: [build, test, deploy]
+            if rest.startswith('['):
+                inner   = rest[1:rest.rfind(']')]
+                items   = [x.strip() for x in inner.split(',') if x.strip()]
+                if stage_name in items:
+                    return True
+                items.append(stage_name)
+                self._lines[i] = f"stages: [{', '.join(items)}]\n"
                 self._save()
                 return True
-        return False
+
+            # Block list format: stages:\n  - build\n  - test
+            j = i + 1
+            while (j < len(self._lines) and
+                   re.match(r'^\s+-\s+', self._lines[j])):
+                existing = self._lines[j].strip().lstrip('- ').strip()
+                if existing == stage_name:
+                    return True
+                j += 1
+            self._lines.insert(j, f"  - {stage_name}\n")
+            self._save()
+            return True
+
+        # No stages: key found — insert one before the first job
+        # Find first top-level key that looks like a job
+        _RESERVED = {
+            'workflow', 'include', 'variables', 'default',
+            'image', 'services', 'before_script', 'after_script',
+            'cache', 'artifacts',
+        }
+        insert_at = len(self._lines)  # default: append
+        for i, line in enumerate(self._lines):
+            m = re.match(r'^([\w-]+)\s*:', line)
+            if m and m.group(1) not in _RESERVED:
+                insert_at = i
+                break
+        new_block = [
+            f"stages:\n",
+            f"  - {stage_name}\n",
+            f"\n",
+        ]
+        for offset, nl in enumerate(new_block):
+            self._lines.insert(insert_at + offset, nl)
+        self._save()
+        return True
 
     def set_job_script(self, job_name: str, script_text: str) -> bool:
         """Replace the script: block for a job with new content."""
@@ -279,6 +318,53 @@ class YAMLPatcher:
         line = self._lines[job_line]
         m    = re.match(r'^(\s*)', line)
         return m.group(1) if m else ''
+
+    def remove_need(self, job_name: str, need: str) -> bool:
+        """
+        Remove a job from the needs: list of another job.
+        Handles both inline [a, b] and block list formats.
+        """
+        job_start = self._find_job_line(job_name)
+        if job_start < 0:
+            return False
+
+        job_end = self._find_job_end(job_start)
+
+        for i in range(job_start + 1, job_end + 1):
+            if i >= len(self._lines):
+                break
+            line = self._lines[i]
+            m = re.match(r'^(\s+needs\s*:\s*)(.*)', line)
+            if not m:
+                continue
+
+            rest = m.group(2).strip()
+            if rest.startswith('['):
+                # Inline: needs: [job1, job2]
+                inner = rest[1:rest.rfind(']')]
+                items = [x.strip() for x in inner.split(',') if x.strip()]
+                items = [x for x in items if x != need]
+                if not items:
+                    del self._lines[i]
+                else:
+                    self._lines[i] = f"{m.group(1)}[{', '.join(items)}]\n"
+                self._save()
+                return True
+            else:
+                # Block list — find and remove the matching entry
+                j = i + 1
+                while j < len(self._lines) and re.match(r'^\s+-\s+', self._lines[j]):
+                    entry = self._lines[j].strip().lstrip('- ').strip()
+                    if entry == need:
+                        del self._lines[j]
+                        # If needs: block is now empty, remove the header too
+                        if j >= len(self._lines) or not re.match(r'^\s+-\s+', self._lines[j]):
+                            if j == i + 1:  # no items left
+                                del self._lines[i]
+                        self._save()
+                        return True
+                    j += 1
+        return False
 
     def reload(self):
         """Reload from disk after external changes."""

@@ -48,6 +48,9 @@ class PipelineJob:
     is_manual:     bool  = False
     is_deploy:     bool  = False
     trigger:       TriggerInfo | None = None
+    is_template:   bool  = False   # dot-prefixed template job
+    extends:       str   = ""    # name of template this extends
+    parallel_count: int  = 0      # number of matrix instances
     # Source location for write-back
     file_path:     str   = ""
     line_start:    int   = 0
@@ -63,6 +66,10 @@ class Pipeline:
     errors:    list        = field(default_factory=list)
     # Child pipelines triggered by jobs in this pipeline
     children:  dict        = field(default_factory=dict)  # job_name → Pipeline
+    templates:  dict       = field(default_factory=dict)  # name → PipelineJob
+    includes:   list       = field(default_factory=list)   # raw include entries
+    variables:  dict       = field(default_factory=dict)   # pipeline-level vars
+    workflow:   list       = field(default_factory=list)   # workflow rule dicts
 
 
 # ── GitLab CI parser ──────────────────────────────────────────────────────────
@@ -72,6 +79,34 @@ _GITLAB_RESERVED = {
     'image', 'services', 'before_script', 'after_script',
     'cache', 'artifacts',
 }
+
+
+def _resolve_extends(jobs: dict, templates: dict) -> None:
+    """
+    Resolve extends: inheritance for all jobs in-place.
+    Jobs inherit image, tags, script from their template
+    if they don't define those fields themselves.
+    Handles single string and list extends.
+    """
+    for job in jobs.values():
+        if not job.extends:
+            continue
+        # extends can be a string or list — handle both
+        names = ([job.extends] if isinstance(job.extends, str)
+                 else job.extends)
+        for tname in reversed(names):  # later entries win
+            tmpl = templates.get(tname)
+            if not tmpl:
+                continue
+            if not job.image and tmpl.image:
+                job.image = tmpl.image
+            if not job.script and tmpl.script:
+                job.script = list(tmpl.script)
+            if not job.tags and tmpl.tags:
+                job.tags = list(tmpl.tags)
+            if job.when == 'on_success' and tmpl.when != 'on_success':
+                job.when = tmpl.when
+                job.is_manual = tmpl.is_manual
 
 
 def parse_gitlab(content: str, file_path: str = "",
@@ -95,14 +130,19 @@ def parse_gitlab(content: str, file_path: str = "",
     # Build line index for write-back
     line_index = _build_line_index(content)
 
+    templates: dict = {}  # dot-prefixed template jobs
+
     for key, val in data.items():
-        if key in _GITLAB_RESERVED or key.startswith('.'):
+        if key in _GITLAB_RESERVED:
             continue
         if not isinstance(val, dict):
             continue
 
+        is_tmpl = key.startswith('.')
+
         job           = PipelineJob(name=key)
         job.file_path = file_path
+        job.is_template = is_tmpl
         job.stage     = val.get('stage', stages[0] if stages else 'default')
         job.image     = _str(val.get('image', ''))
         job.tags      = _list(val.get('tags', []))
@@ -119,14 +159,39 @@ def parse_gitlab(content: str, file_path: str = "",
         # Script
         job.script = _list(val.get('script', []))
 
-        # Needs
+        # Extends
+        ext = val.get('extends', '')
+        if isinstance(ext, list):
+            job.extends = ext  # keep as list
+        else:
+            job.extends = _str(ext)
+
+        # Needs — handle string, plain dict, and parallel matrix dict
         needs = val.get('needs', [])
         if isinstance(needs, list):
             for n in needs:
                 if isinstance(n, str):
                     job.needs.append(n)
                 elif isinstance(n, dict):
-                    job.needs.append(n.get('job', ''))
+                    jname = n.get('job', '')
+                    if jname:
+                        job.needs.append(jname)
+
+        # Parallel matrix — count instances
+        parallel = val.get('parallel')
+        if isinstance(parallel, dict):
+            matrix = parallel.get('matrix', [])
+            count  = 1
+            for entry in matrix:
+                # Each matrix entry is a dict of variable lists
+                entry_count = 1
+                for v in entry.values():
+                    if isinstance(v, list):
+                        entry_count *= len(v)
+                count += entry_count
+            job.parallel_count = max(count - 1, len(matrix))
+        elif isinstance(parallel, int) and parallel > 1:
+            job.parallel_count = parallel
 
         # Trigger
         trigger_data = val.get('trigger')
@@ -142,10 +207,40 @@ def parse_gitlab(content: str, file_path: str = "",
         # Line range for surgical edits
         job.line_start, job.line_end = line_index.get(key, (0, 0))
 
-        jobs[key] = job
+        if is_tmpl:
+            templates[key] = job
+        else:
+            jobs[key] = job
 
-    pipeline = Pipeline(PipelineType.GITLAB, stages, jobs,
-                        file_path=file_path)
+    # Resolve extends inheritance
+    _resolve_extends(jobs, templates)
+
+    # Extract pipeline-level metadata
+    raw_includes  = data.get('include', [])
+    if isinstance(raw_includes, dict):
+        raw_includes = [raw_includes]
+    elif not isinstance(raw_includes, list):
+        raw_includes = []
+
+    raw_variables = {}
+    for k, v in (data.get('variables') or {}).items():
+        raw_variables[str(k)] = str(v) if v is not None else ''
+
+    raw_workflow  = []
+    wf = data.get('workflow', {})
+    if isinstance(wf, dict):
+        for rule in wf.get('rules', []):
+            if isinstance(rule, dict):
+                raw_workflow.append(rule)
+
+    pipeline = Pipeline(
+        PipelineType.GITLAB, stages, jobs,
+        file_path=file_path,
+        templates=templates,
+        includes=raw_includes,
+        variables=raw_variables,
+        workflow=raw_workflow,
+    )
 
     # Load triggered child pipelines
     if _depth < 3:
