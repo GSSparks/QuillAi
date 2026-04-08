@@ -75,24 +75,47 @@ class ContextEngine:
                     parts.append(diag_str)
                     used += self.estimate_tokens(diag_str)
 
-        # ── Active File ───────────────────────────────────────────
-        cursor_line = self.get_cursor_line(active_code, cursor_pos) if cursor_pos else None
+        # ── Chat vs editor mode ───────────────────────────────────
+        # cursor_pos is None for chat, set for inline/edit completions.
+        # For chat, the wiki context already covers the project — active
+        # code, imports, related files, and open tabs all add noise.
+        # For editor mode (cursor_pos set), full active code context applies.
+        _is_chat = not bool(cursor_pos)
 
-        symbol_ctx = ""
-        called_ctx = ""
-        cross_ctx  = ""
+        if _is_chat:
+            # Chat mode: only inject active code if the query mentions the
+            # current file by name or contains symbols found in it.
+            _should_inject_active = False
+            if file_path and active_code:
+                fname = os.path.basename(file_path).lower().replace(".py", "")
+                if fname in user_text.lower():
+                    _should_inject_active = True
+                elif self.get_relevant_symbols(active_code, user_text):
+                    _should_inject_active = True
 
-        if cursor_line:
+            if _should_inject_active and active_code:
+                symbols = self.get_relevant_symbols(active_code, user_text)
+                if symbols:
+                    symbol_ctx = self.extract_code_blocks(active_code, symbols)
+                    active_block = f"[Active Code ({intent})]\n```python\n{symbol_ctx}\n```"
+                    parts.append(active_block)
+                    used += self.estimate_tokens(active_block)
+
+        else:
+            # Editor mode: full cursor-aware active code injection
+            cursor_line = self.get_cursor_line(active_code, cursor_pos)
+
+            symbol_ctx = ""
+            called_ctx = ""
+            cross_ctx  = ""
+
             symbol = self.get_symbol_with_parent(active_code, cursor_line)
             symbol_ctx = self.extract_symbol_code(active_code, symbol)
 
             if symbol_ctx:
-                # For debug intent: pull in more of the call stack
                 if intent == "debug":
                     called_ctx = self.expand_with_called_functions(active_code, symbol)
                     cross_ctx  = self.expand_cross_file_calls(active_code, symbol, file_path)
-
-                # For refactor: include the full parent class if we're inside a method
                 elif intent == "refactor":
                     parent, _ = symbol if (isinstance(symbol, tuple) and len(symbol) == 2) else (None, None)
                     if parent:
@@ -100,62 +123,47 @@ class ContextEngine:
                         lines = active_code.splitlines()
                         symbol_ctx = f"# class {pname} (full)\n" + "\n".join(lines[pstart - 1:pend])
                     called_ctx = self.expand_with_called_functions(active_code, symbol)
-
-                # Default: local called functions + cross-file
                 else:
                     called_ctx = self.expand_with_called_functions(active_code, symbol)
                     cross_ctx  = self.expand_cross_file_calls(active_code, symbol, file_path)
 
-        # ── Query-based fallback ───────────────────────────────────
-        if not symbol_ctx:
-            symbols = self.get_relevant_symbols(active_code, user_text)
-            if symbols:
-                symbol_ctx = self.extract_code_blocks(active_code, symbols)
+            if not symbol_ctx:
+                symbols = self.get_relevant_symbols(active_code, user_text)
+                if symbols:
+                    symbol_ctx = self.extract_code_blocks(active_code, symbols)
 
-        # ── Cursor window final fallback ───────────────────────────
-        if not symbol_ctx:
-            symbol_ctx = self.get_cursor_window(active_code, cursor_pos=cursor_pos)
+            if not symbol_ctx:
+                symbol_ctx = self.get_cursor_window(active_code, cursor_pos=cursor_pos)
 
-        # ── Combine context layers ─────────────────────────────────
-        combined_ctx = symbol_ctx
+            combined_ctx = symbol_ctx
+            if called_ctx:
+                combined_ctx += "\n\n# Called Functions (Local)\n" + called_ctx
+            if cross_ctx:
+                combined_ctx += "\n\n# Called Functions (External)\n" + cross_ctx
 
-        if called_ctx:
-            combined_ctx += "\n\n# Called Functions (Local)\n" + called_ctx
+            active_block = f"[Active Code ({intent})]\n```python\n{combined_ctx}\n```"
+            parts.append(active_block)
+            used += self.estimate_tokens(active_block)
 
-        if cross_ctx:
-            combined_ctx += "\n\n# Called Functions (External)\n" + cross_ctx
-
-        active_block = f"[Active Code ({intent})]\n```python\n{combined_ctx}\n```"
-        parts.append(active_block)
-        used += self.estimate_tokens(active_block)
-
-        # ── Imports ───────────────────────────────────────────────
-        # Skip for chat — imports are already visible in [Active Code] and
-        # the wiki/repo-map context covers inter-file relationships better.
-        # Only inject for inline completions where the model needs exact symbols.
-        _is_chat_request = not bool(cursor_pos)   # chat has no cursor pos
-        if not _is_chat_request and used < TOKEN_BUDGET:
+            # Imports — editor mode only
             import_ctx = self.get_all_imports(active_code)
-            if import_ctx:
-                import_block = "[Imports]\n" + import_ctx
-                parts.append(import_block)
-                used += self.estimate_tokens(import_block)
+            if import_ctx and used < TOKEN_BUDGET:
+                parts.append("[Imports]\n" + import_ctx)
+                used += self.estimate_tokens(import_ctx)
 
-        # ── Related Project Code ──────────────────────────────────
-        if used < TOKEN_BUDGET and file_path:
-            related = self.search_project(file_path, user_text, active_code=active_code)
-            if related:
-                related_block = "[Related Code]\n" + related
-                parts.append(related_block)
-                used += self.estimate_tokens(related_block)
+            # Related project code — editor mode only
+            if used < TOKEN_BUDGET and file_path:
+                related = self.search_project(file_path, user_text, active_code=active_code)
+                if related:
+                    parts.append("[Related Code]\n" + related)
+                    used += self.estimate_tokens(related)
 
-        # ── Open Tabs ─────────────────────────────────────────────
-        if used < TOKEN_BUDGET and open_tabs:
-            tabs_ctx = self.get_tabs_context(open_tabs, user_text)
-            if tabs_ctx:
-                tabs_block = "[Open Tabs]\n" + tabs_ctx
-                parts.append(tabs_block)
-                used += self.estimate_tokens(tabs_block)
+            # Open tabs — editor mode only
+            if used < TOKEN_BUDGET and open_tabs:
+                tabs_ctx = self.get_tabs_context(open_tabs, user_text)
+                if tabs_ctx:
+                    parts.append("[Open Tabs]\n" + tabs_ctx)
+                    used += self.estimate_tokens(tabs_ctx)
 
         return "\n\n".join(parts)
 
@@ -471,16 +479,24 @@ class ContextEngine:
         Also uses currently-extracted symbol names from active_code as
         additional query signal.
         """
-        root    = os.path.dirname(current_file)
-        q_words = set(query.lower().split())
+        root = os.path.dirname(current_file)
 
-        # Augment query with symbol names visible in the active file
+        # Tokenise query the same way repo_map does — splits CamelCase
+        import re as _re
+        _re_camel = _re.compile(r'(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])')
+        _re_split = _re.compile(r'[\s_\-/\\.]+')
+        def _tok(t):
+            return {x for x in _re_split.split(_re_camel.sub(' ', t).lower()) if len(x) > 2}
+
+        q_words = _tok(query)
+
+        # Augment with symbol names from active file
         if active_code:
             try:
                 tree = ast.parse(active_code)
                 for node in ast.walk(tree):
                     if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
-                        q_words.add(node.name.lower())
+                        q_words |= _tok(node.name)
             except Exception:
                 pass
 
