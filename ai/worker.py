@@ -79,9 +79,16 @@ class AIWorker(QObject):
                 "When suggesting code, match the style and conventions visible "
                 "in the provided context. "
                 "If memory or past conversations are provided, use them to give "
-                "more personalised and relevant responses."
+                "more personalised and relevant responses. "
                 "If you are uncertain about implementation details, say so rather than guessing. "
                 "Only describe code behavior you can see in the provided context. "
+                "When you suggest a code change to a specific file, wrap it in a "
+                "file_change tag so the user can apply it directly: "
+                "<file_change path=\"relative/path/to/file.py\" mode=\"function\"> "
+                "def my_function(...): ... </file_change> "
+                "Use mode=\"function\" to replace a single function or class (preferred). "
+                "Use mode=\"full\" only when rewriting the entire file. "
+                "Always use paths relative to the project root."
             )
             # Wiki injected into user message so the model attends to it
             # alongside the actual question, not buried in system.

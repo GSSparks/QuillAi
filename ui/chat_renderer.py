@@ -7,11 +7,108 @@ from pygments import highlight
 from pygments.lexers import get_lexer_by_name, guess_lexer, TextLexer
 from pygments.formatters import HtmlFormatter
 from pygments.util import ClassNotFound
+import ast
+from pathlib import Path
 from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import QApplication
 
 from ui.theme import get_theme, build_chat_styles, FONT_CODE, FONT_UI
+
+# Matches <file_change path="..." mode="...">...</file_change>
+_RE_FILE_CHANGE = re.compile(
+    r'<file_change\s+path="([^"]+)"\s+mode="([^"]+)">(.*?)</file_change>',
+    re.DOTALL,
+)
+
+def _autodetect_changes(
+    text: str, file_path: str
+) -> list[tuple[str, str, str]]:
+    """Scan fenced code blocks for complete functions/classes.
+    Returns [(file_path, mode, code)] targeting file_path.
+    """
+    import os
+    results = []
+    ext = os.path.splitext(file_path)[1].lower()
+
+    _FUNCTION_EXTS = {'.py'}
+    _FULL_EXTS = {
+        '.yml', '.yaml', '.json', '.toml', '.xml', '.ini', '.cfg', '.conf',
+        '.sh', '.bash', '.zsh', '.fish',
+        '.pl', '.pm', '.t',
+        '.html', '.htm', '.css', '.js', '.ts',
+        '.rs', '.go', '.c', '.cpp', '.h', '.hpp', '.java',
+        '.tf', '.hcl', '.nix', '.md', '.rst', '.txt', '.sql',
+    }
+
+    # Split on triple-backtick fences
+    chunks = text.split("```")
+    for i in range(1, len(chunks), 2):
+        block = chunks[i]
+        lines = block.split("\n", 1)
+        code  = lines[1].strip() if len(lines) > 1 else lines[0].strip()
+        if not code or len(code) < 10:
+            continue
+
+        applicable = False
+        mode = 'full'
+
+        _PERL_EXTS = {'.pl', '.pm', '.t'}
+        _FULL_EXTS = {
+            '.yml', '.yaml', '.json', '.toml', '.xml',
+            '.ini', '.cfg', '.conf',
+            '.sh', '.bash', '.zsh', '.fish',
+            '.html', '.htm', '.css', '.js', '.ts',
+            '.rs', '.go', '.c', '.cpp', '.h', '.hpp', '.java',
+            '.tf', '.hcl', '.nix', '.md', '.rst', '.txt', '.sql',
+        }
+
+        if ext in _FUNCTION_EXTS:
+            try:
+                tree = ast.parse(code)
+                has_sym = any(
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                       ast.ClassDef))
+                    for node in tree.body
+                )
+                if has_sym:
+                    applicable = True
+                    mode = 'function'
+                elif tree.body:
+                    applicable = True
+            except SyntaxError:
+                pass
+        elif ext in _PERL_EXTS:
+            import re as _re
+            if _re.search(r'\bsub\s+\w+', code):
+                applicable = True
+                mode = 'perl_function'
+            elif len(code.splitlines()) > 3:
+                applicable = True
+        elif ext in _FULL_EXTS:
+            applicable = len(code.splitlines()) > 3
+
+        if applicable:
+            try:
+                rel = os.path.relpath(file_path)
+            except ValueError:
+                rel = file_path
+            results.append((rel, mode, code))
+            break
+    return results
+
+
+def _extract_file_changes(text: str) -> tuple[str, list[tuple[str, str, str]]]:
+    """
+    Strip <file_change> tags from *text* and return:
+      (cleaned_text, [(path, mode, code), ...])
+    """
+    changes = []
+    def _collect(m):
+        changes.append((m.group(1), m.group(2), m.group(3).strip()))
+        return ""   # remove tag from text
+    cleaned = _RE_FILE_CHANGE.sub(_collect, text)
+    return cleaned, changes
 
 
 _PYGMENTS_STYLE_MAP = {
@@ -26,6 +123,30 @@ def _pygments_style_for_theme(theme_name: str) -> str:
 
 def _safe_styles(t: dict) -> dict:
     return {k: v.replace('"', "'") for k, v in t.items()}
+
+
+def _summarise_change(code: str, mode: str) -> str:
+    """One-line summary of what the change does."""
+    import ast as _ast
+    try:
+        tree = _ast.parse(code)
+        names = [
+            node.name for node in tree.body
+            if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef,
+                                   _ast.ClassDef))
+        ]
+        if mode == 'full':
+            return f'Full file rewrite'
+        if names:
+            kind = 'class' if any(
+                isinstance(n, _ast.ClassDef) for n in tree.body
+                if hasattr(n, 'name') and n.name == names[0]
+            ) else 'function'
+            return f'Replace {kind} {names[0]}()' if kind == 'function' \
+                   else f'Replace class {names[0]}'
+    except Exception:
+        pass
+    return 'Apply suggested change'
 
 
 class ChatRenderer:
@@ -130,14 +251,31 @@ class ChatRenderer:
             )
             cursor.removeSelectedText()
             self.chat_history.setTextCursor(cursor)
-        rendered = self._render_ai_response(full_response)
+        # Extract any file_change tags before rendering
+        clean_response, file_changes = _extract_file_changes(full_response)
+
+        # Render full response so code blocks stay visible in chat
+        rendered = self._render_ai_response(clean_response or full_response)
+
+        # Auto-detect applicable code blocks if no explicit tags
+        if not file_changes:
+            editor = self.current_editor()
+            if editor and getattr(editor, 'file_path', None):
+                file_changes = _autodetect_changes(
+                    clean_response, editor.file_path
+                )
+
+        # Append apply buttons for each file change
+        if file_changes:
+            rendered += self._render_apply_buttons(file_changes)
+
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
         self.chat_history.insertHtml(rendered)
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
         self.chat_history.ensureCursorVisible()
 
         if full_response.strip():
-            self.memory_manager.add_turn("assistant", full_response)
+            self.memory_manager.add_turn("assistant", clean_response)
             self.memory_manager.process_exchange_async(
                 self._last_user_message,
                 full_response,
@@ -310,6 +448,44 @@ class ChatRenderer:
             self.chat_panel.chat_history.setHtml(saved)
             self.chat_panel.chat_history.moveCursor(QTextCursor.MoveOperation.End)
 
+    def _render_apply_buttons(self, changes: list) -> str:
+        """Render apply/undo button row for each file_change."""
+        s = _safe_styles(build_chat_styles(get_theme()))
+        t = get_theme()
+        rows = []
+        for file_path, mode, code in changes:
+            encoded = base64.b64encode(
+                f"{file_path}|{mode}|{code}".encode("utf-8")
+            ).decode("utf-8")
+            fname = file_path.split("/")[-1]
+            apply_url = f"apply:{encoded}"
+            undo_url  = f"undo:{base64.b64encode(file_path.encode()).decode()}"
+            # Build summary line from code
+            summary = _summarise_change(code, mode)
+            rows.append(
+                f'<table width="100%" cellpadding="0" cellspacing="0" '
+                f'style="margin:8px 0 4px 0;">'
+                f'<tr><td style="padding:8px 10px;'
+                f'background:{t.get("bg1","#3c3836")};'
+                f'border-left:3px solid {t.get("green","#98971a")};'
+                f'border-radius:2px;">'
+                f'<div style="color:{t.get("fg1","#ebdbb2")};font-size:9pt;'
+                f'margin-bottom:4px;">'
+                f'🔧 <strong>{summary}</strong></div>'
+                f'<span style="color:{t.get("fg4","#a89984")};font-size:8pt;">'
+                f'📄 {file_path}</span>'
+                f'&nbsp;&nbsp;'
+                f'<a href="{apply_url}" style="color:{t.get("green","#98971a")};'
+                f'font-size:9pt;font-weight:bold;text-decoration:none;">'
+                f'⚡ Apply to {fname}</a>'
+                f'&nbsp;&nbsp;'
+                f'<a href="{undo_url}" style="color:{t.get("fg4","#a89984")};'
+                f'font-size:9pt;text-decoration:none;">'
+                f'↩ Undo</a>'
+                f'</td></tr></table>'
+            )
+        return "".join(rows)
+
     def handle_chat_link(self, url: QUrl):
         url_str = url.toString()
         if url_str.startswith("insert:"):
@@ -322,3 +498,69 @@ class ChatRenderer:
             decoded = base64.b64decode(url_str.replace("copy:", "")).decode("utf-8")
             QApplication.clipboard().setText(decoded)
             self.statusBar().showMessage("Code copied to clipboard.", 2000)
+        elif url_str.startswith("apply:"):
+            self._handle_apply_link(url_str[6:])
+        elif url_str.startswith("undo:"):
+            self._handle_undo_link(url_str[5:])
+
+    def _reload_file_in_editors(self, abs_path: str):
+        """Reload any editor pane showing abs_path from disk."""
+        try:
+            with open(abs_path, 'r', encoding='utf-8') as f:
+                new_content = f.read()
+        except Exception:
+            return
+        for pane in self.split_container.all_panes():
+            for i in range(pane.count()):
+                editor = pane.widget(i)
+                if getattr(editor, 'file_path', None) == abs_path:
+                    self._reload_editor(editor, new_content, abs_path)
+
+    def _handle_apply_link(self, encoded: str):
+        try:
+            payload   = base64.b64decode(encoded).decode("utf-8")
+            sep1      = payload.index("|")
+            sep2      = payload.index("|", sep1 + 1)
+            file_path = payload[:sep1]
+            mode      = payload[sep1 + 1:sep2]
+            code      = payload[sep2 + 1:]
+        except Exception as e:
+            self.statusBar().showMessage(f"Could not parse apply link: {e}", 4000)
+            return
+
+        # Resolve path relative to project root
+        root = (self.git_dock.repo_path
+                if hasattr(self, "git_dock") and self.git_dock.repo_path
+                else None)
+        abs_path = str((Path(root) / file_path).resolve()) if root else file_path
+
+        from core.patch_applier import apply_function, apply_full, apply_perl_function
+        if mode == "function":
+            ok, msg = apply_function(abs_path, code, parent_widget=self)
+        elif mode == "perl_function":
+            ok, msg = apply_perl_function(abs_path, code, parent_widget=self)
+        else:
+            ok, msg = apply_full(abs_path, code, parent_widget=self)
+        self.statusBar().showMessage(msg, 5000)
+        if ok:
+            self._reload_file_in_editors(abs_path)
+            if hasattr(self, "repo_map") and self.repo_map:
+                self.repo_map.invalidate(abs_path)
+
+    def _handle_undo_link(self, encoded: str):
+        try:
+            file_path = base64.b64decode(encoded).decode("utf-8")
+        except Exception as e:
+            self.statusBar().showMessage(f"Could not parse undo link: {e}", 4000)
+            return
+
+        root = (self.git_dock.repo_path
+                if hasattr(self, "git_dock") and self.git_dock.repo_path
+                else None)
+        abs_path = str((Path(root) / file_path).resolve()) if root else file_path
+
+        from core.patch_applier import undo_last
+        ok, msg = undo_last(abs_path)
+        self.statusBar().showMessage(msg, 5000)
+        if ok and hasattr(self, "repo_map") and self.repo_map:
+            self.repo_map.invalidate(abs_path)
