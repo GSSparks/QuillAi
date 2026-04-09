@@ -45,7 +45,6 @@ class ContextEngine:
         # ── Repo Map (orientation before implementation) ──────────
         if repo_map and used < TOKEN_BUDGET:
             repo_map_tokens = self.estimate_tokens(repo_map)
-            print(f'[ContextEngine] repo_map={repo_map_tokens} tokens, used={used}, budget={TOKEN_BUDGET}')
             # Hard-cap repo map to 4000 tokens
             if repo_map_tokens > 4000:
                 lines = repo_map.splitlines()
@@ -182,9 +181,7 @@ class ContextEngine:
                     parts.append("[Open Tabs]\n" + tabs_ctx)
                     used += self.estimate_tokens(tabs_ctx)
 
-        result = "\n\n".join(parts)
-        print(f'[ContextEngine] final context: {self.estimate_tokens(result)} estimated tokens, {len(result)} chars')
-        return result
+        return "\n\n".join(parts)
 
     # ─────────────────────────────────────────────────────────────
     # Intent Detection

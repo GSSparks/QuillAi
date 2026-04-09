@@ -1160,6 +1160,15 @@ class PipelineViewerPanel(QDockWidget):
 
     def _populate_info_tab(self, pipeline):
         """Render includes, workflow rules, and variables into the Info tab."""
+        try:
+            self._populate_info_tab_inner(pipeline)
+        except Exception as e:
+            import traceback
+            print(f'[PipelineInfo] ERROR: {e}')
+            traceback.print_exc()
+            self._info_view.setPlainText(f'Error rendering info tab:\n{e}')
+
+    def _populate_info_tab_inner(self, pipeline):
         t = self._t
         self._info_view.clear()
         cursor = self._info_view.textCursor()
