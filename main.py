@@ -1875,7 +1875,8 @@ Instructions:
             from ai.context_engine import ContextEngine
             self.context_engine = ContextEngine(
                 memory_manager=self.memory_manager,
-                estimate_tokens_fn=self.estimate_tokens
+                estimate_tokens_fn=self.estimate_tokens,
+                settings_manager=self.settings_manager,
             )
  
         def _launch(lsp_ctx):
@@ -1892,7 +1893,7 @@ Instructions:
                 active_code    = active_code,
                 file_path      = file_path,
                 open_tabs      = self.get_open_editors(),
-                cursor_pos     = editor.textCursor().position() if editor else None,
+                cursor_pos     = None,  # chat mode — never pass cursor_pos
                 lsp_context    = lsp_ctx,
                 repo_map       = (
                     self.repo_map.get_context(user_text)

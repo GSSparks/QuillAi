@@ -3,9 +3,11 @@ import os
 
 
 class ContextEngine:
-    def __init__(self, memory_manager, estimate_tokens_fn):
-        self.memory_manager = memory_manager
+    def __init__(self, memory_manager, estimate_tokens_fn,
+                 settings_manager=None):
+        self.memory_manager  = memory_manager
         self.estimate_tokens = estimate_tokens_fn
+        self.settings_manager = settings_manager
 
     # ─────────────────────────────────────────────────────────────
     # Public API
@@ -21,7 +23,11 @@ class ContextEngine:
                         from VectorIndex.query(). Injected after repo_map,
                         before active code.
         """
-        TOKEN_BUDGET = 28000
+        TOKEN_BUDGET = (
+            self.settings_manager.get_token_budget()
+            if self.settings_manager
+            else 16000
+        )
         used = self.estimate_tokens(user_text)
 
         parts = []
@@ -37,10 +43,21 @@ class ContextEngine:
         intent = self.detect_intent(user_text)
 
         # ── Repo Map (orientation before implementation) ──────────
-        # Filtered to files whose symbols overlap the query, capped at
-        # 4000 tokens. Gives the model a structural overview of the
-        # whole project without paying the cost of full source.
         if repo_map and used < TOKEN_BUDGET:
+            repo_map_tokens = self.estimate_tokens(repo_map)
+            print(f'[ContextEngine] repo_map={repo_map_tokens} tokens, used={used}, budget={TOKEN_BUDGET}')
+            # Hard-cap repo map to 4000 tokens
+            if repo_map_tokens > 4000:
+                lines = repo_map.splitlines()
+                trimmed = []
+                t = 0
+                for line in lines:
+                    lt = self.estimate_tokens(line)
+                    if t + lt > 4000:
+                        break
+                    trimmed.append(line)
+                    t += lt
+                repo_map = '\n'.join(trimmed) + '\n…(trimmed)'
             parts.append(repo_map)
             used += self.estimate_tokens(repo_map)
 
@@ -165,7 +182,9 @@ class ContextEngine:
                     parts.append("[Open Tabs]\n" + tabs_ctx)
                     used += self.estimate_tokens(tabs_ctx)
 
-        return "\n\n".join(parts)
+        result = "\n\n".join(parts)
+        print(f'[ContextEngine] final context: {self.estimate_tokens(result)} estimated tokens, {len(result)} chars')
+        return result
 
     # ─────────────────────────────────────────────────────────────
     # Intent Detection

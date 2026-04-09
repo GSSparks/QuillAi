@@ -18,6 +18,7 @@ class SettingsManager:
             "backend":           "llama",
             "use_cloud_for_chat": False,
             "theme":             "dark",
+            "token_budget":      16000,
         }
 
         self.settings = self.load_settings()
@@ -52,6 +53,13 @@ class SettingsManager:
         self.save_settings()
 
     # ── Backend ───────────────────────────────────────────────────────────
+    def get_token_budget(self) -> int:
+        return int(self.settings.get('token_budget', 16000))
+
+    def set_token_budget(self, value: int):
+        self.settings['token_budget'] = int(value)
+        self.save_settings()
+
     def get_backend(self):
         return self.get("backend")
 

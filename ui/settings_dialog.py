@@ -1,4 +1,5 @@
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+from PyQt6.QtWidgets import (
+    QSpinBox,QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QLineEdit, QPushButton, QFormLayout,
                              QGroupBox, QComboBox, QApplication,
                              QWidget, QScrollArea, QCheckBox)
@@ -67,6 +68,19 @@ class SettingsDialog(QDialog):
 
         local_form.addRow("Server URL:", self.local_url)
         local_form.addRow("Model name:", self.local_model)
+
+        self.token_budget = QSpinBox()
+        self.token_budget.setRange(2000, 128000)
+        self.token_budget.setSingleStep(1000)
+        self.token_budget.setValue(
+            self.sm.get_token_budget()
+        )
+        self.token_budget.setToolTip(
+            "Maximum tokens sent to the model per request.\n"
+            "Lower = faster responses on slow hardware.\n"
+            "Recommended: 8000-16000 for local, 28000 for cloud."
+        )
+        local_form.addRow("Context budget:", self.token_budget)
 
         # ── OpenAI ───────────────────────────────────────────────
         openai_group = QGroupBox("OpenAI  (or compatible)")
@@ -189,6 +203,7 @@ class SettingsDialog(QDialog):
     def save_and_close(self):
         self.sm.set("local_llm_url", self.local_url.text().strip())
         self.sm.set("active_model", self.local_model.text().strip())
+        self.sm.set_token_budget(self.token_budget.value())
         self.sm.set("cloud_llm_url", self.cloud_url.text().strip())
         self.sm.set("cloud_api_key", self.openai_key.text().strip())
         self.sm.set("chat_model", self.openai_model.text().strip())
