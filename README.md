@@ -1,32 +1,39 @@
 <p align="center">
   <img src="./images/quillai_logo.svg" width="400" alt="QuillAI logo"/>
 </p>
-
+ 
+<p align="center">
+  <img src="https://img.shields.io/badge/python-3.10+-blue?style=flat-square&logo=python&logoColor=white"/>
+  <img src="https://img.shields.io/badge/platform-Linux-lightgrey?style=flat-square&logo=linux&logoColor=white"/>
+  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square"/>
+  <img src="https://img.shields.io/badge/AI-local%20%7C%20cloud-purple?style=flat-square"/>
+</p>
+ 
 # QuillAI
-
+ 
 <p align="center">
   <img src="./images/Screenshot.png" width="900" alt="QuillAI editor showing find/replace, minimap, git panel, and find in files"/>
 </p>
-
-**A privacy-first, AI-powered code editor built for developers who want AI assistance without sending their code to the cloud.**
-
-QuillAI runs entirely on your machine when using a local LLM backend. No telemetry. No code uploaded to third-party servers. Your codebase stays yours.
-
-Built with PyQt6. Supports local llama.cpp, any OpenAI-compatible API, and Anthropic Claude.
-
+ 
+**QuillAI is an AI-powered code editor that actually understands your codebase** — not just the file you have open, but your entire project's structure, history, and conventions. Ask it about any function, class, or pattern across your whole project and get accurate answers backed by real source code, not hallucination.
+ 
+Built with PyQt6. Runs fully local with llama.cpp or connects to Claude, GPT-4, or any OpenAI-compatible API. Your choice, switchable in one click.
+ 
 ---
-
+ 
 ## Why QuillAI?
-
-Every major AI coding tool — Copilot, Cursor, Tabnine — routes your code through external servers. QuillAI doesn't have to. When configured with a local LLM:
-
+ 
+Most AI coding tools — Copilot, Cursor, Tabnine — send your code to external servers on every keystroke. QuillAI doesn't have to. When configured with a local LLM:
+ 
 - **Your code never leaves your machine**
 - **No API keys required**
 - **No usage limits, no subscription**
 - **Works offline**
-
+ 
 When you do want cloud power (Claude, GPT-4, OpenRouter), you switch with one click in the status bar. The choice is always yours.
-
+ 
+**What makes the AI actually useful:** QuillAI builds a structured wiki of your entire codebase — every file summarized, every symbol indexed — and injects relevant pages into every prompt. Combined with a repo map, memory system, and LSP integration, the AI has genuine context about your project rather than just the file you happen to have open. It can answer "how does the auth flow work?" or "what calls this function?" accurately, because it's read the whole codebase.
+ 
 ---
 
 ## Screenshots
@@ -46,6 +53,58 @@ When you do want cloud power (Claude, GPT-4, OpenRouter), you switch with one cl
   <img src="./images/screenshot_import_graph.png" width="900" alt="QuillAI import dependency graph visualization"/>
 </p>
 
+### Visual CI/CD pipeline editor
+ 
+QuillAI includes a full visual editor for GitLab CI and GitHub Actions pipelines — renders your pipeline as an interactive graph and lets you edit it without touching YAML directly.
+ 
+<p align="center">
+  <img src="./images/screenshot_pipeline_viewer.png" width="900" alt="QuillAI pipeline viewer showing job cards, stage columns, and dependency arrows"/>
+</p>
+ 
+**Graph tab:**
+- Jobs rendered as cards grouped into stage columns
+- Dependency arrows drawn between jobs connected by `needs:`
+- Drag a card to a different column to change its `stage:` — writes back to YAML immediately
+- **Hover a card** to reveal connection ports; **drag from output port to input port** to add a `needs:` dependency
+- **Right-click an arrow** to remove a dependency
+- **Double-click a card** to open the inline job editor — edit name, stage, image, when, environment, allow_failure, needs, and script
+- Child pipelines from `trigger:` jobs rendered as separate swimlanes
+- Template jobs (`.dot-prefixed`) shown in a muted Templates swimlane with `extends:` inheritance resolved
+ 
+**Info tab:**
+- **📦 Includes** — remote project references, local includes, template includes with full path breakdown
+- **🔀 Workflow rules** — every `if:` condition shown with ✓/✗ indicating when the pipeline fires, `never` rules highlighted
+- **📋 Variables** — all pipeline-level variables, secrets automatically masked, CI runtime variables shown in muted style
+ 
+All edits are surgical — only the specific lines that changed are touched. Comments, anchors, and formatting are preserved.
+ 
+---
+ 
+### AI self-modification
+ 
+QuillAI can propose and apply code changes to files directly from the chat panel.
+ 
+<p align="center">
+  <img src="./images/screenshot_apply.png" width="900" alt="QuillAI chat showing Apply button and diff review dialog"/>
+</p>
+ 
+When the AI responds with code that belongs in a specific file, an apply bar appears below the response:
+ 
+```
+🔧 Replace function search_project()
+📄 ai/context_engine.py   ⚡ Apply to context_engine.py   ↩ Undo
+```
+ 
+- **Single function/class** — applied instantly using AST-precise replacement. Only the target symbol is replaced; surrounding code is untouched. Works for new functions too — appended automatically if the symbol doesn't exist yet.
+- **Full file rewrite** — opens a side-by-side diff review dialog before writing anything. Accept or discard.
+- **Perl subroutines** — brace-counting replacement for `sub name { ... }` blocks.
+- **YAML, shell, config files** — full file replace with diff review.
+- **↩ Undo** — restores the previous version instantly. One level deep.
+ 
+Detection is automatic — no special syntax required from the AI. If a response contains a parseable function or class, the apply bar appears. For explicit control, the AI can wrap suggestions in `<file_change path="..." mode="function|full">` tags to specify the exact target.
+ 
+After applying, the editor reloads the file automatically. The repo map is invalidated so the next chat prompt reflects the change.
+ 
 ---
 
 ## Installation
@@ -530,6 +589,8 @@ When using a local backend, no data is transmitted anywhere. When using a cloud 
 - [x] Memory system with turn buffer and session continuity
 - [x] Line number double-click to select line
 - [x] LSP rename symbol
+- [x] Visual CI/CD pipeline editor — interactive graph for GitLab CI and GitHub Actions; drag-to-change-stage, visual needs wiring, inline job editor, child pipeline swimlanes, includes/workflow/variables info tab
+- [x] AI self-modification — apply bar in chat for AST-precise function replacement, full file diff review, Perl sub replacement, one-level undo, automatic editor reload
 
 ---
 
