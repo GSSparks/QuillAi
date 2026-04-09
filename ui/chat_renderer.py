@@ -273,6 +273,11 @@ class ChatRenderer:
         if file_changes:
             rendered += self._render_apply_buttons(file_changes)
 
+        # Save as FAQ button
+        rendered += self._render_save_faq_button(
+            self._last_user_message, clean_response
+        )
+
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
         self.chat_history.insertHtml(rendered)
         self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
@@ -284,6 +289,11 @@ class ChatRenderer:
                 self._last_user_message,
                 clean_response,
             )
+            if hasattr(self, 'faq_manager') and self.faq_manager:
+                self.faq_manager.process_exchange_async(
+                    self._last_user_message,
+                    clean_response,
+                )
 
         self.memory_manager.save_chat_history(self.chat_history.toHtml())
         self.current_ai_raw_text  = ""
@@ -452,6 +462,25 @@ class ChatRenderer:
             self.chat_panel.chat_history.setHtml(saved)
             self.chat_panel.chat_history.moveCursor(QTextCursor.MoveOperation.End)
 
+    def _render_save_faq_button(self, question: str, answer: str) -> str:
+        """Render a subtle Save as FAQ link below AI responses."""
+        if not question or not answer:
+            return ''
+        t = get_theme()
+        encoded = base64.b64encode(
+            f"{question}|||{answer}".encode('utf-8', errors='replace')
+        ).decode()
+        return (
+            f'<table width="100%" cellpadding="0" cellspacing="0" '
+            f'style="margin:2px 0 8px 0;">'
+            f'<tr><td style="text-align:right;padding-right:4px;">'
+            f'<a href="savefaq:{encoded}" '
+            f'style="color:{t.get("bg4","#7c6f64")};'
+            f'font-size:8pt;text-decoration:none;">'
+            f'💾 Save as FAQ</a>'
+            f'</td></tr></table>'
+        )
+
     def _render_apply_buttons(self, changes: list) -> str:
         """Render apply/undo button row for each file_change."""
         s = _safe_styles(build_chat_styles(get_theme()))
@@ -488,6 +517,12 @@ class ChatRenderer:
                 f'↩ Undo</a>'
                 f'</td></tr></table>'
             )
+        # Save as FAQ button — always shown at end of apply bar
+        t2 = get_theme()
+        faq_url = "savefaq:" + base64.b64encode(
+            full_response.encode('utf-8', errors='replace')
+        ).decode() if hasattr(self, '_last_user_message') else ''
+        # Note: faq_url built in handle_chat_link instead
         return "".join(rows)
 
     def handle_chat_link(self, url: QUrl):
@@ -506,6 +541,8 @@ class ChatRenderer:
             self._handle_apply_link(url_str[6:])
         elif url_str.startswith("undo:"):
             self._handle_undo_link(url_str[5:])
+        elif url_str.startswith("savefaq:"):
+            self._handle_save_faq_link(url_str[8:])
 
     def _reload_file_in_editors(self, abs_path: str):
         """Reload any editor pane showing abs_path from disk."""
@@ -519,6 +556,26 @@ class ChatRenderer:
                 editor = pane.widget(i)
                 if getattr(editor, 'file_path', None) == abs_path:
                     self._reload_editor(editor, new_content, abs_path)
+
+    def _handle_save_faq_link(self, encoded: str):
+        try:
+            payload  = base64.b64decode(encoded).decode('utf-8', errors='replace')
+            sep      = payload.index('|||')
+            question = payload[:sep].strip()
+            answer   = payload[sep+3:].strip()
+        except Exception as e:
+            self.statusBar().showMessage(f'Could not parse FAQ: {e}', 3000)
+            return
+        if hasattr(self, 'faq_manager') and self.faq_manager:
+            ok = self.faq_manager.add_entry(
+                question, answer,
+                source='manual',
+                deduplicate=False,
+            )
+            msg = 'Saved to FAQ!' if ok else 'Already in FAQ'
+            self.statusBar().showMessage(msg, 3000)
+        else:
+            self.statusBar().showMessage('FAQ manager not available', 3000)
 
     def _handle_apply_link(self, encoded: str):
         try:

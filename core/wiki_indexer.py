@@ -52,9 +52,11 @@ class WikiIndexer:
         on_file_done: Optional[Callable[[str, bool], None]] = None,
         sleep_between: float = 0.5,
         memory_manager=None,
+        faq_manager=None,
     ) -> None:
         self._wm = wiki_manager
-        self._mm = memory_manager   # optional — for fact staleness review
+        self._mm          = memory_manager
+        self._faq_manager = faq_manager   # optional — for fact staleness review
         self._on_file_done = on_file_done
         self._sleep_between = sleep_between
 

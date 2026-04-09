@@ -232,7 +232,7 @@ class SlidingPanel(QWidget):
         self._stack = QStackedWidget(self.content)
         self._stack.setMouseTracking(True)
 
-        for i, (name, icon) in enumerate([("Chat", "💬"), ("Memory", "🧠")]):
+        for i, (name, icon) in enumerate([("Chat", "💬"), ("Memory", "🧠"), ("FAQ", "❓")]):
             btn = QPushButton(f"{icon}  {name}")
             btn.setCheckable(True)
             btn.clicked.connect(lambda checked, idx=i: self._switch_tab(idx))
@@ -253,6 +253,7 @@ class SlidingPanel(QWidget):
 
         self._build_chat_panel()
         self._build_memory_panel()
+        self._build_faq_panel()
         self._switch_tab(0)
 
         main_layout.addWidget(self.handle)
@@ -318,6 +319,24 @@ class SlidingPanel(QWidget):
         self._memory_panel_widget = panel
         self._stack.addWidget(panel)
 
+    def _build_faq_panel(self):
+        panel  = QWidget(self.content)
+        panel.setMouseTracking(True)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._faq_panel_widget = panel
+        self._stack.addWidget(panel)
+
+    def set_faq_widget(self, widget: QWidget):
+        layout = self._faq_panel_widget.layout()
+        while layout.count():
+            item = layout.takeAt(0)
+            if item.widget():
+                item.widget().setParent(None)
+        widget.setParent(self._faq_panel_widget)
+        layout.addWidget(widget)
+        widget.show()
+
     def set_memory_widget(self, widget: QWidget):
         layout = self._memory_panel_widget.layout()
         while layout.count():
@@ -342,6 +361,10 @@ class SlidingPanel(QWidget):
 
     def switch_to_memory(self):
         self._switch_tab(1)
+        self.expand()
+
+    def switch_to_faq(self):
+        self._switch_tab(2)
         self.expand()
 
     # ── Pin ───────────────────────────────────────────────────────────────

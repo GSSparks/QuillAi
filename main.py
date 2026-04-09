@@ -47,6 +47,7 @@ from ui.settings_manager import SettingsManager
 from ui.settings_dialog import SettingsDialog
 from ui.chat_renderer import ChatRenderer
 from ui.memory_manager import MemoryManager
+from core.faq_manager import FAQManager
 from ui.memory_panel import MemoryPanel
 from ui.session_manager import save_session, load_session
 from ui.session_intent import init_tracker
@@ -151,6 +152,10 @@ class CodeEditor(QMainWindow, ChatRenderer):
             return content[0].get("text", "") if content else ""
         
         self.memory_manager = MemoryManager(llm_fn=_llm_fn)
+        self.faq_manager = FAQManager(
+            project_path=None,
+            llm_fn=_llm_fn,
+        )
         self.intent_tracker = init_tracker(self.memory_manager)
         
         # 3. LSP (graceful — works fine if pylsp not installed)
@@ -1538,6 +1543,8 @@ Instructions:
                 self.git_dock.refresh_status()
             if hasattr(self, 'memory_manager'):
                 self.memory_manager.set_project(saved_project)
+            if hasattr(self, 'faq_manager'):
+                self.faq_manager.set_project(saved_project)
             self._start_lsp(project_root=saved_project)
             self._init_repo_map(project_root=saved_project)
             self._init_wiki(project_root=saved_project)
@@ -1848,6 +1855,7 @@ Instructions:
             on_file_done=_on_file_done,
             sleep_between=0.5,
             memory_manager=self.memory_manager,
+            faq_manager=self.faq_manager if hasattr(self, 'faq_manager') else None,
         )
         self.wiki_indexer.start()
     
@@ -1881,6 +1889,11 @@ Instructions:
  
         def _launch(lsp_ctx):
             # ── Wiki context (replaces vector index for chat) ────────     
+            # ── FAQ context ──────────────────────────────────
+            faq_ctx = ""
+            if hasattr(self, 'faq_manager') and self.faq_manager:
+                faq_ctx = self.faq_manager.build_context(user_text)
+
             wiki_ctx = ""                                                  
             if hasattr(self, "wiki_context_builder") and self.wiki_context_builder and file_path:   
                 from pathlib import Path                                   
@@ -1901,7 +1914,8 @@ Instructions:
                 ),
                 vector_context = wiki_ctx,
             )
-            prompt_with_context = f"{user_text}\n\n{context}"
+            faq_block = (f"\n\n{faq_ctx}" if faq_ctx else "")
+            prompt_with_context = f"{user_text}\n\n{context}{faq_block}"
 
             self._ai_response_buffer = ""
             self.current_ai_raw_text = ""
@@ -1945,6 +1959,9 @@ Instructions:
         QTimer.singleShot(100, lambda: self.chat_panel.set_memory_widget(
             self.memory_panel
         ))
+        from ui.faq_panel import FAQPanel
+        faq_widget = FAQPanel(self.faq_manager, self)
+        QTimer.singleShot(100, lambda: self.chat_panel.set_faq_widget(faq_widget))
 
     # ── Runner ────────────────────────────────────────────────────────────
 
