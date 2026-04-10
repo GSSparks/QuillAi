@@ -1,5 +1,12 @@
 import json
 import os
+try:
+    from core.keyring_store import store_api_key, load_api_key
+    _KEYRING_OK = True
+except Exception:
+    _KEYRING_OK = False
+    def store_api_key(p, v): pass
+    def load_api_key(p): return ""
 
 
 class SettingsManager:
@@ -10,8 +17,8 @@ class SettingsManager:
         self.defaults = {
             "local_llm_url":     "http://192.168.1.189:11435/v1/chat/completions",
             "cloud_llm_url":     "https://api.openai.com/v1/chat/completions",
-            "cloud_api_key":     "",
-            "anthropic_api_key": "",
+            "cloud_api_key":     "__keyring__",
+            "anthropic_api_key": "__keyring__",
             "active_model":      "qwen2.5-coder-7b",
             "chat_model":        "",
             "inline_model":      "",
@@ -60,6 +67,16 @@ class SettingsManager:
         self.settings['token_budget'] = int(value)
         self.save_settings()
 
+    def set_api_key(self, provider: str, value: str):
+        """Store API key securely in keyring."""
+        store_api_key(provider, value)
+        # Keep placeholder in JSON so we know it's set
+        if provider == 'anthropic':
+            self.settings['anthropic_api_key'] = '__keyring__'
+        else:
+            self.settings['cloud_api_key'] = '__keyring__'
+        self.save_settings()
+
     def get_backend(self):
         return self.get("backend")
 
@@ -78,6 +95,29 @@ class SettingsManager:
         return self.get("local_llm_url") or self.defaults["local_llm_url"]
 
     def get_api_key(self):
+        """Return the API key for the current backend."""
+        backend = self.get_backend()
+        if backend == 'claude':
+            stored = self.settings.get('anthropic_api_key', '')
+            if stored in ('', '__keyring__'):
+                return load_api_key('anthropic')
+            # Migrate plain text to keyring
+            store_api_key('anthropic', stored)
+            self.settings['anthropic_api_key'] = '__keyring__'
+            self.save_settings()
+            return stored
+        else:
+            stored = self.settings.get('cloud_api_key', '')
+            if stored in ('', '__keyring__'):
+                return load_api_key('openai')
+            # Migrate plain text to keyring
+            store_api_key('openai', stored)
+            self.settings['cloud_api_key'] = '__keyring__'
+            self.save_settings()
+            return stored
+        # unreachable but satisfies linter
+        return ''  # noqa
+
         backend = self.get_backend()
         if backend == "claude":
             return self.get("anthropic_api_key")

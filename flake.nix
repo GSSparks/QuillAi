@@ -58,6 +58,8 @@
           pyqt6
           pyyaml
           requests
+          keyring
+          secretstorage
           markdown
           pygments
           python-lsp-server
@@ -109,6 +111,8 @@
             pyqt6
             pyyaml
             requests
+            keyring
+            secretstorage
             markdown
             pygments
           ]))
