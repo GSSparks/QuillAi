@@ -23,8 +23,6 @@ def _get_dependency_versions() -> list:
         ("chardet",             "chardet"),
         ("PyYAML",              "yaml"),
         # AI / context
-        ("sentence-transformers", "sentence_transformers"),
-        ("chromadb",            "chromadb"),
         # LSP
         ("python-lsp-server",   "pylsp"),
     ]

@@ -104,7 +104,7 @@ class RunAnalyzerPlugin(FeaturePlugin):
 
     def _index_failure(self, event: RunEvent, file_path: str, code: str):
         """Index this failure into the vector store for future recall."""
-        vi = getattr(self.app, 'vector_index', None)
+        vi = None  # vector index removed
         if not vi or not vi.is_ready:
             return
         try:
@@ -125,7 +125,7 @@ class RunAnalyzerPlugin(FeaturePlugin):
 
     def _query_past_fix(self, event: RunEvent) -> str | None:
         """Search vector memory for a past similar failure and fix."""
-        vi = getattr(self.app, 'vector_index', None)
+        vi = None  # vector index removed
         if not vi or not vi.is_ready:
             return None
         try:
