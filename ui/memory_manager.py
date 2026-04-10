@@ -764,8 +764,14 @@ class MemoryManager:
         query_words = set(re.findall(r"\w+", query.lower()))
         scored = []
         for conv in self.get_conversations():
-            summary_words = set(re.findall(r"\w+", conv["summary"].lower()))
-            score = len(query_words & summary_words)
+            # Search summary + full user message + ai response
+            text = " ".join([
+                conv.get("summary", ""),
+                conv.get("user_message", "")[:500],
+                conv.get("ai_response", "")[:500],
+            ]).lower()
+            text_words = set(re.findall(r"\w+", text))
+            score = len(query_words & text_words)
             if score > 0:
                 scored.append((score, conv))
         scored.sort(key=lambda x: x[0], reverse=True)

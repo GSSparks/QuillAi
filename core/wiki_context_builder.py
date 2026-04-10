@@ -103,6 +103,7 @@ def _extract_symbol_names(text: str) -> list[str]:
         'does', 'did', 'can', 'could', 'should', 'would', 'like', 'just',
         'about', 'into', 'also', 'some', 'than', 'then', 'there', 'its',
         'def', 'class', 'return', 'self', 'true', 'false', 'none', 'pass',
+        'show', 'tell', 'give', 'find', 'get', 'make', 'look', 'help',
         'print', 'open', 'list', 'dict', 'set', 'str', 'int', 'bool',
     }
 
@@ -242,7 +243,23 @@ class WikiContextBuilder:
             for sym_name in _extract_symbol_names(prompt_text):
                 if remaining <= 300:
                     break
-                for rel in self._repo_map.find_symbol(sym_name):
+                # Sort matches — prefer core/ and files with longer source
+                matches = self._repo_map.find_symbol(sym_name)
+                if not matches:
+                    # snake_case → TitleCase: theme_signals → ThemeSignals
+                    title = ''.join(w.capitalize()
+                        for w in sym_name.lstrip('_').split('_'))
+                    if title != sym_name:
+                        matches = self._repo_map.find_symbol(title)
+                def _rank(rel):
+                    # Prefer core/ > ai/ > ui/ > editor/ for base classes
+                    order = ['core/', 'ai/', 'ui/', 'editor/', 'plugins/']
+                    for i, prefix in enumerate(order):
+                        if rel.startswith(prefix):
+                            return i
+                    return 99
+                matches.sort(key=_rank)
+                for rel in matches:
                     if remaining <= 300:
                         break
                     # Get exact source from disk via AST

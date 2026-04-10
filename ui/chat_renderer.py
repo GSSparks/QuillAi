@@ -517,12 +517,6 @@ class ChatRenderer:
                 f'↩ Undo</a>'
                 f'</td></tr></table>'
             )
-        # Save as FAQ button — always shown at end of apply bar
-        t2 = get_theme()
-        faq_url = "savefaq:" + base64.b64encode(
-            full_response.encode('utf-8', errors='replace')
-        ).decode() if hasattr(self, '_last_user_message') else ''
-        # Note: faq_url built in handle_chat_link instead
         return "".join(rows)
 
     def handle_chat_link(self, url: QUrl):

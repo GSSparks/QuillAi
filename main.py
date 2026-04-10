@@ -48,6 +48,7 @@ from ui.settings_dialog import SettingsDialog
 from ui.chat_renderer import ChatRenderer
 from ui.memory_manager import MemoryManager
 from core.faq_manager import FAQManager
+from core.project_settings import ProjectSettings
 from ui.memory_panel import MemoryPanel
 from ui.session_manager import save_session, load_session
 from ui.session_intent import init_tracker
@@ -156,6 +157,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
             project_path=None,
             llm_fn=_llm_fn,
         )
+        self.project_settings = ProjectSettings()
         self.intent_tracker = init_tracker(self.memory_manager)
         
         # 3. LSP (graceful — works fine if pylsp not installed)
@@ -884,7 +886,10 @@ class CodeEditor(QMainWindow, ChatRenderer):
     # ── Settings ──────────────────────────────────────────────────────────
 
     def show_settings_dialog(self):
-        dialog = SettingsDialog(self.settings_manager, self)
+        dialog = SettingsDialog(
+            self.settings_manager, self,
+            project_settings=getattr(self, 'project_settings', None),
+        )
         if dialog.exec():
             self.statusBar().showMessage("Settings saved successfully.", 3000)
 
@@ -1545,6 +1550,8 @@ Instructions:
                 self.memory_manager.set_project(saved_project)
             if hasattr(self, 'faq_manager'):
                 self.faq_manager.set_project(saved_project)
+            if hasattr(self, 'project_settings'):
+                self.project_settings.set_project(saved_project)
             self._start_lsp(project_root=saved_project)
             self._init_repo_map(project_root=saved_project)
             self._init_wiki(project_root=saved_project)
@@ -1890,9 +1897,30 @@ Instructions:
         def _launch(lsp_ctx):
             # ── Wiki context (replaces vector index for chat) ────────     
             # ── FAQ context ──────────────────────────────────
+            # ── GitLab CI context ────────────────────────────────────
+            gitlab_ctx = ""
+            if (file_path and '.gitlab-ci.yml' in file_path
+                    and hasattr(self, 'gitlab_dock')
+                    and self.gitlab_dock):
+                gitlab_ctx = self._get_gitlab_pipeline_context()
+
             faq_ctx = ""
             if hasattr(self, 'faq_manager') and self.faq_manager:
                 faq_ctx = self.faq_manager.build_context(user_text)
+
+            # Symbol source — injected first so it's not buried
+            symbol_ctx = ''
+            if (hasattr(self, 'wiki_context_builder')
+                    and self.wiki_context_builder
+                    and self.wiki_context_builder._repo_map):
+                from core.wiki_context_builder import _extract_symbol_names
+                syms = _extract_symbol_names(user_text)
+                for sym in syms:
+                    for rel in self.wiki_context_builder._repo_map.find_symbol(sym):
+                        block = self.wiki_context_builder._repo_map.get_symbol_source(rel, sym)
+                        if block:
+                            symbol_ctx += block + '\n\n'
+                            break
 
             wiki_ctx = ""                                                  
             if hasattr(self, "wiki_context_builder") and self.wiki_context_builder and file_path:   
@@ -1912,10 +1940,12 @@ Instructions:
                     self.repo_map.get_context(user_text)
                     if self.repo_map else None
                 ),
-                vector_context = wiki_ctx,
             )
-            faq_block = (f"\n\n{faq_ctx}" if faq_ctx else "")
-            prompt_with_context = f"{user_text}\n\n{context}{faq_block}"
+            faq_block    = (f"\n\n{faq_ctx}"    if faq_ctx    else "")
+            gitlab_block = (f"\n\n{gitlab_ctx}"  if gitlab_ctx else "")
+            symbol_block = (symbol_ctx + '\n\n'   if symbol_ctx else '')
+            prompt_with_context = f"{user_text}\n\n{symbol_block}{context}{faq_block}{gitlab_block}"
+            # Debug: show what's in the prompt
 
             self._ai_response_buffer = ""
             self.current_ai_raw_text = ""
@@ -1964,6 +1994,24 @@ Instructions:
         QTimer.singleShot(100, lambda: self.chat_panel.set_faq_widget(faq_widget))
 
     # ── Runner ────────────────────────────────────────────────────────────
+
+    def _get_gitlab_pipeline_context(self) -> str:
+        """Fetch latest pipeline summary for .gitlab-ci.yml context."""
+        try:
+            plugin = getattr(self, 'gitlab_dock', None)
+            if not plugin:
+                return ''
+            # Use cached pipelines from the panel if available
+            pipelines = getattr(plugin, '_pipelines', [])
+            if not pipelines:
+                return ''
+            from plugins.features.gitlab_ci.client import format_pipeline_summary
+            pl      = pipelines[0]
+            summary = format_pipeline_summary(pl)
+            return f'[Last Pipeline Run]\n{summary}'
+        except Exception as e:
+            print(f'[GitLab] context error: {e}')
+            return ''
 
     def _show_about(self):
         AboutDialog(self).exec()
