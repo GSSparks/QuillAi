@@ -67,6 +67,12 @@ class SettingsManager:
         self.settings['token_budget'] = int(value)
         self.save_settings()
 
+    def get_anthropic_key(self) -> str:
+        return load_api_key('anthropic')
+
+    def get_openai_key(self) -> str:
+        return load_api_key('openai')
+
     def set_api_key(self, provider: str, value: str):
         """Store API key securely in keyring."""
         store_api_key(provider, value)

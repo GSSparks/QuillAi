@@ -86,6 +86,44 @@ class GitLabClient:
             f"/projects/{self.project}/repository/branches/{branch_enc}"
         )
 
+    # ── Child pipelines (bridges) ─────────────────────────────────────
+
+    def get_pipeline_bridges(self, pipeline_id: int) -> list:
+        """
+        Return trigger/bridge jobs for a pipeline.
+        Each bridge has a 'downstream_pipeline' dict if triggered.
+        """
+        return self.get_pipeline_bridges_for_project(
+            None, pipeline_id
+        )
+
+    def get_pipeline_bridges_for_project(self,
+                                          project_id,
+                                          pipeline_id: int) -> list:
+        """Fetch bridges for any project — enables recursive child lookup."""
+        try:
+            proj = (requests.utils.quote(str(project_id), safe='')
+                    if project_id else self.project)
+            return self._get(
+                f"/projects/{proj}/pipelines/{pipeline_id}/bridges",
+                {"per_page": 100}
+            )
+        except Exception:
+            return []
+
+    def get_downstream_pipeline_jobs(self,
+                                     downstream_project_id,
+                                     pipeline_id: int) -> list:
+        """Fetch jobs for a downstream (child) pipeline."""
+        proj = requests.utils.quote(str(downstream_project_id), safe='')
+        try:
+            return self._get(
+                f"/projects/{proj}/pipelines/{pipeline_id}/jobs",
+                {"per_page": 100}
+            )
+        except Exception:
+            return []
+
     # ── Test connection ───────────────────────────────────────────────────
 
     def ping(self) -> tuple[bool, str]:

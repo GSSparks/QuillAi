@@ -49,7 +49,7 @@ class GitLabPanel(QDockWidget):
     _jobs_ready      = pyqtSignal(object)  # emits (item, jobs) as tuple
     _logs_ready      = pyqtSignal(str)
     _error_occurred  = pyqtSignal(str)
-    _bridges_ready   = pyqtSignal(object, object)  # (parent_item, bridges)
+    _bridges_ready   = pyqtSignal(object)  # emits (parent_item, bridges) as tuple
 
     def __init__(self, client_fn, parent=None):
         """
@@ -201,6 +201,7 @@ class GitLabPanel(QDockWidget):
 
     def _on_item_expanded(self, item: QTreeWidgetItem):
         """Lazy-load jobs when pipeline is expanded."""
+        print(f'[GitLab] expanded: {item.text(0)}, children: {item.childCount()}, first: {item.child(0).text(0) if item.childCount() else "none"}')
         # Check if it's a placeholder
         if (item.childCount() == 1 and
                 item.child(0).text(0) == "Loading…"):
@@ -210,15 +211,37 @@ class GitLabPanel(QDockWidget):
             item.takeChild(0)
 
             def _run():
+                print(f'[GitLab] _run started for {pl.get("id")}')
                 try:
                     client = self._client_fn()
                     if not client:
+                        print('[GitLab] no client')
                         return
-                    jobs    = client.get_pipeline_jobs(pl["id"])
-                    bridges = client.get_pipeline_bridges(pl["id"])
-                    self._jobs_ready.emit((item, list(jobs)))
-                    if bridges:
-                        self._bridges_ready.emit((item, bridges))
+                    # Child pipeline items have project_id in data
+                    is_child = bool(item.data(0, Qt.ItemDataRole.UserRole + 1))
+                    print(f'[GitLab] is_child={is_child}, pl keys={list(pl.keys())[:6]}')
+                    if is_child:
+                        proj_id = pl.get('project_id')
+                        jobs    = client.get_downstream_pipeline_jobs(
+                            proj_id, pl['id']
+                        )
+                        self._jobs_ready.emit((item, list(jobs)))
+                        # Fetch bridges recursively for grandchildren
+                        try:
+                            bridges = client.get_pipeline_bridges_for_project(
+                                proj_id, pl['id']
+                            )
+                            if bridges:
+                                self._bridges_ready.emit((item, bridges))
+                        except Exception:
+                            pass
+                    else:
+                        jobs    = client.get_pipeline_jobs(pl['id'])
+                        bridges = client.get_pipeline_bridges(pl['id'])
+                        print(f'[GitLab] jobs={len(jobs)}, bridges={len(bridges)}')
+                        self._jobs_ready.emit((item, list(jobs)))
+                        if bridges:
+                            self._bridges_ready.emit((item, bridges))
                 except Exception as e:
                     print(f"[GitLab] jobs fetch failed: {e}")
 
@@ -413,6 +436,7 @@ class GitLabPanel(QDockWidget):
                 f"{ds.get('duration','?')}s",
             ])
             child.setData(0, Qt.ItemDataRole.UserRole, ds)
+            child.setData(0, Qt.ItemDataRole.UserRole + 1, True)  # is_child marker
             child.setForeground(1, QColor(color))
             child.setToolTip(0, 'Child pipeline')
             # Add placeholder for lazy loading

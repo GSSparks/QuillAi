@@ -3,6 +3,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QFormLayout,
     QGroupBox, QComboBox, QApplication,
     QWidget, QScrollArea, QCheckBox, QTabWidget)
+from ui.secret_line_edit import SecretLineEdit
 from PyQt6.QtCore import Qt
 
 from ui.theme import (theme_names, get_theme, apply_theme, theme_signals,
@@ -170,10 +171,9 @@ class SettingsDialog(QDialog):
 
         _oai_set = bool(self.sm.get('cloud_api_key') or
                         self.sm.get_api_key())
-        self.openai_key = QLineEdit()
-        self.openai_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self.openai_key.setPlaceholderText(
-            '● stored securely' if _oai_set else 'sk-...'
+        self.openai_key = SecretLineEdit(
+            text=self.sm.get_openai_key() if _oai_set else '',
+            placeholder='● stored securely' if _oai_set else 'sk-...'
         )
 
         self.openai_model = QLineEdit(self.sm.get("chat_model"))
@@ -190,10 +190,9 @@ class SettingsDialog(QDialog):
 
         _ant_set = bool(self.sm.get('anthropic_api_key') or
                         self.sm.get_api_key())
-        self.anthropic_key = QLineEdit()
-        self.anthropic_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self.anthropic_key.setPlaceholderText(
-            '● stored securely' if _ant_set else 'sk-ant-...'
+        self.anthropic_key = SecretLineEdit(
+            text=self.sm.get_anthropic_key() if _ant_set else '',
+            placeholder='● stored securely' if _ant_set else 'sk-ant-...'
         )
 
         self.claude_chat_model = QLineEdit(
@@ -239,10 +238,9 @@ class SettingsDialog(QDialog):
         _gl_tok_set = has_project and bool(
             _ps.get_gitlab_token() if _ps else ''
         )
-        self.gitlab_token = QLineEdit()
-        self.gitlab_token.setEchoMode(QLineEdit.EchoMode.Password)
-        self.gitlab_token.setPlaceholderText(
-            '● stored securely' if _gl_tok_set else 'glpat-xxxx'
+        self.gitlab_token = SecretLineEdit(
+            text=_ps.get_gitlab_token() if _gl_tok_set else '',
+            placeholder='● stored securely' if _gl_tok_set else 'glpat-xxxx'
         )
 
         self.gitlab_project = QLineEdit(

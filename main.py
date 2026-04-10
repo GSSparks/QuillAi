@@ -49,6 +49,7 @@ from ui.chat_renderer import ChatRenderer
 from ui.memory_manager import MemoryManager
 from core.faq_manager import FAQManager
 from core.project_settings import ProjectSettings
+from ui.log_viewer import LogViewerDock
 from ui.memory_panel import MemoryPanel
 from ui.session_manager import save_session, load_session
 from ui.session_intent import init_tracker
