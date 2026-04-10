@@ -16,6 +16,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QTimer, pyqtSlot
 from PyQt6.QtGui import QColor, QFont
 
 from ui.theme import get_theme, theme_signals, build_dock_stylesheet
+from ui.log_viewer import LogViewerDock
 
 
 _STATUS_COLORS = {
@@ -48,6 +49,7 @@ class GitLabPanel(QDockWidget):
     _jobs_ready      = pyqtSignal(object)  # emits (item, jobs) as tuple
     _logs_ready      = pyqtSignal(str)
     _error_occurred  = pyqtSignal(str)
+    _bridges_ready   = pyqtSignal(object, object)  # (parent_item, bridges)
 
     def __init__(self, client_fn, parent=None):
         """
@@ -64,11 +66,13 @@ class GitLabPanel(QDockWidget):
         self._client_fn  = client_fn
         self._pipelines  = []
         self._t          = get_theme()
+        self._log_viewer = None
         # Connect internal signals for thread-safe callbacks
         self._pipelines_ready.connect(self._on_pipelines_loaded)
         self._jobs_ready.connect(self._on_jobs_loaded)
         self._logs_ready.connect(self._on_logs_ready)
         self._error_occurred.connect(self._on_error)
+        self._bridges_ready.connect(self._on_bridges_loaded)
 
         self._build_ui()
         self._apply_theme(self._t)
@@ -118,6 +122,7 @@ class GitLabPanel(QDockWidget):
         self._tree.setColumnWidth(3, 60)
         self._tree.setAlternatingRowColors(True)
         self._tree.itemExpanded.connect(self._on_item_expanded)
+        self._tree.itemClicked.connect(self._on_item_clicked)
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_context_menu)
         layout.addWidget(self._tree, stretch=1)
@@ -139,6 +144,7 @@ class GitLabPanel(QDockWidget):
         layout.addLayout(action_bar)
 
         self.setWidget(container)
+        print('[GitLab] _build_ui done')
 
     # ── Data fetching ─────────────────────────────────────────────────────
 
@@ -208,8 +214,11 @@ class GitLabPanel(QDockWidget):
                     client = self._client_fn()
                     if not client:
                         return
-                    jobs = client.get_pipeline_jobs(pl["id"])
+                    jobs    = client.get_pipeline_jobs(pl["id"])
+                    bridges = client.get_pipeline_bridges(pl["id"])
                     self._jobs_ready.emit((item, list(jobs)))
+                    if bridges:
+                        self._bridges_ready.emit((item, bridges))
                 except Exception as e:
                     print(f"[GitLab] jobs fetch failed: {e}")
 
@@ -238,6 +247,17 @@ class GitLabPanel(QDockWidget):
             parent_item.addChild(child)
 
     @pyqtSlot(str)
+    def _on_logs_ready(self, context: str):
+        if context.startswith('__log_viewer__'):
+            # Route to log viewer
+            log_text = context[len('__log_viewer__'):]
+            if self._log_viewer:
+                title = self._log_viewer.windowTitle().replace('Log — ', '')
+                self._log_viewer.show_log(title, log_text, source='gitlab')
+        else:
+            self._status_label.setText('✓ Logs fetched — sent to chat')
+            self.send_to_chat.emit(context)
+
     def _on_error(self, msg: str):
         self._status_label.setText(f"✗ {msg[:60]}")
 
@@ -332,6 +352,149 @@ class GitLabPanel(QDockWidget):
 
         threading.Thread(target=_run, daemon=True).start()
 
+    def _on_item_clicked(self, item, column):
+        """Show log viewer when a job item is clicked."""
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data or 'stage' not in data:
+            return
+        # Only fetch log for finished jobs
+        status = data.get('status', '')
+        if status in ('created', 'pending', 'running'):
+            return
+        self._show_job_log(data)
+
+    def _show_job_log(self, job: dict):
+        """Fetch and display job log in the log viewer."""
+        client = self._client_fn()
+        if not client:
+            return
+        # Create log viewer if needed
+        if not self._log_viewer or not self._log_viewer.isVisible():
+            parent = self.parent()
+            self._log_viewer = LogViewerDock(parent)
+            if parent and hasattr(parent, 'addDockWidget'):
+                from PyQt6.QtCore import Qt as _Qt
+                parent.addDockWidget(
+                    _Qt.DockWidgetArea.BottomDockWidgetArea,
+                    self._log_viewer
+                )
+            self._log_viewer.send_to_chat.connect(
+                lambda ctx: self.send_to_chat.emit(ctx)
+            )
+        title = f"{job.get('name','?')} [{job.get('status','?').upper()}]"
+        self._log_viewer.show_log(title, 'Fetching…', source='gitlab')
+
+        def _run():
+            try:
+                trace = client.get_job_trace(job['id'])
+                self._logs_ready.emit(f'__log_viewer__{trace}')
+            except Exception as e:
+                self._logs_ready.emit(f'__log_viewer__Error: {e}')
+
+        import threading
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _on_bridges_loaded(self, payload):
+        """Add child pipeline nodes under their trigger job."""
+        parent_item, bridges = payload
+        t = self._t
+        for bridge in bridges:
+            ds = bridge.get('downstream_pipeline')
+            if not ds:
+                continue
+            status    = ds.get('status', '?')
+            icon      = _STATUS_ICONS.get(status, '?')
+            color_key = _STATUS_COLORS.get(status, 'fg1')
+            color     = t.get(color_key, '#ebdbb2')
+            child = QTreeWidgetItem([
+                f"⤵ #{ds['id']}",
+                f"{icon} {status}",
+                bridge.get('name', '?')[:20],
+                f"{ds.get('duration','?')}s",
+            ])
+            child.setData(0, Qt.ItemDataRole.UserRole, ds)
+            child.setForeground(1, QColor(color))
+            child.setToolTip(0, 'Child pipeline')
+            # Add placeholder for lazy loading
+            child.addChild(QTreeWidgetItem(['Loading…']))
+            # Find the trigger job item and add under it
+            bridge_name = bridge.get('name', '')
+            placed = False
+            for i in range(parent_item.childCount()):
+                job_item = parent_item.child(i)
+                if job_item.text(0) == bridge_name:
+                    job_item.addChild(child)
+                    placed = True
+                    break
+            if not placed:
+                parent_item.addChild(child)
+
+    def _on_context_menu(self, pos):
+        from PyQt6.QtWidgets import QMenu
+        item = self._tree.itemAt(pos)
+        if not item:
+            return
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data:
+            return
+        menu = QMenu(self)
+        t    = self._t
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background: {t.get('bg1','#3c3836')};
+                color: {t.get('fg1','#ebdbb2')};
+                border: 1px solid {t.get('bg3','#665c54')};
+                font-size: 9pt; padding: 4px 0;
+            }}
+            QMenu::item {{ padding: 4px 20px; }}
+            QMenu::item:selected {{
+                background: {t.get('bg3','#665c54')};
+                color: {t.get('yellow','#d79921')};
+            }}
+        """)
+        # Pipeline item (has 'ref' key, not a job)
+        if 'ref' in data and 'stage' not in data:
+            act_logs = menu.addAction('📋 Fetch Failed Logs → Chat')
+            act_copy = menu.addAction('⎘ Copy Pipeline URL')
+            act_open = menu.addAction('🔗 Open in Browser')
+            action = menu.exec(self._tree.viewport().mapToGlobal(pos))
+            if action == act_logs:
+                self._fetch_pipeline_logs(data)
+            elif action == act_copy:
+                from PyQt6.QtWidgets import QApplication
+                QApplication.clipboard().setText(self._pipeline_url(data))
+            elif action == act_open:
+                from PyQt6.QtGui import QDesktopServices
+                from PyQt6.QtCore import QUrl
+                QDesktopServices.openUrl(QUrl(self._pipeline_url(data)))
+        elif 'stage' in data:
+            act_log  = menu.addAction('📋 Fetch Job Log → Chat')
+            act_copy = menu.addAction('⎘ Copy Job URL')
+            action = menu.exec(self._tree.viewport().mapToGlobal(pos))
+            if action == act_log:
+                self._fetch_job_log(data)
+            elif action == act_copy:
+                from PyQt6.QtWidgets import QApplication
+                QApplication.clipboard().setText(self._job_url(data))
+
+    def _pipeline_url(self, pl: dict) -> str:
+        client = self._client_fn()
+        if not client:
+            return ''
+        from urllib.parse import unquote
+        proj = unquote(client.project)
+        base = client.base.replace('/api/v4', '')
+        return f"{base}/{proj}/-/pipelines/{pl['id']}"
+
+    def _job_url(self, job: dict) -> str:
+        client = self._client_fn()
+        if not client:
+            return ''
+        from urllib.parse import unquote
+        proj = unquote(client.project)
+        base = client.base.replace('/api/v4', '')
+        return f"{base}/{proj}/-/jobs/{job['id']}"
+
     def _open_in_browser(self):
         item = self._tree.currentItem()
         if not item:
@@ -350,6 +513,7 @@ class GitLabPanel(QDockWidget):
 
     def _apply_theme(self, t: dict):
         self._t = t
+        print(f'[GitLab] applying theme')
         self.setStyleSheet(build_dock_stylesheet(t))
         self._tree.setStyleSheet(f"""
             QTreeWidget {{
