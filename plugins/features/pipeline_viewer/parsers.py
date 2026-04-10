@@ -249,7 +249,11 @@ def parse_gitlab(content: str, file_path: str = "",
             if job.trigger and not job.trigger.is_remote:
                 child_path = os.path.join(base_dir, job.trigger.include)
                 child_path = os.path.normpath(child_path)
-                if os.path.exists(child_path):
+                # Skip dynamic artifact includes and directories
+                if (job.trigger.include.startswith('<artifact:')
+                        or not job.trigger.include):
+                    continue
+                if os.path.exists(child_path) and os.path.isfile(child_path):
                     try:
                         with open(child_path, 'r', encoding='utf-8') as f:
                             child_content = f.read()
@@ -284,6 +288,17 @@ def _parse_trigger(trigger_data) -> TriggerInfo:
             info.include   = include.get('file', '')
             info.ref       = include.get('ref', '')
             info.is_remote = bool(info.project)
+        elif isinstance(include, list):
+            # include: [{artifact: file.yml, job: jobname}]
+            # Dynamic artifact-based include — mark as dynamic
+            for item in include:
+                if isinstance(item, dict):
+                    if 'artifact' in item:
+                        info.include  = f"<artifact:{item['artifact']}>"
+                        info.is_remote = False  # same project
+                    elif 'file' in item:
+                        info.include = item['file']
+                    break
 
         info.project  = _str(trigger_data.get('project', info.project))
         info.ref      = _str(trigger_data.get('ref',     info.ref))
