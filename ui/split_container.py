@@ -22,12 +22,67 @@ Usage:
 """
 
 from PyQt6.QtWidgets import (
-    QWidget, QSplitter, QTabWidget, QVBoxLayout, QApplication
+    QWidget, QSplitter, QTabWidget, QVBoxLayout, QApplication, QTabBar
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QObject
-from PyQt6.QtGui import QColor
+from PyQt6.QtCore import Qt, pyqtSignal, QObject, QMimeData, QPoint, QByteArray
+from PyQt6.QtGui import QColor, QDrag, QPixmap, QPainter
 
 from ui.theme import get_theme, theme_signals, build_tab_widget_stylesheet
+
+
+# -- DraggableTabBar ---------------------------------------------------------
+
+_MIME_TAB = "application/x-quillai-tab"
+
+
+class DraggableTabBar(QTabBar):
+    """
+    QTabBar subclass that initiates a cross-pane drag when a tab is
+    dragged more than a few pixels. Drag payload: "<pane_id>:<tab_index>".
+    """
+
+    def __init__(self, pane, parent=None):
+        super().__init__(parent)
+        self._pane       = pane
+        self._drag_start = QPoint()
+        self._drag_index = -1
+        self.setAcceptDrops(True)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start = event.pos()
+            self._drag_index = self.tabAt(event.pos())
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (event.buttons() & Qt.MouseButton.LeftButton
+                and self._drag_index >= 0):
+            dist = (event.pos() - self._drag_start).manhattanLength()
+            if dist > QApplication.startDragDistance():
+                self._start_drag(self._drag_index)
+                self._drag_index = -1
+                return
+        super().mouseMoveEvent(event)
+
+    def _start_drag(self, index):
+        payload = (str(id(self._pane)) + ":" + str(index)).encode()
+        mime = QMimeData()
+        mime.setData(_MIME_TAB, QByteArray(payload))
+    
+        tab_rect = self.tabRect(index)
+        pixmap   = QPixmap(tab_rect.size())
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter  = QPainter(pixmap)
+        painter.setOpacity(0.7)
+        from PyQt6.QtGui import QRegion
+        self.render(painter, QPoint(0, 0), QRegion(tab_rect))
+        painter.end()
+    
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.setPixmap(pixmap)
+        drag.setHotSpot(self._drag_start - tab_rect.topLeft())
+        drag.exec(Qt.DropAction.MoveAction)
 
 
 # ── EditorPane ────────────────────────────────────────────────────────────────
@@ -67,6 +122,12 @@ class EditorPane(QWidget):
         # Clicking anywhere in the pane activates it
         self.tabs.currentChanged.connect(lambda _: self._on_focus())
         layout.addWidget(self.tabs)
+
+        # Drag-and-drop between panes
+        self._draggable_bar = DraggableTabBar(self)
+        self.tabs.setTabBar(self._draggable_bar)
+        self.tabs.setTabsClosable(True)
+        self.setAcceptDrops(True)
 
         self._apply_theme(get_theme())
         theme_signals.theme_changed.connect(self._apply_theme)
@@ -128,6 +189,69 @@ class EditorPane(QWidget):
 
     def setStyleSheet(self, style: str):
         self.tabs.setStyleSheet(style)
+
+    # -- Drag-and-drop --------------------------------------------------------
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(_MIME_TAB):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat(_MIME_TAB):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        if not event.mimeData().hasFormat(_MIME_TAB):
+            event.ignore()
+            return
+
+        payload = bytes(event.mimeData().data(_MIME_TAB)).decode()
+        try:
+            parts       = payload.split(":")
+            src_pane_id = int(parts[0])
+            src_idx     = int(parts[1])
+        except (ValueError, IndexError):
+            event.ignore()
+            return
+
+        container = self._find_split_container()
+        if container is None:
+            event.ignore()
+            return
+
+        src_pane = None
+        for pane in container.all_panes():
+            if id(pane) == src_pane_id:
+                src_pane = pane
+                break
+
+        if src_pane is None or src_pane is self:
+            event.ignore()
+            return
+
+        drop_pos = event.position().toPoint()
+        dst_idx  = self._tab_index_at(drop_pos)
+        container._move_tab(src_pane, src_idx, self, dst_idx)
+        event.acceptProposedAction()
+
+    def _tab_index_at(self, pos):
+        bar = self.tabs.tabBar()
+        for i in range(bar.count()):
+            if bar.tabRect(i).contains(pos):
+                return i
+        return self.tabs.count()
+
+    def _find_split_container(self):
+        w = self.parent()
+        while w is not None:
+            if isinstance(w, SplitContainer):
+                return w
+            w = w.parent() if hasattr(w, 'parent') else None
+        return None
 
     # ── Theme ─────────────────────────────────────────────────────────────
 
@@ -258,6 +382,37 @@ class SplitContainer(QWidget):
         remaining = self.all_panes()
         if remaining:
             self._set_active(remaining[-1])
+
+    # -- Tab move (cross-pane drag result) ------------------------------------
+
+    def _move_tab(self, src_pane, src_idx, dst_pane, dst_idx):
+        """
+        Move a tab from src_pane[src_idx] to dst_pane at dst_idx.
+        Activates destination pane, collapses source if empty.
+        """
+        if src_pane is dst_pane:
+            return
+
+        editor = src_pane.widget(src_idx)
+        title  = src_pane.tabText(src_idx)
+        if editor is None:
+            return
+
+        src_pane.tabs.removeTab(src_idx)
+
+        if dst_idx < 0 or dst_idx >= dst_pane.tabs.count():
+            new_idx = dst_pane.tabs.addTab(editor, title)
+        else:
+            new_idx = dst_pane.tabs.insertTab(dst_idx, editor, title)
+
+        self._set_active(dst_pane)
+        dst_pane.tabs.setCurrentIndex(new_idx)
+        editor.setFocus()
+
+        if src_pane.count() == 0 and len(self.all_panes()) > 1:
+            self.close_pane(src_pane)
+
+        self.pane_activated.emit(dst_pane)
 
     # ── Internals ─────────────────────────────────────────────────────────
 

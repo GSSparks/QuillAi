@@ -15,6 +15,15 @@ class GitLabCIPlugin(FeaturePlugin):
     name    = "gitlab_ci"
     enabled = True
 
+    @classmethod
+    def should_show(cls, project_root: str) -> bool:
+        """Show only when the project has a .gitlab-ci.yml or .gitlab dir."""
+        import os
+        return (
+            os.path.exists(os.path.join(project_root, '.gitlab-ci.yml'))
+            or os.path.exists(os.path.join(project_root, '.gitlab'))
+        )
+
     def activate(self):
         from plugins.features.gitlab_ci.panel import GitLabPanel
         from PyQt6.QtWidgets import QDockWidget

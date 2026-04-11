@@ -8,6 +8,20 @@ class MarkdownPreviewPlugin(FeaturePlugin):
     description = "Live markdown preview panel"
     enabled = True
 
+    @classmethod
+    def should_show(cls, project_root: str) -> bool:
+        """Show only when the project contains markdown files."""
+        import os
+        for dirpath, dirnames, filenames in os.walk(project_root):
+            dirnames[:] = [d for d in dirnames
+                           if not d.startswith('.')
+                           and d not in ('node_modules', '__pycache__',
+                                         'venv', '.venv')]
+            for f in filenames:
+                if f.lower().endswith(('.md', '.markdown')):
+                    return True
+        return False
+
     def activate(self):
         self.dock = MarkdownPreviewDock(self.app)
         self.app.md_preview_dock = self.dock

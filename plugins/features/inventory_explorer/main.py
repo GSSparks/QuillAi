@@ -16,7 +16,25 @@ class InventoryExplorerPlugin(FeaturePlugin):
     name        = "inventory_explorer"
     description = "Ansible inventory browser — groups, hosts, vars"
     enabled     = True
-
+    
+    @classmethod
+    def should_show(cls, project_root: str) -> bool:
+        import os
+        inventory_names = {
+            'inventory', 'inventory.ini', 'inventory.yml',
+            'inventory.yaml', 'hosts', 'hosts.ini',
+        }
+        for dirpath, dirnames, filenames in os.walk(project_root):
+            dirnames[:] = [d for d in dirnames
+                           if not d.startswith('.')
+                           and d not in ('node_modules', '__pycache__', 'venv', '.venv')]
+            for f in filenames:
+                if f.lower() in inventory_names:
+                    return True
+            if os.path.basename(dirpath).lower() == 'inventory':
+                return True
+        return False
+        
     def activate(self):
         self._panel = InventoryExplorerPanel(self.app)
         self.app.inventory_explorer_dock = self._panel

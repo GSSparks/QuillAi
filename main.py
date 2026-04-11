@@ -239,13 +239,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         QShortcut(QKeySequence("Ctrl+H"),       self).activated.connect(self.show_find_replace)
         QShortcut(QKeySequence("Ctrl+Shift+F"), self).activated.connect(self.show_project_search)
         QShortcut(QKeySequence("Ctrl+Space"),   self).activated.connect(self.request_manual_completion)
-        # Split pane shortcuts
-        QShortcut(QKeySequence("Ctrl+\\"),        self).activated.connect(
-            lambda: self._split_active(Qt.Orientation.Horizontal)
-        )
-        QShortcut(QKeySequence("Ctrl+Shift+\\"),  self).activated.connect(
-            lambda: self._split_active(Qt.Orientation.Vertical)
-        )
+
         QShortcut(QKeySequence("Ctrl+Shift+W"),   self).activated.connect(
             self._close_active_pane
         )

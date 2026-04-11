@@ -87,3 +87,23 @@ class PluginManager:
     def emit(self, event: str, **kwargs) -> None:
         for handler in self._subscribers.get(event, []):
             handler(**kwargs)
+        # Context-aware dock visibility
+        if event == "project_opened":
+            project_root = kwargs.get("project_root", "")
+            if project_root:
+                for plugin in self._plugins:
+                    try:
+                        plugin._update_dock_visibility(project_root)
+                    except Exception as e:
+                        print(f"[PluginManager] dock visibility error "
+                              f"for {plugin.name}: {e}")
+        # Context-aware dock visibility
+        if event == "project_opened":
+            project_root = kwargs.get("project_root", "")
+            if project_root:
+                for plugin in self._plugins:
+                    try:
+                        plugin._update_dock_visibility(project_root)
+                    except Exception as e:
+                        print(f"[PluginManager] dock visibility error "
+                              f"for {plugin.name}: {e}")
