@@ -137,7 +137,7 @@ class AboutDialog(QDialog):
         self._name_label.setFont(QFont(QFONT_UI, 20, QFont.Weight.Bold))
         header_layout.addWidget(self._name_label)
 
-        self._version_label = QLabel("v0.3.0  ·  MIT License")
+        self._version_label = QLabel("v0.4.0  ·  MIT License")
         self._version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header_layout.addWidget(self._version_label)
 
