@@ -18,6 +18,12 @@ _RE_FILE_CHANGE = re.compile(
     re.DOTALL,
 )
 
+# Matches <shell_op description="...">command</shell_op>
+_RE_SHELL_OP = re.compile(
+    r'<shell_op\s+description="([^"]*?)">(.*?)</shell_op>',
+    re.DOTALL,
+)
+
 def _autodetect_changes(
     text: str, file_path: str
 ) -> list[tuple[str, str, str]]:
@@ -91,15 +97,214 @@ def _autodetect_changes(
 
 def _extract_file_changes(text: str) -> tuple[str, list[tuple[str, str, str]]]:
     """
-    Strip <file_change> tags from *text* and return:
+    Strip <file_change> tags from *text*, replace with fenced code blocks,
+    and return:
       (cleaned_text, [(path, mode, code), ...])
     """
     changes = []
+
     def _collect(m):
-        changes.append((m.group(1), m.group(2), m.group(3).strip()))
-        return ""   # remove tag from text
+        path = m.group(1)
+        mode = m.group(2)
+        code = m.group(3).strip()
+        changes.append((path, mode, code))
+        # Keep code visible as a fenced block with file path as header
+        ext = path.rsplit('.', 1)[-1] if '.' in path else ''
+        return f"\n**`{path}`**\n```{ext}\n{code}\n```\n"
+
     cleaned = _RE_FILE_CHANGE.sub(_collect, text)
     return cleaned, changes
+
+
+def _extract_shell_ops(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """
+    Strip <shell_op> tags from *text*, replace with a code block,
+    and return:
+      (cleaned_text, [(description, command), ...])
+    """
+    ops = []
+
+    def _collect(m):
+        description = m.group(1).strip()
+        command     = m.group(2).strip()
+        ops.append((description, command))
+        return f"\n**`{description}`**\n```bash\n{command}\n```\n"
+
+    cleaned = _RE_SHELL_OP.sub(_collect, text)
+    return cleaned, ops
+
+
+# ── Agent status panel ───────────────────────────────────────────────────────
+
+_AGENT_PANEL_ID = "agent-status-panel"
+
+
+def render_agent_status_panel(chat_history, json_str: str):
+    """
+    Insert or update the collapsible agent status panel in the chat.
+    Uses a JavaScript-free approach: replaces the panel HTML in place
+    by finding it via QTextCursor search.
+    """
+    import json as _json
+    from PyQt6.QtGui import QTextCursor
+    try:
+        data = _json.loads(json_str)
+    except Exception:
+        return
+
+    t       = get_theme()
+    summary = data.get("summary", "Agent thinking...")
+    content = data.get("content", "")
+    done    = data.get("done", False)
+
+    border_color = t.get("aqua",   "#8ec07c") if not done else t.get("green", "#98971a")
+    bg_color     = t.get("bg1",    "#3c3836")
+    fg_color     = t.get("fg1",    "#ebdbb2")
+    dim_color    = t.get("fg4",    "#a89984")
+
+    content_html = content.replace("\n", "<br>")
+
+    panel_html = (
+        f'<!-- agent-status-begin -->'
+        f'<table width="100%" cellpadding="0" cellspacing="0" '
+        f'style="margin:4px 0;">'
+        f'<tr><td style="padding:6px 10px;'
+        f'background:{bg_color};'
+        f'border-left:3px solid {border_color};'
+        f'border-radius:2px;">'
+        f'<details {"open" if not done else ""}>'
+        f'<summary style="color:{border_color};font-size:9pt;'
+        f'font-weight:bold;cursor:pointer;">{summary}</summary>'
+        f'<pre style="color:{dim_color};font-size:8pt;'
+        f'margin:6px 0 0 0;white-space:pre-wrap;">'
+        f'{content_html}</pre>'
+        f'</details>'
+        f'</td></tr></table>'
+        f'<!-- agent-status-end -->'
+    )
+
+    doc    = chat_history.document()
+    cursor = QTextCursor(doc)
+
+    # Try to find and replace existing panel
+    found = doc.find("<!-- agent-status-begin -->")
+    if not found.isNull():
+        end = doc.find("<!-- agent-status-end -->", found)
+        if not end.isNull():
+            end.movePosition(
+                QTextCursor.MoveOperation.EndOfBlock,
+                QTextCursor.MoveMode.KeepAnchor
+            )
+            found.setPosition(
+                found.position(),
+                QTextCursor.MoveMode.MoveAnchor
+            )
+            found.setPosition(
+                end.position(),
+                QTextCursor.MoveMode.KeepAnchor
+            )
+            found.insertHtml(panel_html)
+            return
+
+    # No existing panel — insert before stream start pos
+    cursor = chat_history.textCursor()
+    stream_start = getattr(chat_history, '_agent_panel_pos', None)
+    if stream_start is None:
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertHtml(panel_html)
+        chat_history._agent_panel_pos = cursor.position()
+    else:
+        cursor.setPosition(stream_start)
+        cursor.insertHtml(panel_html)
+    chat_history.moveCursor(QTextCursor.MoveOperation.End)
+    chat_history._stream_start_pos = chat_history.textCursor().position()
+    chat_history.ensureCursorVisible()
+
+
+# ── Agent status panel ───────────────────────────────────────────────────────
+
+_AGENT_PANEL_ID = "agent-status-panel"
+
+
+def render_agent_status_panel(chat_history, json_str: str):
+    """
+    Insert or update the collapsible agent status panel in the chat.
+    Uses a JavaScript-free approach: replaces the panel HTML in place
+    by finding it via QTextCursor search.
+    """
+    import json as _json
+    from PyQt6.QtGui import QTextCursor
+    try:
+        data = _json.loads(json_str)
+    except Exception:
+        return
+
+    t       = get_theme()
+    summary = data.get("summary", "Agent thinking...")
+    content = data.get("content", "")
+    done    = data.get("done", False)
+
+    border_color = t.get("aqua",   "#8ec07c") if not done else t.get("green", "#98971a")
+    bg_color     = t.get("bg1",    "#3c3836")
+    fg_color     = t.get("fg1",    "#ebdbb2")
+    dim_color    = t.get("fg4",    "#a89984")
+
+    content_html = content.replace("\n", "<br>")
+
+    panel_html = (
+        f'<!-- agent-status-begin -->'
+        f'<table width="100%" cellpadding="0" cellspacing="0" '
+        f'style="margin:4px 0;">'
+        f'<tr><td style="padding:6px 10px;'
+        f'background:{bg_color};'
+        f'border-left:3px solid {border_color};'
+        f'border-radius:2px;">'
+        f'<details {"open" if not done else ""}>'
+        f'<summary style="color:{border_color};font-size:9pt;'
+        f'font-weight:bold;cursor:pointer;">{summary}</summary>'
+        f'<pre style="color:{dim_color};font-size:8pt;'
+        f'margin:6px 0 0 0;white-space:pre-wrap;">'
+        f'{content_html}</pre>'
+        f'</details>'
+        f'</td></tr></table>'
+        f'<!-- agent-status-end -->'
+    )
+
+    doc    = chat_history.document()
+    cursor = QTextCursor(doc)
+
+    # Try to find and replace existing panel
+    found = doc.find("<!-- agent-status-begin -->")
+    if not found.isNull():
+        end = doc.find("<!-- agent-status-end -->", found)
+        if not end.isNull():
+            end.movePosition(
+                QTextCursor.MoveOperation.EndOfBlock,
+                QTextCursor.MoveMode.KeepAnchor
+            )
+            found.setPosition(
+                found.position(),
+                QTextCursor.MoveMode.MoveAnchor
+            )
+            found.setPosition(
+                end.position(),
+                QTextCursor.MoveMode.KeepAnchor
+            )
+            found.insertHtml(panel_html)
+            return
+
+    # No existing panel — insert before stream start pos
+    cursor = chat_history.textCursor()
+    stream_start = getattr(chat_history, '_agent_panel_pos', None)
+    if stream_start is None:
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertHtml(panel_html)
+        chat_history._agent_panel_pos = cursor.position()
+    else:
+        cursor.setPosition(stream_start)
+        cursor.insertHtml(panel_html)
+    chat_history.moveCursor(QTextCursor.MoveOperation.End)
+    chat_history.ensureCursorVisible()
 
 
 _PYGMENTS_STYLE_MAP = {
@@ -185,6 +390,38 @@ class ChatRenderer:
 
     # ── Streaming ─────────────────────────────────────────────────────────
 
+    def append_agent_status(self, json_str: str):
+        """Receive agent status panel update and forward to chat renderer."""
+        if hasattr(self, 'chat_history'):
+            from ui.chat_renderer import render_agent_status_panel
+            from PyQt6.QtGui import QTextCursor
+            render_agent_status_panel(self.chat_history, json_str)
+            # Update stream start to be after the status panel
+            # so chat_stream_finished doesn't wipe it
+            cursor = self.chat_history.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            self._stream_start_pos = cursor.position()
+            self.chat_history._agent_panel_pos = None  # reset so panel updates in place
+
+    def _on_agent_write_ops(self, ops: list):
+        """Show write ops confirmation dialog after agent finishes."""
+        from ui.agent_write_dialog import AgentWriteDialog
+        root = (
+            self.git_dock.repo_path
+            if hasattr(self, 'git_dock') and self.git_dock.repo_path
+            else os.getcwd()
+        )
+        dialog = AgentWriteDialog(ops, root, parent=self)
+        if dialog.exec():
+            for abs_path in dialog.applied_paths:
+                self._reload_file_in_editors(abs_path)
+                if hasattr(self, 'repo_map') and self.repo_map:
+                    self.repo_map.invalidate(abs_path)
+            n = len(dialog.applied_paths)
+            self.statusBar().showMessage(
+                f"Agent applied {n} change{'s' if n != 1 else ''}.", 5000
+            )
+
     def append_chat_stream(self, text: str):
         self.current_ai_raw_text += text
         self._stream_buffer = getattr(self, "_stream_buffer", "") + text
@@ -224,6 +461,15 @@ class ChatRenderer:
         return self._render_ai_response(text)
 
     def chat_stream_finished(self):
+        # Agent mode — final answer already rendered, just clean up
+        if getattr(self, '_skip_stream_finished', False):
+            self._skip_stream_finished = False
+            self.current_ai_raw_text = ""
+            self._stream_buffer      = ""
+            self._stream_start_pos   = 0
+            self.memory_manager.save_chat_history(self.chat_history.toHtml())
+            return
+            
         from PyQt6.QtGui import QTextCursor
         full_response = self.current_ai_raw_text
         start_pos     = getattr(self, "_stream_start_pos", 0)
@@ -236,6 +482,8 @@ class ChatRenderer:
             cursor.removeSelectedText()
             self.chat_history.setTextCursor(cursor)
 
+        # Extract shell ops first, then file changes
+        full_response, shell_ops = _extract_shell_ops(full_response)
         clean_response, file_changes = _extract_file_changes(full_response)
 
         rendered = self._render_ai_response(
@@ -254,6 +502,9 @@ class ChatRenderer:
 
         if file_changes:
             rendered += self._render_apply_buttons(file_changes)
+
+        if shell_ops:
+            rendered += self._render_shell_op_buttons(shell_ops)
 
         rendered += self._render_save_faq_button(
             self._last_user_message, clean_response
@@ -443,10 +694,64 @@ class ChatRenderer:
             f'</td></tr></table>'
         )
 
+    def _render_shell_op_buttons(self, ops: list) -> str:
+        """Render run buttons for shell_op commands."""
+        t = get_theme()
+        rows = []
+        for description, command in ops:
+            encoded = base64.b64encode(
+                f"{description}|||{command}".encode("utf-8")
+            ).decode()
+            rows.append(
+                f'<table width="100%" cellpadding="0" cellspacing="0" '
+                f'style="margin:8px 0 4px 0;">'
+                f'<tr><td style="padding:8px 10px;'
+                f'background:{t.get("bg1","#3c3836")};'
+                f'border-left:3px solid {t.get("aqua","#8ec07c")};'
+                f'border-radius:2px;">'
+                f'<div style="color:{t.get("fg1","#ebdbb2")};'
+                f'font-size:9pt;margin-bottom:4px;">'
+                f'⚡ <strong>{description}</strong></div>'
+                f'<code style="color:{t.get("aqua","#8ec07c")};'
+                f'font-size:8.5pt;background:{t.get("bg0","#282828")};'
+                f'padding:2px 6px;border-radius:3px;">'
+                f'{command[:120]}{"..." if len(command) > 120 else ""}</code>'
+                f'&nbsp;&nbsp;'
+                f'<a href="shellop:{encoded}" '
+                f'style="color:{t.get("green","#98971a")};'
+                f'font-size:9pt;font-weight:bold;text-decoration:none;">'
+                f'▶ Run</a>'
+                f'</td></tr></table>'
+            )
+        return "".join(rows)
+
     def _render_apply_buttons(self, changes: list) -> str:
         s = _safe_styles(build_chat_styles(get_theme()))
         t = get_theme()
         rows = []
+
+        # Apply All button — shown when there are 2+ file changes
+        if len(changes) >= 2:
+            import base64 as _b64, json as _json
+            all_encoded = _b64.b64encode(
+                _json.dumps([
+                    {"path": p, "mode": m, "code": c}
+                    for p, m, c in changes
+                ]).encode("utf-8")
+            ).decode()
+            rows.append(
+                f'<table width="100%" cellpadding="0" cellspacing="0" '
+                f'style="margin:8px 0 4px 0;">'
+                f'<tr><td style="padding:8px 10px;'
+                f'background:{t.get("bg2","#504945")};'
+                f'border-left:3px solid {t.get("aqua","#8ec07c")};'
+                f'border-radius:2px;">'
+                f'<a href="apply_all:{all_encoded}" '
+                f'style="color:{t.get("aqua","#8ec07c")};'
+                f'font-size:9.5pt;font-weight:bold;text-decoration:none;">'
+                f'⚡ Review &amp; Apply All {len(changes)} Files</a>'
+                f'</td></tr></table>'
+            )
         for file_path, mode, code in changes:
             encoded = base64.b64encode(
                 f"{file_path}|{mode}|{code}".encode("utf-8")
@@ -492,6 +797,10 @@ class ChatRenderer:
             decoded = base64.b64decode(url_str.replace("copy:", "")).decode("utf-8")
             QApplication.clipboard().setText(decoded)
             self.statusBar().showMessage("Code copied to clipboard.", 2000)
+        elif url_str.startswith("shellop:"):
+            self._handle_shell_op_link(url_str[8:])
+        elif url_str.startswith("apply_all:"):
+            self._handle_apply_all_link(url_str[10:])
         elif url_str.startswith("apply:"):
             self._handle_apply_link(url_str[6:])
         elif url_str.startswith("undo:"):
@@ -530,6 +839,108 @@ class ChatRenderer:
             self.statusBar().showMessage(msg, 3000)
         else:
             self.statusBar().showMessage('FAQ manager not available', 3000)
+
+    def _handle_shell_op_link(self, encoded: str):
+        """Confirm and execute a shell command in the project root."""
+        import base64 as _b64, subprocess as _sp
+        from PyQt6.QtWidgets import QMessageBox
+        try:
+            padded = encoded + "=" * (4 - len(encoded) % 4)
+            try:
+                payload = base64.b64decode(padded).decode("utf-8")
+            except Exception:
+                payload = base64.urlsafe_b64decode(padded).decode("utf-8")
+            sep         = payload.index("|||")
+            description = payload[:sep].strip()
+            command     = payload[sep+3:].strip()
+        except Exception as e:
+            self.statusBar().showMessage(f"Could not parse command: {e}", 4000)
+            return
+
+        root = (
+            self.git_dock.repo_path
+            if hasattr(self, "git_dock") and self.git_dock.repo_path
+            else None
+        )
+
+        reply = QMessageBox.question(
+            self,
+            "Run Shell Command",
+            f"Run this command in the project root?\n\n"
+            f"{command}\n\n"
+            f"Working directory: {root or 'current directory'}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            result = _sp.run(
+                command,
+                shell=True,
+                cwd=root or None,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                msg = f"✓ {description}"
+                if result.stdout.strip():
+                    msg += f": {result.stdout.strip()[:100]}"
+                self.statusBar().showMessage(msg, 5000)
+                # Reload any affected open editors
+                if root:
+                    for pane in self.split_container.all_panes():
+                        for i in range(pane.count()):
+                            editor = pane.widget(i)
+                            fp = getattr(editor, 'file_path', None)
+                            if fp and fp.startswith(root):
+                                try:
+                                    new = open(fp, encoding='utf-8').read()
+                                    if new != editor.toPlainText():
+                                        self._reload_editor(editor, new, fp)
+                                except Exception:
+                                    pass
+            else:
+                err = result.stderr.strip()[:200] or "Unknown error"
+                QMessageBox.warning(
+                    self, "Command Failed",
+                    f"{description} failed:\n\n{err}"
+                )
+        except _sp.TimeoutExpired:
+            self.statusBar().showMessage("Command timed out.", 5000)
+        except Exception as e:
+            self.statusBar().showMessage(f"Command error: {e}", 5000)
+
+    def _handle_apply_all_link(self, encoded: str):
+        """Open MultiFileDiffDialog for reviewing all changes at once."""
+        import base64 as _b64, json as _json
+        try:
+            payload = _json.loads(_b64.b64decode(encoded).decode("utf-8"))
+            changes = [(c["path"], c["mode"], c["code"]) for c in payload]
+        except Exception as e:
+            self.statusBar().showMessage(f"Could not parse changes: {e}", 4000)
+            return
+
+        root = (
+            self.git_dock.repo_path
+            if hasattr(self, "git_dock") and self.git_dock.repo_path
+            else str(Path.cwd())
+        )
+
+        from ui.multi_file_diff_dialog import MultiFileDiffDialog
+        dialog = MultiFileDiffDialog(changes, root, parent=self)
+        if dialog.exec():
+            for abs_path in dialog.applied_paths:
+                self._reload_file_in_editors(abs_path)
+                if hasattr(self, "repo_map") and self.repo_map:
+                    self.repo_map.invalidate(abs_path)
+            n = len(dialog.applied_paths)
+            self.statusBar().showMessage(
+                f"Applied {n} file{'s' if n != 1 else ''} successfully.",
+                5000
+            )
 
     def _handle_apply_link(self, encoded: str):
         try:

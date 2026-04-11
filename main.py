@@ -25,6 +25,8 @@ from core.wiki_context_builder import WikiContextBuilder
 
 from editor.ghost_editor import GhostEditor
 from ai.worker import AIWorker
+from ai.agent_worker import AgentWorker
+from ai.agent_worker import AgentWorker
 from ai.context_engine import ContextEngine
 from ai.lsp_manager import LSPManager
 from ai.lsp_context import LSPContextProvider
@@ -63,6 +65,46 @@ from editor.highlighter import registry
 from ui.git_panel import GitDockWidget
 
 MAX_FILE_SIZE = 6000  # characters
+
+
+def _query_wants_agent(text: str) -> bool:
+    """
+    Return True if the query likely needs active investigation —
+    searching files, finding symbols, or making project-wide changes.
+    """
+    text = text.lower()
+    triggers = [
+        # Investigation
+        'find all', 'where is', 'where are', 'what calls', 'what uses',
+        'search for', 'look for', 'grep', 'across the project',
+        'throughout', 'everywhere', 'all files', 'all usages',
+        # Refactoring
+        'rename', 'move', 'refactor', 'update all', 'replace all',
+        'add import', 'remove import',
+        # Multi-file
+        'in all', 'across all', 'every file', 'project-wide',
+    ]
+    return any(t in text for t in triggers)
+
+
+def _query_wants_agent(text: str) -> bool:
+    """
+    Return True if the query likely needs active investigation —
+    searching files, finding symbols, or making project-wide changes.
+    """
+    text = text.lower()
+    triggers = [
+        # Investigation
+        'find all', 'where is', 'where are', 'what calls', 'what uses',
+        'search for', 'look for', 'grep', 'across the project',
+        'throughout', 'everywhere', 'all files', 'all usages',
+        # Refactoring
+        'rename', 'move', 'refactor', 'update all', 'replace all',
+        'add import', 'remove import',
+        # Multi-file
+        'in all', 'across all', 'every file', 'project-wide',
+    ]
+    return any(t in text for t in triggers)
 
 
 def _query_wants_diff(text: str) -> bool:
@@ -1977,7 +2019,34 @@ Instructions:
             self.current_ai_raw_text = ""
 
             thread = QThread()
-            self.chat_worker = self.create_worker(prompt=prompt_with_context, is_chat=True)
+
+            if _query_wants_agent(user_text):
+                # Agent mode — tool-use loop
+                self.chat_worker = AgentWorker(
+                    user_text    = user_text,
+                    context      = prompt_with_context,
+                    project_root = (
+                        self.git_dock.repo_path
+                        if hasattr(self, 'git_dock') and self.git_dock.repo_path
+                        else os.getcwd()
+                    ),
+                    model        = self.settings_manager.get_chat_model(),
+                    api_url      = self.settings_manager.get_api_url(),
+                    api_key      = self.settings_manager.get_api_key(),
+                    backend      = self.settings_manager.get_backend(),
+                    repo_map     = getattr(self, 'repo_map', None),
+                )
+                self.chat_worker.tool_status.connect(self.append_agent_status)
+                self.chat_worker.write_ops.connect(self._on_agent_write_ops)
+                self.chat_worker.finished.connect(
+                    lambda: setattr(self, '_skip_stream_finished', True)
+                )
+            else:
+                # Normal chat mode
+                self.chat_worker = self.create_worker(
+                    prompt=prompt_with_context, is_chat=True
+                )
+
             self.chat_worker.moveToThread(thread)
             self.chat_worker.chat_update.connect(self.append_chat_stream)
             self.chat_worker.finished.connect(self.chat_stream_finished)
