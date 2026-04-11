@@ -104,7 +104,10 @@ def _tool_grep(attrs: dict, root: str):
     pattern = attrs.get("pattern", "")
     if not pattern:
         return False, "No pattern specified"
-    flags = attrs.get("flags", "-rn -E")
+    flags = attrs.get("flags", "-rn")
+    flag_list = flags.split()
+    if "-E" not in flag_list:
+        flag_list.append("-E")
     path = attrs.get("path", ".")
     full_path = os.path.join(root, path)
     try:
