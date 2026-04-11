@@ -811,7 +811,6 @@ class LspEditorMixin:
         Fires both LSP completion (if available) AND AI completion in parallel.
         For non-LSP files, fires AI-only.
         """
-        print(f"[completion] Ctrl+Space fired, lsp_active={self._lsp_active()}")
         self._last_trigger_char = None
         if hasattr(self, '_completion_timer'):
             self._completion_timer.stop()
@@ -876,7 +875,6 @@ class LspEditorMixin:
  
     def _request_ai_completion(self):
         """Fire async AI completion request."""
-        print(f"[completion] _request_ai_completion called, provider={hasattr(self, '_ai_provider')}")
         if not hasattr(self, '_ai_provider'):
             return
  
@@ -946,13 +944,11 @@ class LspEditorMixin:
         Called from background thread — marshal to main thread via
         QTimer.singleShot(0), which is safe from any thread.
         """
-        print(f"[completion] AI thread callback, {len(items)} items")
         self._pending_ai_items = items
         QTimer.singleShot(0, self._on_ai_completion_result)
  
     def _on_ai_completion_result(self):
         """Main-thread handler — merges AI items into open popup or creates one."""
-        print(f"[completion] main thread handler, items={len(getattr(self, '_pending_ai_items', []))}")
         items = getattr(self, '_pending_ai_items', [])
         if not items:
             return

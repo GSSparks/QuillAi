@@ -95,8 +95,6 @@ class AgentWorker(QObject):
 
             # Parse tool calls
             tool_calls = parse_tool_calls(response_text)
-            print(f"[AgentWorker] iteration {iteration}, tool_calls={[t['name'] for t in tool_calls]}, done={has_agent_done(response_text)}")
-            print(f"[AgentWorker] response_text={response_text[:200]!r}")
             done       = has_agent_done(response_text)
 
             # Separate read vs write
@@ -125,7 +123,6 @@ class AgentWorker(QObject):
                 self._emit_status_panel()
 
                 success, output = run_tool(name, tc["attrs"], self.project_root)
-                print(f"[AgentWorker] tool {name} success={success} output={output[:100]!r}")
                 summary = output[:100] + "..." if len(output) > 100 else output
 
                 # Update log with result
@@ -212,7 +209,6 @@ class AgentWorker(QObject):
         try:
             resp = requests.post(url, json=payload, headers=headers, timeout=60)
             if resp.status_code != 200:
-                print(f"[AgentWorker] API error {resp.status_code}: {resp.text[:200]}")
                 return ""
             data = resp.json()
             if self.backend == "claude":
@@ -227,7 +223,6 @@ class AgentWorker(QObject):
             print("[AgentWorker] request timed out")
             return ""
         except Exception as e:
-            print(f"[AgentWorker] error: {e}")
             return ""
 
     # ── Prompt builders ───────────────────────────────────────────────────
