@@ -1,3 +1,6 @@
+import sys
+import pathlib
+
 from PyQt6.QtWidgets import (
     QSpinBox, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QFormLayout,
@@ -85,6 +88,7 @@ class SettingsDialog(QDialog):
         self._tabs.addTab(self._build_integrations_tab(), "🔗  Integrations")
         self._tabs.addTab(self._build_editor_tab(),       "⌨  Editor")
         self._tabs.addTab(self._build_appearance_tab(),   "🎨  Appearance")
+        self._tabs.addTab(self._build_plugins_tab(),      "🧩  Plugins")
 
         # ── Footer ────────────────────────────────────────────────────────
         self.footer = QWidget()
@@ -288,6 +292,95 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return tab
 
+    def _build_plugins_tab(self) -> QWidget:
+        tab, layout = self._tab_scroll()
+
+        t = get_theme()
+        pm = getattr(self.parent(), 'plugin_manager', None) if self.parent() else None
+
+        if pm is None:
+            layout.addWidget(QLabel("Plugin manager not available."))
+            layout.addStretch()
+            return tab
+
+        self._plugin_checkboxes = {}  # name -> (checkbox, module_file)
+
+        # Collect all known plugins — active ones from pm._plugins,
+        # disabled ones from their class-level enabled=False
+        seen = set()
+
+        for plugin in pm._plugins:
+            name        = plugin.name or plugin.__class__.__name__
+            description = getattr(plugin, 'description', '') or ''
+            module_file = getattr(
+                sys.modules.get(plugin.__class__.__module__, None),
+                '__file__', None
+            )
+            # Read persisted state — default True if never saved
+            enabled = self.sm.settings.get('plugin_enabled_' + name, True)
+            row = self._make_plugin_row(name, description, enabled, module_file, t)
+            layout.addWidget(row)
+            seen.add(name)
+
+        # Show plugins that are loaded but disabled (enabled=False on class)
+        # by scanning the features directory
+        features_path = pathlib.Path(
+            pm.app.__class__.__module__
+        ) if False else None  # placeholder
+        # Scan for disabled plugins via saved settings
+        for key, val in self.sm.settings.items():
+            if key.startswith('plugin_enabled_') and not val:
+                name = key[len('plugin_enabled_'):]
+                if name not in seen:
+                    module_file = self.sm.settings.get('plugin_module_' + name)
+                    row = self._make_plugin_row(name, '', False, module_file, t)
+                    layout.addWidget(row)
+                    seen.add(name)
+
+        if not seen:
+            layout.addWidget(QLabel("No plugins loaded."))
+
+        layout.addStretch()
+        return tab
+
+    def _make_plugin_row(self, name, description, enabled,
+                         module_file, t) -> QWidget:
+        row = QWidget()
+        row.setStyleSheet(
+            f"QWidget {{ background: {t.get('bg1', '#3c3836')};"
+            f" border-radius: 4px; }}"
+        )
+        hl = QHBoxLayout(row)
+        hl.setContentsMargins(12, 8, 12, 8)
+        hl.setSpacing(12)
+
+        toggle = QCheckBox()
+        toggle.setChecked(enabled)
+        toggle.setFixedWidth(20)
+        toggle.setProperty('plugin_name', name)
+        toggle.setProperty('module_file', module_file or '')
+
+        name_label = QLabel(name)
+        name_label.setStyleSheet(
+            f"color: {t.get('fg1', '#ebdbb2')}; font-weight: bold;"
+            " font-size: 9pt; background: transparent;"
+        )
+        name_label.setFixedWidth(160)
+
+        desc_label = QLabel(description or "No description.")
+        desc_label.setStyleSheet(
+            f"color: {t.get('fg4', '#a89984')}; font-size: 8pt;"
+            " background: transparent;"
+        )
+        desc_label.setWordWrap(True)
+
+        hl.addWidget(toggle)
+        hl.addWidget(name_label)
+        hl.addWidget(desc_label, stretch=1)
+
+        self._plugin_checkboxes[name] = (toggle, module_file)
+        return row
+
     def _build_appearance_tab(self) -> QWidget:
         tab, layout = self._tab_scroll()
 
@@ -357,6 +450,22 @@ class SettingsDialog(QDialog):
         selected_theme = self.theme_combo.currentData()
         self.sm.set('theme', selected_theme)
         apply_theme(QApplication.instance(), selected_theme)
+
+        # Save plugin enabled/disabled state and apply live
+        if hasattr(self, '_plugin_checkboxes'):
+            pm = getattr(self.parent(), 'plugin_manager', None)
+            if pm:
+                for name, (toggle, module_file) in self._plugin_checkboxes.items():
+                    if not isinstance(toggle, QCheckBox):
+                        continue
+                    want_enabled = toggle.isChecked()
+                    is_enabled   = pm.is_enabled(name)
+                    self.sm.set('plugin_enabled_' + name, want_enabled)
+                    self.sm.set('plugin_module_' + name, module_file or '')
+                    if want_enabled and not is_enabled and module_file:
+                        pm.enable_plugin(module_file)
+                    elif not want_enabled and is_enabled:
+                        pm.disable_plugin(name)
 
         self.status_label.setText("Saved ✓")
         self.accept()

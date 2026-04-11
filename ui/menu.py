@@ -385,11 +385,15 @@ def _setup_view_menu(window):
         ("Output",         "output_dock",     None),
     ]
     for label, attr, shortcut in static_panels:
-        panels_menu.addAction(_make_panel_action(label, attr, window, shortcut))
-        
+        action = _make_panel_action(label, attr, window, shortcut)
+        # Sync initial checked state properly
+        dock = getattr(window, attr, None)
+        if dock:
+            action.setChecked(dock.isVisible())
+        panels_menu.addAction(action)
+
     # Plugin-owned panels — added dynamically when menu opens
     def _add_plugin_panels():
-        # Remove previously added plugin actions (tracked by property)
         for action in getattr(panels_menu, '_plugin_actions', []):
             panels_menu.removeAction(action)
         panels_menu._plugin_actions = []
@@ -397,28 +401,42 @@ def _setup_view_menu(window):
         pm = getattr(window, 'plugin_manager', None)
         if not pm:
             return
+
+        # Only show plugins that are currently active
+        active_names = {p.name for p in pm._plugins}
+
+        plugin_actions = []
         for label, (dock_attr, shortcut) in pm.docks.items():
+            # Derive plugin name from dock_attr — strip trailing _dock
+            plugin_name = dock_attr.replace('_dock', '')
+            # Skip if plugin is disabled (not in active list)
+            # Allow through if we can't match a name (static/core docks)
+            matched_plugin = next(
+                (p for p in pm._plugins
+                 if getattr(window, dock_attr, None) is not None
+                 and any(
+                     getattr(p, attr, None) is getattr(window, dock_attr, None)
+                     for attr in ('dock', '_panel', '_dock')
+                 )),
+                None
+            )
+            if matched_plugin is None and dock_attr not in (
+                attr for _, attr, _ in static_panels
+            ):
+                # Can't confirm it's active — skip
+                continue
             action = _make_panel_action(label, dock_attr, window, shortcut)
-            panels_menu.addAction(action)
-            panels_menu._plugin_actions.append(action)
+            plugin_actions.append(action)
+
+        if plugin_actions:
+            sep = panels_menu.addSeparator()
+            panels_menu._plugin_actions.append(sep)
+            for action in plugin_actions:
+                panels_menu.addAction(action)
+                panels_menu._plugin_actions.append(action)
 
     panels_menu.aboutToShow.connect(_add_plugin_panels)
-
-    # Chat is a sliding panel, not a dock — handle separately
-    chat_action = QAction("Chat", window)
-    chat_action.triggered.connect(
-        lambda: window.chat_panel.switch_to_chat()
-        if hasattr(window, 'chat_panel') else None
-    )
-    panels_menu.addAction(chat_action)
-
-    memory_action = QAction("Memory", window)
-    memory_action.triggered.connect(
-        lambda: window.chat_panel.switch_to_memory()
-        if hasattr(window, 'chat_panel') else None
-    )
-    panels_menu.addAction(memory_action)
-
+    
     view_menu.addSeparator()
 
     # ── Split editor ──────────────────────────────────────────────────────
@@ -442,7 +460,7 @@ def _setup_view_menu(window):
 
     view_menu.addSeparator()
 
-    # ── Themes ───────────────────────────────────────────────────────────
+    # ── Themes ────────────────────────────────────────────────────────────
     theme_menu = view_menu.addMenu("Theme")
 
     def _apply_theme_action(key):
