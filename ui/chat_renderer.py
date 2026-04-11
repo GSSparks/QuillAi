@@ -469,6 +469,50 @@ class ChatRenderer:
             self._stream_start_pos   = 0
             self.memory_manager.save_chat_history(self.chat_history.toHtml())
             return
+
+        # Model requested tool access — re-launch as agent
+        if '<needs_tools/>' in self.current_ai_raw_text:
+            # Clear the partial response (don't show <needs_tools/> to user)
+            from PyQt6.QtGui import QTextCursor
+            start_pos = getattr(self, '_stream_start_pos', 0)
+            if start_pos > 0:
+                cursor = self.chat_history.textCursor()
+                cursor.setPosition(start_pos)
+                cursor.movePosition(
+                    QTextCursor.MoveOperation.End,
+                    QTextCursor.MoveMode.KeepAnchor
+                )
+                cursor.removeSelectedText()
+            self.current_ai_raw_text = ""
+            self._stream_buffer      = ""
+            self._stream_start_pos   = 0
+            # Re-launch as agent
+            if hasattr(self, '_relaunch_as_agent'):
+                self._relaunch_as_agent(self._last_user_message)
+            return
+
+
+        # Model requested tool access — re-launch as agent
+        if '<needs_tools/>' in self.current_ai_raw_text:
+            # Clear the partial response (don't show <needs_tools/> to user)
+            from PyQt6.QtGui import QTextCursor
+            start_pos = getattr(self, '_stream_start_pos', 0)
+            if start_pos > 0:
+                cursor = self.chat_history.textCursor()
+                cursor.setPosition(start_pos)
+                cursor.movePosition(
+                    QTextCursor.MoveOperation.End,
+                    QTextCursor.MoveMode.KeepAnchor
+                )
+                cursor.removeSelectedText()
+            self.current_ai_raw_text = ""
+            self._stream_buffer      = ""
+            self._stream_start_pos   = 0
+            # Re-launch as agent
+            if hasattr(self, '_relaunch_as_agent'):
+                self._relaunch_as_agent(self._last_user_message)
+            return
+
             
         from PyQt6.QtGui import QTextCursor
         full_response = self.current_ai_raw_text

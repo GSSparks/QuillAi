@@ -69,12 +69,25 @@ class AIWorker(QObject):
 
         if self.is_chat:
             system = (
-                f"You are QuillAI, a helpful programming assistant built directly "
-                f"into the user's IDE. "
+                f"You are QuillAI, an AI coding agent built directly into the user's IDE. "
+                f"For questions about the codebase — finding usages, locating files, "
+                f"understanding structure, or making changes — you MUST emit "
+                f"<needs_tools/> as your entire response so QuillAI can give you "
+                f"tool access to investigate accurately. "
+                f"Do NOT answer codebase investigation questions from memory or guess. "
+                f"For general programming questions not specific to this codebase, "
+                f"answer normally without <needs_tools/>. "
             )
             if lang:
                 system += f"The user is currently working in {lang}. "
             system += (
+                "IMPORTANT: If you need to search files, read code, or investigate "
+                "the project to answer accurately — and the source code provided is "
+                "insufficient — emit <needs_tools/> as the FIRST thing in your response "
+                "instead of guessing. QuillAI will then give you full tool access. "
+                "Only emit <needs_tools/> when you genuinely cannot answer from the "
+                "provided context. Do NOT emit it for general questions. "
+                "\n"
                 "Be concise and use markdown for code blocks. "
                 "When suggesting code, match the style and conventions visible "
                 "in the provided context. "
@@ -100,7 +113,7 @@ class AIWorker(QObject):
                 "over partial changes."
                 "When renaming a symbol or refactoring, you MUST write the complete, "
                 "full implementation of every function — never use pass, ..., or stubs. "
-                "The output must be production-ready code, not a skeleton. "
+                "The output must be production-ready code, not a skeleton. "          
                 "IMPORTANT: For purely mechanical text operations (renaming a symbol, "
                 "adding/removing an import, changing a constant value, find-and-replace "
                 "across files), you MUST use a shell_op tag instead of file_change: "

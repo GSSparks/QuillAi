@@ -96,50 +96,24 @@ def describe_tool_call(name: str, attrs: dict) -> str:
 
 # ── Read tool implementations ─────────────────────────────────────────────────
 
-def _tool_grep(attrs: dict, root: str) -> tuple[bool, str]:
+def _tool_grep(attrs: dict, root: str):
+    """Run grep with the given attrs dict. Returns (success, output)."""
+    import subprocess
+    import os
+
     pattern = attrs.get("pattern", "")
-    path    = attrs.get("path", ".")
-    flags   = attrs.get("flags", "-rn")
-
     if not pattern:
-        return False, "grep: pattern is required"
-
-    # Safety: only allow relative paths
-    abs_path = os.path.normpath(os.path.join(root, path))
-    if not abs_path.startswith(os.path.normpath(root)):
-        return False, "grep: path must be within project root"
-
-    # Build safe args — no shell injection
-    skip_dirs = ["__pycache__", ".git", "node_modules", ".venv", "venv"]
-    exclude_args = []
-    for d in skip_dirs:
-        exclude_args += [f"--exclude-dir={d}"]
-
-    args = ["grep"] + flags.split() + exclude_args + [pattern, abs_path]
-
+        return False, "No pattern specified"
+    flags = attrs.get("flags", "-rn -E")
+    path = attrs.get("path", ".")
+    full_path = os.path.join(root, path)
     try:
-        result = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            cwd=root,
-        )
-        output = result.stdout.strip()
-        if not output:
-            return True, "(no matches)"
-        # Trim long output
-        lines = output.splitlines()
-        if len(lines) > 50:
-            output = "\n".join(lines[:50]) + f"\n... ({len(lines)-50} more lines)"
-        # Make paths relative
-        output = output.replace(root + "/", "").replace(root + os.sep, "")
-        return True, output
-    except subprocess.TimeoutExpired:
-        return False, "grep: timed out"
-    except FileNotFoundError:
-        return False, "grep: not available"
-
+        # This supports extra args like --include/--exclude if needed in attrs
+        cmd = ["grep"] + flags.split() + [pattern, full_path]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        return result.returncode == 0, result.stdout if result.stdout else result.stderr
+    except Exception as e:
+        return False, str(e)
 
 def _tool_read_file(attrs: dict, root: str) -> tuple[bool, str]:
     path  = attrs.get("path", "")

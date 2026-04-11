@@ -67,46 +67,6 @@ from ui.git_panel import GitDockWidget
 MAX_FILE_SIZE = 6000  # characters
 
 
-def _query_wants_agent(text: str) -> bool:
-    """
-    Return True if the query likely needs active investigation —
-    searching files, finding symbols, or making project-wide changes.
-    """
-    text = text.lower()
-    triggers = [
-        # Investigation
-        'find all', 'where is', 'where are', 'what calls', 'what uses',
-        'search for', 'look for', 'grep', 'across the project',
-        'throughout', 'everywhere', 'all files', 'all usages',
-        # Refactoring
-        'rename', 'move', 'refactor', 'update all', 'replace all',
-        'add import', 'remove import',
-        # Multi-file
-        'in all', 'across all', 'every file', 'project-wide',
-    ]
-    return any(t in text for t in triggers)
-
-
-def _query_wants_agent(text: str) -> bool:
-    """
-    Return True if the query likely needs active investigation —
-    searching files, finding symbols, or making project-wide changes.
-    """
-    text = text.lower()
-    triggers = [
-        # Investigation
-        'find all', 'where is', 'where are', 'what calls', 'what uses',
-        'search for', 'look for', 'grep', 'across the project',
-        'throughout', 'everywhere', 'all files', 'all usages',
-        # Refactoring
-        'rename', 'move', 'refactor', 'update all', 'replace all',
-        'add import', 'remove import',
-        # Multi-file
-        'in all', 'across all', 'every file', 'project-wide',
-    ]
-    return any(t in text for t in triggers)
-
-
 def _query_wants_diff(text: str) -> bool:
     """
     Return True if the user query is likely about recent changes,
@@ -2020,32 +1980,13 @@ Instructions:
 
             thread = QThread()
 
-            if _query_wants_agent(user_text):
-                # Agent mode — tool-use loop
-                self.chat_worker = AgentWorker(
-                    user_text    = user_text,
-                    context      = prompt_with_context,
-                    project_root = (
-                        self.git_dock.repo_path
-                        if hasattr(self, 'git_dock') and self.git_dock.repo_path
-                        else os.getcwd()
-                    ),
-                    model        = self.settings_manager.get_chat_model(),
-                    api_url      = self.settings_manager.get_api_url(),
-                    api_key      = self.settings_manager.get_api_key(),
-                    backend      = self.settings_manager.get_backend(),
-                    repo_map     = getattr(self, 'repo_map', None),
-                )
-                self.chat_worker.tool_status.connect(self.append_agent_status)
-                self.chat_worker.write_ops.connect(self._on_agent_write_ops)
-                self.chat_worker.finished.connect(
-                    lambda: setattr(self, '_skip_stream_finished', True)
-                )
-            else:
-                # Normal chat mode
-                self.chat_worker = self.create_worker(
-                    prompt=prompt_with_context, is_chat=True
-                )
+            # Always start with normal chat.
+            # If model emits <needs_tools/>, chat_stream_finished
+            # will re-launch as AgentWorker automatically.
+            self._last_prompt_with_context = prompt_with_context
+            self.chat_worker = self.create_worker(
+                prompt=prompt_with_context, is_chat=True
+            )
 
             self.chat_worker.moveToThread(thread)
             self.chat_worker.chat_update.connect(self.append_chat_stream)
@@ -2500,6 +2441,48 @@ Instructions:
         self.symbol_dock.hide()
 
     # ── AI loading indicator ──────────────────────────────────────────────
+
+    def _relaunch_as_agent(self, user_text: str):
+        """Re-launch the last chat request as an AgentWorker."""
+        from PyQt6.QtCore import QThread
+        root = (
+            self.git_dock.repo_path
+            if hasattr(self, 'git_dock') and self.git_dock.repo_path
+            else os.getcwd()
+        )
+        context = getattr(self, '_last_prompt_with_context', user_text)
+        thread  = QThread()
+        worker  = AgentWorker(
+            user_text    = user_text,
+            context      = context,
+            project_root = root,
+            model        = self.settings_manager.get_chat_model(),
+            api_url      = self.settings_manager.get_api_url(),
+            api_key      = self.settings_manager.get_api_key(),
+            backend      = self.settings_manager.get_backend(),
+            repo_map     = getattr(self, 'repo_map', None),
+        )
+        self.chat_worker = worker
+        worker.moveToThread(thread)
+        worker.chat_update.connect(self.append_chat_stream)
+        worker.tool_status.connect(self.append_agent_status)
+        worker.write_ops.connect(self._on_agent_write_ops)
+        worker.finished.connect(
+            lambda: setattr(self, '_skip_stream_finished', True)
+        )
+        worker.finished.connect(self.chat_stream_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self.show_loading_indicator()
+        worker.finished.connect(self.hide_loading_indicator)
+        self.active_threads.append(thread)
+        thread.finished.connect(
+            lambda: self.active_threads.remove(thread)
+            if thread in self.active_threads else None
+        )
+        thread.started.connect(worker.run)
+        thread.start()
 
     def show_loading_indicator(self):
         pane  = self.split_container.active_pane()
