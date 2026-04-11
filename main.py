@@ -65,6 +65,24 @@ from ui.git_panel import GitDockWidget
 MAX_FILE_SIZE = 6000  # characters
 
 
+def _query_wants_diff(text: str) -> bool:
+    """
+    Return True if the user query is likely about recent changes,
+    bugs introduced by edits, or code review — i.e. git diff is useful.
+    """
+    text = text.lower()
+    triggers = [
+        'what did i change', 'what have i changed', 'my changes',
+        'recent changes', 'what changed', 'diff',
+        'why did i break', 'why is it broken', 'what broke',
+        'review my', 'review the change', 'look at my change',
+        'bug i introduced', 'regression', 'since my last',
+        'what i modified', 'what was modified', 'uncommitted',
+        'staged', 'unstaged', 'working tree',
+    ]
+    return any(t in text for t in triggers)
+
+
 # ==========================================
 # Custom File System Model
 # ==========================================
@@ -1939,7 +1957,20 @@ Instructions:
             faq_block    = (f"\n\n{faq_ctx}"    if faq_ctx    else "")
             gitlab_block = (f"\n\n{gitlab_ctx}"  if gitlab_ctx else "")
             symbol_block = (symbol_ctx + '\n\n'   if symbol_ctx else '')
-            prompt_with_context = f"{user_text}\n\n{symbol_block}{context}{faq_block}{gitlab_block}"
+
+            # Git diff context — inject when query is debug/change related
+            diff_block = ""
+            if (hasattr(self, 'git_dock') and self.git_dock
+                    and self.git_dock.repo_path
+                    and _query_wants_diff(user_text)):
+                diff = self.git_dock.get_current_diff(cap=3000)
+                if diff:
+                    diff_block = (
+                        f"\n\n[Recent Changes]\n"
+                        f"```diff\n{diff}\n```"
+                    )
+
+            prompt_with_context = f"{user_text}\n\n{symbol_block}{context}{faq_block}{gitlab_block}{diff_block}"
             # Debug: show what's in the prompt
 
             self._ai_response_buffer = ""

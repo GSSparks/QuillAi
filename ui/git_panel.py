@@ -468,6 +468,24 @@ class GitDockWidget(QDockWidget):
         except Exception as e:
             return False, str(e)
 
+    def get_current_diff(self, cap: int = 3000) -> str:
+        """
+        Return a compact diff of current working tree changes.
+        Used by the chat context engine — no UI state required.
+        Tries unstaged first, then staged, then HEAD.
+        """
+        for args in (
+            ['git', 'diff'],
+            ['git', 'diff', '--cached'],
+            ['git', 'diff', 'HEAD'],
+        ):
+            ok, diff = self.run_git_command(args)
+            if ok and diff.strip():
+                return diff[:cap] + (
+                    "\n...(truncated)..." if len(diff) > cap else ""
+                )
+        return ""
+
     def _get_diff_for_ai(self) -> str:
         CAP = 6000
         checked = []
