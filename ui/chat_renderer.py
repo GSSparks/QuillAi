@@ -416,6 +416,7 @@ class ChatRenderer:
         chat_input.setTextCursor(cursor)
 
     def load_project_chat(self):
+        from PyQt6.QtGui import QTextCursor
         self.chat_panel.chat_history.clear()
         self.current_ai_raw_text = ""
         self._stream_start_pos   = 0
