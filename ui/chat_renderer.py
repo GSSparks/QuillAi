@@ -9,9 +9,6 @@ from pygments.formatters import HtmlFormatter
 from pygments.util import ClassNotFound
 import ast
 from pathlib import Path
-from PyQt6.QtCore import QUrl
-from PyQt6.QtGui import QTextCursor
-from PyQt6.QtWidgets import QApplication
 
 from ui.theme import get_theme, build_chat_styles, FONT_CODE, FONT_UI
 
@@ -32,15 +29,6 @@ def _autodetect_changes(
     ext = os.path.splitext(file_path)[1].lower()
 
     _FUNCTION_EXTS = {'.py'}
-    _FULL_EXTS = {
-        '.yml', '.yaml', '.json', '.toml', '.xml', '.ini', '.cfg', '.conf',
-        '.sh', '.bash', '.zsh', '.fish',
-        '.pl', '.pm', '.t',
-        '.html', '.htm', '.css', '.js', '.ts',
-        '.rs', '.go', '.c', '.cpp', '.h', '.hpp', '.java',
-        '.tf', '.hcl', '.nix', '.md', '.rst', '.txt', '.sql',
-    }
-
     _PERL_EXTS = {'.pl', '.pm', '.t'}
     _FULL_EXTS = {
         '.yml', '.yaml', '.json', '.toml', '.xml',
@@ -72,7 +60,6 @@ def _autodetect_changes(
                     for node in tree.body
                 )
                 if has_sym:
-                    # Multiple top-level symbols → full file replace
                     top_syms = [n for n in tree.body
                                 if isinstance(n, (ast.FunctionDef,
                                     ast.AsyncFunctionDef, ast.ClassDef))]
@@ -158,43 +145,34 @@ class ChatRenderer:
     # ── User message ──────────────────────────────────────────────────────
 
     def _append_user_message(self, text: str):
+        from PyQt6.QtGui import QTextCursor
         s = _safe_styles(build_chat_styles(get_theme()))
         escaped = (text.replace("&", "&amp;")
                        .replace("<", "&lt;")
                        .replace(">", "&gt;")
                        .replace("\n", "<br>"))
 
-        # Vertical spacer before bubble
-        # User bubble: table-based right alignment — Qt ignores inline-block
-        # 25% empty left cell pushes content to the right
-        # Separate "You" label row, then clear spacer before QuillAI label
         html = (
-            # Top spacer
             f'<table width="100%" cellpadding="0" cellspacing="0">'
             f'<tr><td height="8"></td></tr></table>'
 
-            # Bubble row
             f'<table width="100%" cellpadding="0" cellspacing="4">'
             f'<tr>'
             f'<td width="20%"></td>'
             f'<td width="80%" style="{s["user_bubble_td"]}">{escaped}</td>'
             f'</tr></table>'
 
-            # "You" label
             f'<table width="100%" cellpadding="0" cellspacing="0">'
             f'<tr><td align="right" style="{s["user_label_td"]}">You</td></tr>'
             f'</table>'
 
-            # Spacer between "You" and "QuillAI"
             f'<table width="100%" cellpadding="0" cellspacing="0">'
             f'<tr><td height="10"></td></tr></table>'
 
-            # QuillAI label — on its own row, clearly separated
             f'<table width="100%" cellpadding="0" cellspacing="0">'
             f'<tr><td style="{s["ai_label_td"]}">QuillAI</td></tr>'
             f'</table>'
 
-            # Small spacer before response starts
             f'<table width="100%" cellpadding="0" cellspacing="0">'
             f'<tr><td height="4"></td></tr></table>'
         )
@@ -219,6 +197,7 @@ class ChatRenderer:
             self._flush_stream_buffer()
 
     def _flush_stream_buffer(self):
+        from PyQt6.QtGui import QTextCursor
         if not self.current_ai_raw_text.strip():
             return
         start_pos = getattr(self, "_stream_start_pos", 0)
@@ -245,6 +224,7 @@ class ChatRenderer:
         return self._render_ai_response(text)
 
     def chat_stream_finished(self):
+        from PyQt6.QtGui import QTextCursor
         full_response = self.current_ai_raw_text
         start_pos     = getattr(self, "_stream_start_pos", 0)
         if start_pos > 0:
@@ -255,13 +235,16 @@ class ChatRenderer:
             )
             cursor.removeSelectedText()
             self.chat_history.setTextCursor(cursor)
-        # Extract any file_change tags before rendering
+
         clean_response, file_changes = _extract_file_changes(full_response)
 
-        # Render full response so code blocks stay visible in chat
-        rendered = self._render_ai_response(clean_response if clean_response.strip() else full_response.replace('<file_change', '<!--').replace('</file_change>', '-->'))
+        rendered = self._render_ai_response(
+            clean_response if clean_response.strip()
+            else full_response
+                .replace('<file_change', '<!--')
+                .replace('</file_change>', '-->')
+        )
 
-        # Auto-detect applicable code blocks if no explicit tags
         if not file_changes:
             editor = self.current_editor()
             if editor and getattr(editor, 'file_path', None):
@@ -269,11 +252,9 @@ class ChatRenderer:
                     clean_response, editor.file_path
                 )
 
-        # Append apply buttons for each file change
         if file_changes:
             rendered += self._render_apply_buttons(file_changes)
 
-        # Save as FAQ button
         rendered += self._render_save_faq_button(
             self._last_user_message, clean_response
         )
@@ -315,10 +296,8 @@ class ChatRenderer:
         ])
         raw_html = md.convert(text)
 
-        # ── Fenced code blocks ────────────────────────────────────
         def replace_fenced(m):
             inner      = m.group(1)
-            # Unescape HTML entities that markdown introduced into the code content
             inner = (inner.replace("&amp;", "&")
                           .replace("&lt;", "<")
                           .replace("&gt;", ">")
@@ -349,15 +328,12 @@ class ChatRenderer:
             flags=re.DOTALL,
         )
 
-        # ── Inline code ───────────────────────────────────────────
         raw_html = re.sub(
             r"<code>([^<]+)</code>",
             lambda m: f'<code style="{s["inline_code"]}">{m.group(1)}</code>',
             raw_html,
         )
 
-        # ── Markdown tables ───────────────────────────────────────
-        # Qt renders <table> but needs explicit cell styling to look right
         raw_html = re.sub(
             r"<table>",
             f'<table width="100%" cellpadding="6" cellspacing="0" '
@@ -365,39 +341,24 @@ class ChatRenderer:
             raw_html,
         )
         raw_html = re.sub(r"<thead>", "<thead>", raw_html)
-        raw_html = re.sub(
-            r"<th>",
-            f'<th style="{s["md_th"]}">',
-            raw_html,
-        )
-        raw_html = re.sub(
-            r"<td>",
-            f'<td style="{s["md_td"]}">',
-            raw_html,
-        )
-        raw_html = re.sub(
-            r"<tr>",
-            f'<tr style="{s["md_tr"]}">',
-            raw_html,
-        )
+        raw_html = re.sub(r"<th>",    f'<th style="{s["md_th"]}">',  raw_html)
+        raw_html = re.sub(r"<td>",    f'<td style="{s["md_td"]}">',  raw_html)
+        raw_html = re.sub(r"<tr>",    f'<tr style="{s["md_tr"]}">',  raw_html)
 
-        # ── Prose elements ────────────────────────────────────────
-        raw_html = re.sub(r"<p>",       f'<p style="{s["prose_p"]}">',    raw_html)
-        raw_html = re.sub(r"<ul>",      f'<ul style="{s["ul"]}">',        raw_html)
-        raw_html = re.sub(r"<ol>",      f'<ol style="{s["ol"]}">',        raw_html)
-        raw_html = re.sub(r"<li>",      f'<li style="{s["prose_li"]}">',  raw_html)
-        raw_html = re.sub(r"<h1>",      f'<p style="{s["heading_1"]}">',  raw_html)
-        raw_html = re.sub(r"</h1>",     "</p>",                            raw_html)
-        raw_html = re.sub(r"<h2>",      f'<p style="{s["heading_2"]}">',  raw_html)
-        raw_html = re.sub(r"</h2>",     "</p>",                            raw_html)
-        raw_html = re.sub(r"<h3>",      f'<p style="{s["heading_3"]}">',  raw_html)
-        raw_html = re.sub(r"</h3>",     "</p>",                            raw_html)
-        raw_html = re.sub(r"<hr\s*/?>", f'<hr style="{s["hr"]}"/>',       raw_html)
+        raw_html = re.sub(r"<p>",    f'<p style="{s["prose_p"]}">',   raw_html)
+        raw_html = re.sub(r"<ul>",   f'<ul style="{s["ul"]}">',       raw_html)
+        raw_html = re.sub(r"<ol>",   f'<ol style="{s["ol"]}">',       raw_html)
+        raw_html = re.sub(r"<li>",   f'<li style="{s["prose_li"]}">',raw_html)
+        raw_html = re.sub(r"<h1>",   f'<p style="{s["heading_1"]}">',raw_html)
+        raw_html = re.sub(r"</h1>",  "</p>",                          raw_html)
+        raw_html = re.sub(r"<h2>",   f'<p style="{s["heading_2"]}">',raw_html)
+        raw_html = re.sub(r"</h2>",  "</p>",                          raw_html)
+        raw_html = re.sub(r"<h3>",   f'<p style="{s["heading_3"]}">',raw_html)
+        raw_html = re.sub(r"</h3>",  "</p>",                          raw_html)
+        raw_html = re.sub(r"<hr\s*/?>", f'<hr style="{s["hr"]}"/>',  raw_html)
         raw_html = re.sub(r"<strong>",  f'<strong style="{s["strong"]}">',raw_html)
         raw_html = re.sub(r"<em>",      f'<em style="{s["em"]}">',        raw_html)
 
-        # Wrap response — table so it doesn't inline with surrounding content
-        # No <p> wrapper — Qt inlines <p> content, collapsing spacing
         return (
             f'<table width="100%" cellpadding="0" cellspacing="0" '
             f'style="margin:0 0 16px 0;">'
@@ -420,12 +381,12 @@ class ChatRenderer:
         except Exception:
             formatter = HtmlFormatter(nowrap=True, noclasses=True, style="monokai")
         result = highlight(code, lexer, formatter)
-        # Qt's rich text renderer displays &quot; literally — unescape it
         return result.replace("&quot;", '"')
 
     # ── Memory & conversation ─────────────────────────────────────────────
 
     def _restore_conversation(self, user_message: str, ai_response: str):
+        from PyQt6.QtGui import QTextCursor
         self.chat_panel.expand()
         self.chat_panel.switch_to_chat()
         self.chat_history.clear()
@@ -440,6 +401,7 @@ class ChatRenderer:
         )
 
     def load_snippet_to_chat(self, text: str):
+        from PyQt6.QtGui import QTextCursor
         self.chat_panel.expand()
         self.chat_panel.switch_to_chat()
         chat_input    = self.chat_panel.chat_input
@@ -463,7 +425,6 @@ class ChatRenderer:
             self.chat_panel.chat_history.moveCursor(QTextCursor.MoveOperation.End)
 
     def _render_save_faq_button(self, question: str, answer: str) -> str:
-        """Render a subtle Save as FAQ link below AI responses."""
         if not question or not answer:
             return ''
         t = get_theme()
@@ -482,7 +443,6 @@ class ChatRenderer:
         )
 
     def _render_apply_buttons(self, changes: list) -> str:
-        """Render apply/undo button row for each file_change."""
         s = _safe_styles(build_chat_styles(get_theme()))
         t = get_theme()
         rows = []
@@ -493,7 +453,6 @@ class ChatRenderer:
             fname = file_path.split("/")[-1]
             apply_url = f"apply:{encoded}"
             undo_url  = f"undo:{base64.b64encode(file_path.encode()).decode()}"
-            # Build summary line from code
             summary = _summarise_change(code, mode)
             rows.append(
                 f'<table width="100%" cellpadding="0" cellspacing="0" '
@@ -519,7 +478,8 @@ class ChatRenderer:
             )
         return "".join(rows)
 
-    def handle_chat_link(self, url: QUrl):
+    def handle_chat_link(self, url):
+        from PyQt6.QtWidgets import QApplication
         url_str = url.toString()
         if url_str.startswith("insert:"):
             decoded = base64.b64decode(url_str.replace("insert:", "")).decode("utf-8")
@@ -539,7 +499,6 @@ class ChatRenderer:
             self._handle_save_faq_link(url_str[8:])
 
     def _reload_file_in_editors(self, abs_path: str):
-        """Reload any editor pane showing abs_path from disk."""
         try:
             with open(abs_path, 'r', encoding='utf-8') as f:
                 new_content = f.read()
@@ -583,7 +542,6 @@ class ChatRenderer:
             self.statusBar().showMessage(f"Could not parse apply link: {e}", 4000)
             return
 
-        # Resolve path relative to project root
         root = (self.git_dock.repo_path
                 if hasattr(self, "git_dock") and self.git_dock.repo_path
                 else None)
