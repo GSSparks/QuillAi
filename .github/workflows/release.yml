@@ -27,8 +27,8 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             xvfb \
-            libegl1-mesa \
-            libgl1-mesa-glx \
+            libegl1 \
+            libgl1 \
             libglib2.0-0 \
             libxkbcommon-x11-0 \
             libdbus-1-3 \
