@@ -25,10 +25,15 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install pyyaml requests markdown pygments
+          pip install pyyaml requests markdown pygments PyQt6
+
+      - name: Install virtual display
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends xvfb
 
       - name: Run test suite
-        run: python3 tests/test_suite.py
+        run: xvfb-run -a python3 tests/test_suite.py
 
   build:
     runs-on: ubuntu-latest
