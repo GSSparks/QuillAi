@@ -79,7 +79,6 @@ class MarkdownPreviewDock(QDockWidget):
 
     def _on_range_ready(self, min_val: int, max_val: int):
         """Called when QTextBrowser finishes layout and scrollbar max is known."""
-        print(f"[range_ready] min={min_val} max={max_val} pending={self._pending_scroll_ratio}")
         if max_val <= 0:
             return
         scrollbar = self.browser.verticalScrollBar()
@@ -127,7 +126,6 @@ class MarkdownPreviewDock(QDockWidget):
 </body>
 </html>"""
 
-        print(f"[do_render] after setHtml, max={self.browser.verticalScrollBar().maximum()}")        
         # Capture scroll state before replacing content
         scrollbar     = self.browser.verticalScrollBar()
         old_max       = scrollbar.maximum()

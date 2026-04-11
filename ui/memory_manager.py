@@ -551,7 +551,6 @@ class MemoryManager:
                         set(old_files + (source_files or []))
                     )
                     target["facts"][idx] = new_fact
-                    print(f"[Memory] replaced fact [{idx}]: {fact[:60]}")
                 else:
                     target["facts"].append(new_fact)
             except (ValueError, IndexError):
@@ -562,7 +561,6 @@ class MemoryManager:
                 idx = int(decision.split(":")[1])
                 if 0 <= idx < len(target["facts"]):
                     target["facts"][idx]["confidence"] = CONFIDENCE_STALE
-                    print(f"[Memory] lowered confidence on fact [{idx}] (contradiction)")
             except (ValueError, IndexError):
                 pass
             target["facts"].append(new_fact)
@@ -570,7 +568,6 @@ class MemoryManager:
         else:
             # keep_new
             target["facts"].append(new_fact)
-            print(f"[Memory] new fact: {fact[:60]}")
 
         if len(target["facts"]) > MAX_FACTS:
             # Prune lowest-confidence facts first
@@ -688,7 +685,6 @@ class MemoryManager:
 
                 if verdict == "stale":
                     fact["confidence"] = max(0.0, fact.get("confidence", 1.0) - 0.5)
-                    print(f"[Memory] stale fact [{fact_idx}]: {_fact_text(fact)[:60]}")
                     changed = True
                 elif verdict == "uncertain":
                     fact["confidence"] = CONFIDENCE_STALE

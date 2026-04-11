@@ -144,7 +144,6 @@ class GitLabPanel(QDockWidget):
         layout.addLayout(action_bar)
 
         self.setWidget(container)
-        print('[GitLab] _build_ui done')
 
     # ── Data fetching ─────────────────────────────────────────────────────
 

@@ -129,7 +129,6 @@ class WikiIndexer:
 
     def _run(self) -> None:
         """Main loop — runs on the background thread."""
-        print("[WikiIndexer] started")
 
         while not self._stop_event.is_set():
             src = self._next_file()
@@ -146,7 +145,6 @@ class WikiIndexer:
                 was_updated = self._wm.update_file(src)
                 success = was_updated
                 if was_updated:
-                    print(f"[WikiIndexer] ✓ {rel}")
                     # Review facts tagged to this file against the new wiki page
                     if self._mm:
                         try:

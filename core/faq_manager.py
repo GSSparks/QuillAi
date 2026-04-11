@@ -180,7 +180,6 @@ class FAQManager:
         try:
             return self.llm_fn(prompt).strip()
         except Exception as e:
-            print(f"[FAQManager] LLM call failed: {e}")
             return ""
 
     def _parse_json(self, text: str):
@@ -231,7 +230,6 @@ class FAQManager:
         if deduplicate:
             action, idx = self._deduplicate(question, answer)
             if action == "duplicate":
-                print(f"[FAQ] duplicate skipped: {question[:50]}")
                 return False
             if action == "update" and idx >= 0 and idx < len(self._entries):
                 self._entries[idx].update({
@@ -243,7 +241,6 @@ class FAQManager:
                 })
                 self._save()
                 faq_signals.faq_changed.emit()
-                print(f"[FAQ] updated entry [{idx}]: {question[:50]}")
                 return True
 
         entry = {
@@ -266,7 +263,6 @@ class FAQManager:
 
         self._save()
         faq_signals.faq_changed.emit()
-        print(f"[FAQ] new entry: {question[:50]}")
         return True
 
     def remove_entry(self, entry_id: str):
