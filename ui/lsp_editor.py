@@ -12,12 +12,13 @@ is handling the current file.
 """
 
 import re as _re
-from PyQt6.QtCore    import Qt, QTimer, QPoint
+from PyQt6.QtCore    import Qt, QTimer, QPoint, QMetaObject, Q_ARG
 from PyQt6.QtGui     import QTextCharFormat, QColor, QFont, QPalette, QTextCursor, QMouseEvent
 from PyQt6.QtWidgets import QTextEdit, QToolTip, QFrame, QVBoxLayout, QLabel, QScrollArea
 
 from ai.lsp_client import uri_to_path
 from ui.completion_popup import CompletionPopup
+from ai.completion_provider import AICompletionProvider
 
 
 _SEVERITY_COLOR = {
@@ -735,77 +736,98 @@ class LspEditorMixin:
         cursor = self.textCursor()
         return cursor.blockNumber(), cursor.positionInBlock()
 
-    # ── Completion ────────────────────────────────────────────────────────
- 
-    # Trigger characters that auto-show completion for most languages
+    # Trigger characters that auto-show LSP completion for most languages
     _TRIGGER_CHARS = set('.(:,@>')
+ 
+    # ── Setup ─────────────────────────────────────────────────────────────
  
     def _setup_completion(self):
         """Call from setup_lsp() after existing timer setup."""
         self._completion_timer = QTimer(self)
         self._completion_timer.setSingleShot(True)
-        self._completion_timer.setInterval(400)   # 400ms auto-trigger delay
-        self._completion_timer.timeout.connect(self._request_completion)
-        self._last_trigger_char = None
-        # Dismiss popup when editor scrolls
+        self._completion_timer.setInterval(400)
+        self._completion_timer.timeout.connect(self._request_lsp_completion)
+ 
+        self._last_trigger_char   = None
+        self._pending_lsp_items   = []   # LSP results waiting for AI to arrive
+        self._ai_provider         = AICompletionProvider(
+            self.window().settings_manager if hasattr(self.window(), 'settings_manager')
+            else _get_settings_fallback()
+        )
+ 
+        # Dismiss popup on scroll
         self.verticalScrollBar().valueChanged.connect(
             lambda: CompletionPopup.close_current()
         )
  
+    def _setup_ai_provider(self):
+        """Lazy init / re-init after window is fully constructed."""
+        win = self.window()
+        if hasattr(win, 'settings_manager'):
+            self._ai_provider = AICompletionProvider(win.settings_manager)
+ 
+    # ── Text-changed handler ──────────────────────────────────────────────
+ 
     def _on_text_changed_for_completion(self):
         if getattr(self, '_accepting_completion', False):
             return
-        if not self._lsp_active():
-            return
-    
+ 
         cursor = self.textCursor()
         col    = cursor.positionInBlock()
         text   = cursor.block().text()
-    
+ 
         if col == 0:
             CompletionPopup.close_current()
             return
-    
+ 
         char = text[col - 1] if col > 0 else ""
-    
-        # Auto-trigger on trigger characters
+ 
+        # Auto-trigger on trigger characters (LSP only, fast)
         if char in self._TRIGGER_CHARS:
             self._last_trigger_char = char
             self._completion_timer.start(50)
             return
-    
-        # Auto-trigger if we're in the middle of a word (3+ chars)
+ 
+        # Auto-trigger mid-word at 3+ chars
         start = col
         while start > 0 and (text[start - 1].isalnum() or text[start - 1] == '_'):
             start -= 1
         word = text[start:col]
-    
+ 
         if len(word) >= 3:
             self._last_trigger_char = None
             self._completion_timer.start(400)
         else:
-            # Word too short — close popup if open
-            self._completion_timer.stop()
+            if hasattr(self, '_completion_timer'):
+                self._completion_timer.stop()
             if len(word) == 0:
                 CompletionPopup.close_current()
  
+    # ── Manual Ctrl+Space trigger ─────────────────────────────────────────
+ 
     def request_completion_now(self):
-        """Manual trigger — Ctrl+Space."""
-        if not self._lsp_active():
-            return
+        """
+        Manual trigger — Ctrl+Space.
+        Fires both LSP completion (if available) AND AI completion in parallel.
+        For non-LSP files, fires AI-only.
+        """
+        print(f"[completion] Ctrl+Space fired, lsp_active={self._lsp_active()}")
         self._last_trigger_char = None
-        self._completion_timer.stop()
-        self._request_completion(trigger_kind=1)
+        if hasattr(self, '_completion_timer'):
+            self._completion_timer.stop()
  
-    def _request_completion(self, trigger_kind=None):
+        if self._lsp_active():
+            # Parallel: LSP fast path + AI
+            self._request_lsp_completion(trigger_kind=1)
+        # Always fire AI (supplements LSP or works standalone)
+        self._request_ai_completion()
+ 
+    # ── LSP completion ────────────────────────────────────────────────────
+ 
+    def _request_lsp_completion(self, trigger_kind=None):
         if not self._lsp_active():
             return
-        from ui.completion_popup import CompletionPopup
-        # Don't re-request if popup is already showing with content
-        # (let existing popup stand; it'll re-request on next keystroke)
  
-        line, col = self._lsp_pos_from_viewport(self._last_hover_pos)
-        # Use actual cursor position, not hover position
         cursor = self.textCursor()
         line   = cursor.blockNumber()
         col    = cursor.positionInBlock()
@@ -817,70 +839,184 @@ class LspEditorMixin:
             self.file_path, line, col,
             trigger_kind=kind,
             trigger_char=char,
-            callback=self._on_completion_result,
+            callback=self._on_lsp_completion_result,
         )
  
-    def _on_completion_result(self, items: list):
+    def _on_lsp_completion_result(self, items: list):
         if not items:
-            CompletionPopup.close_current()
+            # No LSP results — popup will be driven by AI alone if pending
             return
  
-        # Filter out items with no label
         items = [i for i in items if i.get("label", "").strip()]
         if not items:
-            CompletionPopup.close_current()
             return
  
-        # Prefix-filter against current word
-        cursor      = self.textCursor()
-        block_text  = cursor.block().text()
-        col         = cursor.positionInBlock()
-        # Walk left to find start of current word
-        start = col
-        while start > 0 and (block_text[start - 1].isalnum()
-                              or block_text[start - 1] in '_'):
-            start -= 1
-        prefix = block_text[start:col].lower()
- 
-        if prefix:
-            filtered = [i for i in items
-                        if i.get("label", "").lower().startswith(prefix)]
-            if not filtered:
-                # Fuzzy fallback — any item containing prefix
-                filtered = [i for i in items
-                            if prefix in i.get("label", "").lower()]
-            items = filtered if filtered else items
- 
+        # Prefix-filter
+        items = self._prefix_filter(items)
         if not items:
-            CompletionPopup.close_current()
             return
  
-        # Close existing and show new
+        self._pending_lsp_items = items
+ 
+        # Show LSP items immediately; AI items will be merged in when ready
         CompletionPopup.close_current()
         popup = CompletionPopup(self, items)
         popup.item_accepted.connect(self._on_completion_accepted)
         popup.position_at_cursor()
         popup.show()
         popup.raise_()
-        
-        # Silence re-trigger for 500ms after accepting
-        self._completion_timer.stop()
-        self._last_trigger_char = None
+ 
         self._accepting_completion = True
+        if hasattr(self, '_completion_timer'):
+            self._completion_timer.stop()
+        self._last_trigger_char = None
         QTimer.singleShot(500, self._clear_accepting_flag)
-    
+ 
+    # ── AI completion ─────────────────────────────────────────────────────
+ 
+    def _request_ai_completion(self):
+        """Fire async AI completion request."""
+        print(f"[completion] _request_ai_completion called, provider={hasattr(self, '_ai_provider')}")
+        if not hasattr(self, '_ai_provider'):
+            return
+ 
+        # Lazy settings hookup
+        if not hasattr(self._ai_provider, '_settings') or \
+                self._ai_provider._settings is None:
+            self._setup_ai_provider()
+ 
+        cursor     = self.textCursor()
+        block      = cursor.block()
+        col        = cursor.positionInBlock()
+        block_text = block.text()
+ 
+        # Current word prefix
+        start = col
+        while start > 0 and (block_text[start-1].isalnum() or block_text[start-1] == '_'):
+            start -= 1
+        word = block_text[start:col]
+ 
+        # ~40 lines of context before and ~10 after
+        doc        = self.document()
+        line_no    = cursor.blockNumber()
+        pre_start  = max(0, line_no - 40)
+        post_end   = min(doc.blockCount() - 1, line_no + 10)
+ 
+        pre_lines  = []
+        for i in range(pre_start, line_no + 1):
+            b = doc.findBlockByLineNumber(i)
+            if b.isValid():
+                pre_lines.append(b.text())
+        prefix = "\n".join(pre_lines)
+ 
+        post_lines = []
+        for i in range(line_no + 1, post_end + 1):
+            b = doc.findBlockByLineNumber(i)
+            if b.isValid():
+                post_lines.append(b.text())
+        suffix = "\n".join(post_lines)
+ 
+        # LSP labels to pass as exclusion hints
+        lsp_labels = [i.get("label", "") for i in self._pending_lsp_items]
+ 
+        # Repo map slice if available
+        repo_map = ""
+        win = self.window()
+        if hasattr(win, 'repo_map') and win.repo_map:
+            try:
+                repo_map = win.repo_map.get_map_text(query=word or prefix[-200:])
+            except Exception:
+                pass
+ 
+        file_path = getattr(self, 'file_path', '') or ''
+ 
+        self._ai_provider.cancel()
+        self._ai_provider.request(
+            file_path   = file_path,
+            prefix      = prefix,
+            suffix      = suffix,
+            word        = word,
+            lsp_labels  = lsp_labels,
+            repo_map    = repo_map,
+            callback    = self._on_ai_completion_result_thread,
+        )
+ 
+    def _on_ai_completion_result_thread(self, items: list):
+        """
+        Called from background thread — marshal to main thread via
+        QTimer.singleShot(0), which is safe from any thread.
+        """
+        print(f"[completion] AI thread callback, {len(items)} items")
+        self._pending_ai_items = items
+        QTimer.singleShot(0, self._on_ai_completion_result)
+ 
+    def _on_ai_completion_result(self):
+        """Main-thread handler — merges AI items into open popup or creates one."""
+        print(f"[completion] main thread handler, items={len(getattr(self, '_pending_ai_items', []))}")
+        items = getattr(self, '_pending_ai_items', [])
+        if not items:
+            return
+ 
+        lsp_items = self._pending_lsp_items or []
+        all_items = lsp_items + items
+ 
+        popup = CompletionPopup._instance
+        if popup is not None:
+            # Popup already open (showing LSP results) — merge AI items in
+            popup.update_items(all_items)
+            popup.position_at_cursor()
+        else:
+            # No popup yet (non-LSP file, or LSP returned nothing)
+            if not all_items:
+                return
+            CompletionPopup.close_current()
+            popup = CompletionPopup(self, all_items)
+            popup.item_accepted.connect(self._on_completion_accepted)
+            popup.position_at_cursor()
+            popup.show()
+            popup.raise_()
+ 
+            self._accepting_completion = True
+            if hasattr(self, '_completion_timer'):
+                self._completion_timer.stop()
+            QTimer.singleShot(500, self._clear_accepting_flag)
+ 
+        self._pending_ai_items  = []
+ 
+    # ── Shared helpers ────────────────────────────────────────────────────
+ 
+    def _prefix_filter(self, items: list) -> list:
+        """Filter items to those matching the current word prefix."""
+        cursor     = self.textCursor()
+        block_text = cursor.block().text()
+        col        = cursor.positionInBlock()
+        start      = col
+        while start > 0 and (block_text[start - 1].isalnum()
+                              or block_text[start - 1] in '_'):
+            start -= 1
+        prefix = block_text[start:col].lower()
+ 
+        if not prefix:
+            return items
+ 
+        filtered = [i for i in items
+                    if i.get("label", "").lower().startswith(prefix)]
+        if not filtered:
+            filtered = [i for i in items
+                        if prefix in i.get("label", "").lower()]
+        return filtered if filtered else items
+ 
     def _clear_accepting_flag(self):
         self._accepting_completion = False
+ 
+    # ── Acceptance ────────────────────────────────────────────────────────
  
     def _on_completion_accepted(self, item: dict):
         """Insert the selected completion item into the editor."""
         cursor = self.textCursor()
  
-        # Determine insert text
-        insert_text = (item.get("insertText")
-                       or item.get("label", ""))
+        insert_text = (item.get("insertText") or item.get("label", ""))
  
-        # If LSP provides a textEdit, use that range
         text_edit = item.get("textEdit")
         if text_edit:
             rng   = text_edit.get("range", {})
@@ -896,7 +1032,7 @@ class LspEditorMixin:
                 cursor.setPosition(e_pos, cursor.MoveMode.KeepAnchor)
                 insert_text = text_edit.get("newText", insert_text)
         else:
-            # No textEdit — replace current word prefix
+            # Replace current word prefix
             block_text = cursor.block().text()
             col        = cursor.positionInBlock()
             start_col  = col
@@ -904,29 +1040,30 @@ class LspEditorMixin:
                                      or block_text[start_col - 1] in '_'):
                 start_col -= 1
             if start_col < col:
-                cursor.setPosition(
-                    cursor.block().position() + start_col
-                )
+                cursor.setPosition(cursor.block().position() + start_col)
                 cursor.setPosition(
                     cursor.block().position() + col,
                     cursor.MoveMode.KeepAnchor,
                 )
  
-        # Strip snippet placeholders ($0, $1, ${1:placeholder})
         insert_text = _strip_snippet_markers(insert_text)
- 
         cursor.insertText(insert_text)
         self.setTextCursor(cursor)
         self.clear_ghost_text()
-        
-        # Silence re-trigger for 600ms after accepting
+ 
         self._accepting_completion = True
-        self._completion_timer.stop()
+        if hasattr(self, '_completion_timer'):
+            self._completion_timer.stop()
+        self._pending_lsp_items = []
         QTimer.singleShot(600, self._clear_accepting_flag)
-    
-    def _clear_accepting_flag(self):
-        self._accepting_completion = False
-    
-    def _on_text_changed_for_completion(self):
-        if getattr(self, '_accepting_completion', False):
-            return
+ 
+ 
+# ── Fallback settings loader (used if self.window() has no .settings) ─────────
+ 
+def _get_settings_fallback():
+    """Import and instantiate SettingsManager as a last resort."""
+    try:
+        from ui.settings_manager import SettingsManager
+        return SettingsManager()
+    except Exception:
+        return None

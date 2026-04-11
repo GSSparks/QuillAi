@@ -15,6 +15,8 @@ except ImportError:
     HAS_YAML = False
 
 from ai.worker import AIWorker
+from ai.completion_provider import AICompletionProvider
+
 from editor.multi_cursor import MultiCursorManager
 from ui.theme import (
     get_theme, theme_signals,
@@ -270,6 +272,9 @@ class GhostEditor(LspEditorMixin, QPlainTextEdit):
         
         self._ai_completion_for_popup = False
         self._ai_popup_buffer = ""
+
+        self._pending_lsp_items = []
+        self._pending_ai_items  = []
         
     # ── Theme handling ────────────────────────────────────────────────────
 
@@ -1143,33 +1148,17 @@ Answer concisely. If you include code, use a single fenced code block."""
         self.ai_suggest_timer.start(300)
 
     def request_completion_hotkey(self):
-        if self._is_markdown_file():
+        if not (hasattr(self, '_lsp_manager') and self._lsp_active()):
+            self.clear_ghost_text()
+            CompletionPopup.close_current()
+            # Lazy init provider here where self.window() is valid
+            if not hasattr(self, '_ai_provider') or self._ai_provider._settings is None:
+                self._ai_provider = AICompletionProvider(self.settings_manager)
+            self._request_ai_completion()
             return
     
-        if hasattr(self, '_lsp_manager') and self._lsp_active():
-            self.request_completion_now()
-            return
+        self.request_completion_now()
     
-        self.clear_ghost_text()
-        CompletionPopup.close_current()
-        self._ai_popup_buffer = ""
-        self._ai_completion_for_popup = True
-        self.ai_suggest_timer.stop()
-    
-        # Cancel any running thread and reset it before starting new one
-        try:
-            if hasattr(self, 'ai_thread') and self.ai_thread is not None:
-                if self.ai_thread.isRunning():
-                    if hasattr(self, 'worker') and self.worker:
-                        self.worker.cancel()
-                    self.ai_thread.quit()
-                    self.ai_thread.wait(500)
-        except RuntimeError:
-            pass
-        self.ai_thread = None   # ← force reset so _create_ai_worker doesn't bail
-    
-        self.trigger_inline_completion()
-
     def trigger_inline_completion(self):
         if self._is_markdown_file():
             return
