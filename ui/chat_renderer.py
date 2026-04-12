@@ -18,12 +18,6 @@ _RE_FILE_CHANGE = re.compile(
     re.DOTALL,
 )
 
-# Matches <shell_op description="...">command</shell_op>
-_RE_SHELL_OP = re.compile(
-    r'<shell_op\s+description="([^"]*?)">(.*?)</shell_op>',
-    re.DOTALL,
-)
-
 def _autodetect_changes(
     text: str, file_path: str
 ) -> list[tuple[str, str, str]]:
@@ -114,24 +108,6 @@ def _extract_file_changes(text: str) -> tuple[str, list[tuple[str, str, str]]]:
 
     cleaned = _RE_FILE_CHANGE.sub(_collect, text)
     return cleaned, changes
-
-
-def _extract_shell_ops(text: str) -> tuple[str, list[tuple[str, str]]]:
-    """
-    Strip <shell_op> tags from *text*, replace with a code block,
-    and return:
-      (cleaned_text, [(description, command), ...])
-    """
-    ops = []
-
-    def _collect(m):
-        description = m.group(1).strip()
-        command     = m.group(2).strip()
-        ops.append((description, command))
-        return f"\n**`{description}`**\n```bash\n{command}\n```\n"
-
-    cleaned = _RE_SHELL_OP.sub(_collect, text)
-    return cleaned, ops
 
 
 # ── Agent status panel ───────────────────────────────────────────────────────
@@ -526,8 +502,6 @@ class ChatRenderer:
             cursor.removeSelectedText()
             self.chat_history.setTextCursor(cursor)
 
-        # Extract shell ops first, then file changes
-        full_response, shell_ops = _extract_shell_ops(full_response)
         clean_response, file_changes = _extract_file_changes(full_response)
 
         rendered = self._render_ai_response(
@@ -546,9 +520,6 @@ class ChatRenderer:
 
         if file_changes:
             rendered += self._render_apply_buttons(file_changes)
-
-        if shell_ops:
-            rendered += self._render_shell_op_buttons(shell_ops)
 
         rendered += self._render_save_faq_button(
             self._last_user_message, clean_response
@@ -738,37 +709,6 @@ class ChatRenderer:
             f'</td></tr></table>'
         )
 
-    def _render_shell_op_buttons(self, ops: list) -> str:
-        """Render run buttons for shell_op commands."""
-        t = get_theme()
-        rows = []
-        for description, command in ops:
-            encoded = base64.b64encode(
-                f"{description}|||{command}".encode("utf-8")
-            ).decode()
-            rows.append(
-                f'<table width="100%" cellpadding="0" cellspacing="0" '
-                f'style="margin:8px 0 4px 0;">'
-                f'<tr><td style="padding:8px 10px;'
-                f'background:{t.get("bg1","#3c3836")};'
-                f'border-left:3px solid {t.get("aqua","#8ec07c")};'
-                f'border-radius:2px;">'
-                f'<div style="color:{t.get("fg1","#ebdbb2")};'
-                f'font-size:9pt;margin-bottom:4px;">'
-                f'⚡ <strong>{description}</strong></div>'
-                f'<code style="color:{t.get("aqua","#8ec07c")};'
-                f'font-size:8.5pt;background:{t.get("bg0","#282828")};'
-                f'padding:2px 6px;border-radius:3px;">'
-                f'{command[:120]}{"..." if len(command) > 120 else ""}</code>'
-                f'&nbsp;&nbsp;'
-                f'<a href="shellop:{encoded}" '
-                f'style="color:{t.get("green","#98971a")};'
-                f'font-size:9pt;font-weight:bold;text-decoration:none;">'
-                f'▶ Run</a>'
-                f'</td></tr></table>'
-            )
-        return "".join(rows)
-
     def _render_apply_buttons(self, changes: list) -> str:
         s = _safe_styles(build_chat_styles(get_theme()))
         t = get_theme()
@@ -841,8 +781,6 @@ class ChatRenderer:
             decoded = base64.b64decode(url_str.replace("copy:", "")).decode("utf-8")
             QApplication.clipboard().setText(decoded)
             self.statusBar().showMessage("Code copied to clipboard.", 2000)
-        elif url_str.startswith("shellop:"):
-            self._handle_shell_op_link(url_str[8:])
         elif url_str.startswith("apply_all:"):
             self._handle_apply_all_link(url_str[10:])
         elif url_str.startswith("apply:"):
@@ -883,79 +821,6 @@ class ChatRenderer:
             self.statusBar().showMessage(msg, 3000)
         else:
             self.statusBar().showMessage('FAQ manager not available', 3000)
-
-    def _handle_shell_op_link(self, encoded: str):
-        """Confirm and execute a shell command in the project root."""
-        import base64 as _b64, subprocess as _sp
-        from PyQt6.QtWidgets import QMessageBox
-        try:
-            padded = encoded + "=" * (4 - len(encoded) % 4)
-            try:
-                payload = base64.b64decode(padded).decode("utf-8")
-            except Exception:
-                payload = base64.urlsafe_b64decode(padded).decode("utf-8")
-            sep         = payload.index("|||")
-            description = payload[:sep].strip()
-            command     = payload[sep+3:].strip()
-        except Exception as e:
-            self.statusBar().showMessage(f"Could not parse command: {e}", 4000)
-            return
-
-        root = (
-            self.git_dock.repo_path
-            if hasattr(self, "git_dock") and self.git_dock.repo_path
-            else None
-        )
-
-        reply = QMessageBox.question(
-            self,
-            "Run Shell Command",
-            f"Run this command in the project root?\n\n"
-            f"{command}\n\n"
-            f"Working directory: {root or 'current directory'}",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-
-        try:
-            result = _sp.run(
-                command,
-                shell=True,
-                cwd=root or None,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            if result.returncode == 0:
-                msg = f"✓ {description}"
-                if result.stdout.strip():
-                    msg += f": {result.stdout.strip()[:100]}"
-                self.statusBar().showMessage(msg, 5000)
-                # Reload any affected open editors
-                if root:
-                    for pane in self.split_container.all_panes():
-                        for i in range(pane.count()):
-                            editor = pane.widget(i)
-                            fp = getattr(editor, 'file_path', None)
-                            if fp and fp.startswith(root):
-                                try:
-                                    new = open(fp, encoding='utf-8').read()
-                                    if new != editor.toPlainText():
-                                        self._reload_editor(editor, new, fp)
-                                except Exception:
-                                    pass
-            else:
-                err = result.stderr.strip()[:200] or "Unknown error"
-                QMessageBox.warning(
-                    self, "Command Failed",
-                    f"{description} failed:\n\n{err}"
-                )
-        except _sp.TimeoutExpired:
-            self.statusBar().showMessage("Command timed out.", 5000)
-        except Exception as e:
-            self.statusBar().showMessage(f"Command error: {e}", 5000)
 
     def _handle_apply_all_link(self, encoded: str):
         """Open MultiFileDiffDialog for reviewing all changes at once."""

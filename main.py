@@ -5,7 +5,7 @@ import ast
 import re
 import base64
 import threading
-from pathlib import Path                                            # ← WIKI
+from pathlib import Path
 
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QProgressBar, QLabel,

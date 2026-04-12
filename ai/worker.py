@@ -114,16 +114,8 @@ class AIWorker(QObject):
                 "When renaming a symbol or refactoring, you MUST write the complete, "
                 "full implementation of every function — never use pass, ..., or stubs. "
                 "The output must be production-ready code, not a skeleton. "          
-                "IMPORTANT: For purely mechanical text operations (renaming a symbol, "
-                "adding/removing an import, changing a constant value, find-and-replace "
-                "across files), you MUST use a shell_op tag instead of file_change: "
-                "<shell_op description=\"Rename foo to bar in ui/menu.py\">"
-                "sed -i 's/foo/bar/g' ui/menu.py"
-                "</shell_op> "
-                "Use shell_op when a sed/awk/grep command can do the job reliably. "
-                "Use file_change when logic or structure needs to change — and when using "
-                "file_change, always write the complete full implementation, never stubs. "
-                "shell_op commands run in the project root with user confirmation."
+                "Use file_change when suggesting code changes to specific files. "
+                "Always write the complete full implementation, never stubs."
             )
             # Wiki injected into user message so the model attends to it
             # alongside the actual question, not buried in system.
