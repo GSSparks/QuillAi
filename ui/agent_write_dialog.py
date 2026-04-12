@@ -125,14 +125,39 @@ class AgentWriteDialog(QDialog):
                 path    = attrs.get("path", "")
                 old     = attrs.get("old", "")
                 new     = attrs.get("new", "")
+                print(f"[AgentWrite] patch_file: path={path!r}")
+                print(f"[AgentWrite] old={old!r}")
+                print(f"[AgentWrite] new={new!r}")
                 abs_path = str((Path(root) / path).resolve())
                 content  = Path(abs_path).read_text(encoding="utf-8")
                 if old not in content:
-                    print(f"[AgentWrite] patch_file: old text not found in {path}")
-                    return
-                Path(abs_path).write_text(
-                    content.replace(old, new, 1), encoding="utf-8"
-                )
+                    # Fuzzy fallback: try normalizing whitespace
+                    import re as _re
+                    def _norm(s): return _re.sub(r'[ \t]+', ' ', s).strip()
+                    # Try line-by-line to find best match
+                    old_lines = old.splitlines()
+                    found = False
+                    if old_lines:
+                        # Find the first line of old in content
+                        first = old_lines[0].strip()
+                        for i, line in enumerate(content.splitlines()):
+                            if _norm(line) == _norm(first):
+                                # Try to match all lines from here
+                                content_lines = content.splitlines(keepends=True)
+                                candidate = ''.join(content_lines[i:i+len(old_lines)])
+                                if _norm(candidate) == _norm(old):
+                                    content = content.replace(candidate, new, 1)
+                                    found = True
+                                    break
+                    if not found:
+                        print(f"[AgentWrite] patch_file FAILED in {path}")
+                        print(f"[AgentWrite] old={old!r}")
+                        return
+                    # fuzzy matched — fall through to write
+                else:
+                    content = content.replace(old, new, 1)
+                # Write the (exact or fuzzy) patched content
+                Path(abs_path).write_text(content, encoding="utf-8")
                 self.applied_paths.append(abs_path)
 
             elif name == "write_file":

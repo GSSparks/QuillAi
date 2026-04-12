@@ -134,114 +134,34 @@ def render_agent_status_panel(chat_history, json_str: str):
     done    = data.get("done", False)
 
     border_color = t.get("aqua",   "#8ec07c") if not done else t.get("green", "#98971a")
-    bg_color     = t.get("bg1",    "#3c3836")
-    fg_color     = t.get("fg1",    "#ebdbb2")
-    dim_color    = t.get("fg4",    "#a89984")
+    dim_color = t.get("fg4", "#a89984")
 
     content_html = content.replace("\n", "<br>")
+
+    # Build rows for each tool call
+    rows = []
+    for line in content.splitlines():
+        if line.strip():
+            rows.append(
+                f'<tr><td style="padding:1px 0 1px 8px;'
+                f'color:{dim_color};font-size:8pt;">'
+                f'{line}</td></tr>'
+            )
+    rows_html = "".join(rows)
 
     panel_html = (
         f'<!-- agent-status-begin -->'
         f'<table width="100%" cellpadding="0" cellspacing="0" '
-        f'style="margin:4px 0;">'
-        f'<tr><td style="padding:6px 10px;'
-        f'background:{bg_color};'
+        f'style="margin:4px 0 4px 0;">'
+        f'<tr><td style="'
         f'border-left:3px solid {border_color};'
-        f'border-radius:2px;">'
-        f'<details {"open" if not done else ""}>'
-        f'<summary style="color:{border_color};font-size:9pt;'
-        f'font-weight:bold;cursor:pointer;">{summary}</summary>'
-        f'<pre style="color:{dim_color};font-size:8pt;'
-        f'margin:6px 0 0 0;white-space:pre-wrap;">'
-        f'{content_html}</pre>'
-        f'</details>'
-        f'</td></tr></table>'
-        f'<!-- agent-status-end -->'
-    )
-
-    doc    = chat_history.document()
-    cursor = QTextCursor(doc)
-
-    # Try to find and replace existing panel
-    found = doc.find("<!-- agent-status-begin -->")
-    if not found.isNull():
-        end = doc.find("<!-- agent-status-end -->", found)
-        if not end.isNull():
-            end.movePosition(
-                QTextCursor.MoveOperation.EndOfBlock,
-                QTextCursor.MoveMode.KeepAnchor
-            )
-            found.setPosition(
-                found.position(),
-                QTextCursor.MoveMode.MoveAnchor
-            )
-            found.setPosition(
-                end.position(),
-                QTextCursor.MoveMode.KeepAnchor
-            )
-            found.insertHtml(panel_html)
-            return
-
-    # No existing panel — insert before stream start pos
-    cursor = chat_history.textCursor()
-    stream_start = getattr(chat_history, '_agent_panel_pos', None)
-    if stream_start is None:
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        cursor.insertHtml(panel_html)
-        chat_history._agent_panel_pos = cursor.position()
-    else:
-        cursor.setPosition(stream_start)
-        cursor.insertHtml(panel_html)
-    chat_history.moveCursor(QTextCursor.MoveOperation.End)
-    chat_history._stream_start_pos = chat_history.textCursor().position()
-    chat_history.ensureCursorVisible()
-
-
-# ── Agent status panel ───────────────────────────────────────────────────────
-
-_AGENT_PANEL_ID = "agent-status-panel"
-
-
-def render_agent_status_panel(chat_history, json_str: str):
-    """
-    Insert or update the collapsible agent status panel in the chat.
-    Uses a JavaScript-free approach: replaces the panel HTML in place
-    by finding it via QTextCursor search.
-    """
-    import json as _json
-    from PyQt6.QtGui import QTextCursor
-    try:
-        data = _json.loads(json_str)
-    except Exception:
-        return
-
-    t       = get_theme()
-    summary = data.get("summary", "Agent thinking...")
-    content = data.get("content", "")
-    done    = data.get("done", False)
-
-    border_color = t.get("aqua",   "#8ec07c") if not done else t.get("green", "#98971a")
-    bg_color     = t.get("bg1",    "#3c3836")
-    fg_color     = t.get("fg1",    "#ebdbb2")
-    dim_color    = t.get("fg4",    "#a89984")
-
-    content_html = content.replace("\n", "<br>")
-
-    panel_html = (
-        f'<!-- agent-status-begin -->'
-        f'<table width="100%" cellpadding="0" cellspacing="0" '
-        f'style="margin:4px 0;">'
-        f'<tr><td style="padding:6px 10px;'
-        f'background:{bg_color};'
-        f'border-left:3px solid {border_color};'
-        f'border-radius:2px;">'
-        f'<details {"open" if not done else ""}>'
-        f'<summary style="color:{border_color};font-size:9pt;'
-        f'font-weight:bold;cursor:pointer;">{summary}</summary>'
-        f'<pre style="color:{dim_color};font-size:8pt;'
-        f'margin:6px 0 0 0;white-space:pre-wrap;">'
-        f'{content_html}</pre>'
-        f'</details>'
+        f'padding:4px 0 4px 8px;">'
+        f'<table width="100%" cellpadding="0" cellspacing="0">'
+        f'<tr><td style="color:{border_color};font-size:8.5pt;'
+        f'font-weight:bold;padding-bottom:2px;">'
+        f'{summary}</td></tr>'
+        f'{rows_html}'
+        f'</table>'
         f'</td></tr></table>'
         f'<!-- agent-status-end -->'
     )

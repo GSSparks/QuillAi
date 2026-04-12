@@ -87,6 +87,7 @@ class AgentWorker(QObject):
         ]
 
         seen_calls: dict = {}  # call_key -> attempt count
+        no_tool_streak: int = 0  # consecutive iterations with no new tool calls
 
         for iteration in range(MAX_ITERATIONS):
             if self._cancelled:
@@ -157,6 +158,21 @@ class AgentWorker(QObject):
                 self._emit_status_panel(done=True)
                 return
 
+            # Track iterations where all tool calls were deduped away
+            if not read_calls and not write_calls:
+                no_tool_streak += 1
+                if no_tool_streak >= 2:
+                    clean = strip_tool_calls(response_text)
+                    if clean:
+                        self.chat_update.emit(clean)
+                    if self._write_queue:
+                        self.write_ops.emit(self._write_queue)
+                    self._emit_status_panel(done=True)
+                    return
+            else:
+                no_tool_streak = 0
+
+
             # Add assistant turn to history
             messages.append({
                 "role":    "assistant",
@@ -226,7 +242,7 @@ class AgentWorker(QObject):
             }
 
         try:
-            resp = requests.post(url, json=payload, headers=headers, timeout=60)
+            resp = requests.post(url, json=payload, headers=headers, timeout=120)
             if resp.status_code != 200:
                 return ""
             data = resp.json()
@@ -259,16 +275,27 @@ class AgentWorker(QObject):
             "You are QuillAI, an AI coding assistant with tool access. "
             "You can investigate the codebase using tools before answering. "
             "Use tools to look up symbols, read files, and search for patterns. "
-            "Always investigate thoroughly before proposing changes. "
-            "Emit write tool calls only after you have gathered all needed context. "
-            "IMPORTANT: When the user confirms a proposed change with 'yes', 'ok', "
-            "'proceed', 'do it', or similar — immediately emit the write tool calls. "
-            "Do NOT re-investigate. Do NOT explain again. Just emit the write tools. "
-            "Do not explain what you are about to do. "
-            "Emit tool calls immediately without preamble. "
-            "Think by using tools, not by writing text. "
-            "When the user confirms a change with 'yes', 'ok', 'proceed', or similar, "
-            "immediately emit the write tool calls — do not investigate again. "
+            "\n\n"
+            "patch_file RULE: The 'old' attribute MUST be copied verbatim "
+            "from a read_file result — exact whitespace, exact indentation. "
+            "Never guess or reconstruct the old text from memory. "
+            "If you haven't read the file yet, read it first. "
+            "\n\n"
+            "STOP RULES — follow these strictly:\n"
+            "1. As soon as you have enough information to answer, STOP calling tools "
+            "and emit <agent_done/> followed by your answer. "
+            "2. If a tool returns the same or equivalent output as a previous call, "
+            "you already have that information — do NOT call it again. "
+            "3. Do NOT try variations of a command that already succeeded. "
+            "If ls showed you the files, do not call ls again with different flags. "
+            "4. Use find_files to list files — it is more reliable than ls. "
+            "5. After 3 read tool calls, ask yourself: do I have enough to answer? "
+            "If yes, stop and answer. "
+            "\n\n"
+            "WRITE RULES:\n"
+            "- Emit write tool calls only after investigation is complete. "
+            "- When user confirms with 'yes', 'ok', 'proceed' — immediately emit "
+            "write tool calls without re-investigating. "
             "\n\n"
             + TOOL_DEFINITIONS
         )
@@ -284,21 +311,14 @@ class AgentWorker(QObject):
 
     def _emit_status_panel(self, done: bool = False):
         """Emit HTML for the collapsible agent status panel."""
-        icon_map = {
-            "grep":        "🔍",
-            "read_file":   "📄",
-            "find_files":  "📁",
-            "find_symbol": "🔎",
-            "run_shell":   "⚙",
-            "patch_file":  "✏️",
-            "write_file":  "✏️",
-        }
-
         rows = []
         for name, desc, result in self._tool_log:
-            icon   = icon_map.get(name, "🔧")
-            status = f"→ {result}" if result else "..."
-            rows.append(f"{icon} {desc}\n   {status}")
+            if result:
+                first_line = result.splitlines()[0][:60] if result.strip() else ''
+                suffix = '...' if len(result.splitlines()) > 1 or len(result) > 60 else ''
+                rows.append(f"{desc} → {first_line}{suffix}")
+            else:
+                rows.append(f"{desc} ...")
 
         if self._write_queue:
             rows.append("")

@@ -164,7 +164,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {self.settings_manager.get_api_key()}",
                 },
-                timeout=30,
+                timeout=120,
             )
             data = response.json()
             choices = data.get("choices", [])
@@ -2451,6 +2451,25 @@ Instructions:
         """Re-launch the last chat request as an AgentWorker."""
         self._agent_session_active = True
         from PyQt6.QtCore import QThread
+        # If user is confirming a proposed change, inject a strong directive
+        _confirmations = {
+            'yes', 'ok', 'proceed', 'confirmed', 'do it', 'apply',
+            'make the change', 'go ahead', 'sure', 'yep', 'yup',
+            'please proceed', 'yes proceed', 'yes please',
+        }
+        _lower = user_text.lower().strip().rstrip('!')
+        _is_confirm = (
+            _lower in _confirmations
+            or any(_lower.startswith(c) for c in _confirmations)
+        )
+        if _is_confirm:
+            user_text = (
+                "The user has confirmed. You MUST now emit patch_file or write_file "
+                "tool calls immediately to make the change. "
+                "Do NOT investigate again. Do NOT ask for more confirmation. "
+                "Emit the write tool calls NOW.\n\n"
+                f"User said: {user_text}"
+            )
         root = (
             self.git_dock.repo_path
             if hasattr(self, 'git_dock') and self.git_dock.repo_path

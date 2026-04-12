@@ -221,7 +221,7 @@ def _tool_run_shell(attrs: dict, root: str) -> tuple[bool, str]:
     # Whitelist safe read-only commands
     safe_prefixes = [
         "git log", "git status", "git diff", "git show", "git branch",
-        "wc ", "cat ", "head ", "tail ", "ls ", "find ",
+        "wc ", "cat ", "head ", "tail ", "ls", "find ",
         "python3 -c", "python -c",
     ]
     if not any(command.strip().startswith(p) for p in safe_prefixes):

@@ -280,7 +280,7 @@ Do NOT repeat any code from context_after.
 
             print(f"🌐 Backend: {self.backend} | URL: {target_url} | Wiki context: {len(self.wiki_context)} chars")
 
-            timeout = 5 if is_inline else 60
+            timeout = 5 if is_inline else 120
 
             response = requests.post(
                 target_url,
