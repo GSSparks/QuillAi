@@ -210,6 +210,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self._stream_buffer = ""
         self._ai_response_buffer = ""
         self._last_user_message = ""
+        self._agent_session_active = False
         self.last_worker = None
         self.chat_worker = None
         self.active_threads = []
@@ -1980,10 +1981,14 @@ Instructions:
 
             thread = QThread()
 
-            # Always start with normal chat.
-            # If model emits <needs_tools/>, chat_stream_finished
-            # will re-launch as AgentWorker automatically.
             self._last_prompt_with_context = prompt_with_context
+
+            # If agent session is active, go straight to agent
+            if getattr(self, '_agent_session_active', False):
+                self._relaunch_as_agent(user_text)
+                return
+
+            # Normal chat — model may emit <needs_tools/> to escalate
             self.chat_worker = self.create_worker(
                 prompt=prompt_with_context, is_chat=True
             )
@@ -2444,6 +2449,7 @@ Instructions:
 
     def _relaunch_as_agent(self, user_text: str):
         """Re-launch the last chat request as an AgentWorker."""
+        self._agent_session_active = True
         from PyQt6.QtCore import QThread
         root = (
             self.git_dock.repo_path
@@ -2460,7 +2466,8 @@ Instructions:
             api_url      = self.settings_manager.get_api_url(),
             api_key      = self.settings_manager.get_api_key(),
             backend      = self.settings_manager.get_backend(),
-            repo_map     = getattr(self, 'repo_map', None),
+            repo_map         = getattr(self, 'repo_map', None),
+            settings_manager = self.settings_manager,
         )
         self.chat_worker = worker
         worker.moveToThread(thread)

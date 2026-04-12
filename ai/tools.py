@@ -112,7 +112,7 @@ def _tool_grep(attrs: dict, root: str):
     full_path = os.path.join(root, path)
     try:
         # This supports extra args like --include/--exclude if needed in attrs
-        cmd = ["grep"] + flags.split() + [pattern, full_path]
+        cmd = ["grep"] + flag_list + [pattern, full_path]
         result = subprocess.run(cmd, capture_output=True, text=True)
         return result.returncode == 0, result.stdout if result.stdout else result.stderr
     except Exception as e:
@@ -227,7 +227,7 @@ def _tool_run_shell(attrs: dict, root: str) -> tuple[bool, str]:
     if not any(command.strip().startswith(p) for p in safe_prefixes):
         return False, (
             f"run_shell: '{command}' not in safe read-only commands. "
-            "Use shell_write for write operations."
+            "Use patch_file for file changes."
         )
 
     try:

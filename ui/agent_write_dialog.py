@@ -143,22 +143,5 @@ class AgentWriteDialog(QDialog):
                 Path(abs_path).write_text(content, encoding="utf-8")
                 self.applied_paths.append(abs_path)
 
-            elif name == "shell_write":
-                command = attrs.get("command", "")
-                result  = subprocess.run(
-                    command, shell=True, cwd=root,
-                    capture_output=True, text=True, timeout=30,
-                )
-                if result.returncode != 0:
-                    print(f"[AgentWrite] shell_write failed: {result.stderr[:200]}")
-                else:
-                    # Try to detect which files changed
-                    if " " in command:
-                        parts = command.split()
-                        for part in parts:
-                            candidate = Path(root) / part
-                            if candidate.exists() and candidate.is_file():
-                                self.applied_paths.append(str(candidate))
-
         except Exception as e:
             print(f"[AgentWrite] {name} error: {e}")

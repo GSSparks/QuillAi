@@ -51,6 +51,7 @@ class AgentWorker(QObject):
         api_key: str,
         backend: str,
         repo_map=None,
+        settings_manager=None,
     ):
         super().__init__()
         self.user_text    = user_text
@@ -60,8 +61,9 @@ class AgentWorker(QObject):
         self.api_url      = api_url.rstrip("/")
         self.api_key      = api_key
         self.backend      = backend.lower()
-        self.repo_map     = repo_map
-        self._cancelled   = False
+        self.repo_map         = repo_map
+        self._settings_manager = settings_manager
+        self._cancelled        = False
         self._tool_log    = []   # [(name, description, result_summary), ...]
         self._write_queue = []   # [{name, attrs, description}, ...]
 
@@ -84,6 +86,8 @@ class AgentWorker(QObject):
             {"role": "user", "content": self._build_user_message()}
         ]
 
+        seen_calls: dict = {}  # call_key -> attempt count
+
         for iteration in range(MAX_ITERATIONS):
             if self._cancelled:
                 return
@@ -101,6 +105,15 @@ class AgentWorker(QObject):
             read_calls  = [t for t in tool_calls if not is_write_tool(t["name"])]
             write_calls = [t for t in tool_calls if is_write_tool(t["name"])]
 
+            # Dedup: skip tool calls seen 3+ times
+            deduped = []
+            for tc in read_calls:
+                key = f"{tc['name']}:{tuple(sorted(tc['attrs'].items()))}"
+                if seen_calls.get(key, 0) < 3:
+                    deduped.append((tc, key))
+            read_calls_keyed = deduped
+            read_calls = [tc for tc, _ in deduped]
+
             # Queue write ops (don't execute yet)
             for tc in write_calls:
                 desc = describe_tool_call(tc["name"], tc["attrs"])
@@ -112,7 +125,7 @@ class AgentWorker(QObject):
 
             # Execute read tools and collect results
             tool_results = []
-            for tc in read_calls:
+            for tc, call_key in read_calls_keyed:
                 if self._cancelled:
                     return
                 name = tc["name"]
@@ -124,6 +137,8 @@ class AgentWorker(QObject):
 
                 success, output = run_tool(name, tc["attrs"], self.project_root)
                 summary = output[:100] + "..." if len(output) > 100 else output
+                # Track for dedup
+                seen_calls[call_key] = seen_calls.get(call_key, 0) + 1
 
                 # Update log with result
                 self._tool_log[-1] = (name, desc, summary)
@@ -134,9 +149,13 @@ class AgentWorker(QObject):
                     f'\n{output}\n</tool_result>'
                 )
 
-            # If no tool calls and no done signal, we're implicitly done
+            # If no tool calls, the response IS the answer — show it
             if not tool_calls:
-                done = True
+                clean = strip_tool_calls(response_text)
+                if clean:
+                    self.chat_update.emit(clean)
+                self._emit_status_panel(done=True)
+                return
 
             # Add assistant turn to history
             messages.append({
@@ -186,7 +205,7 @@ class AgentWorker(QObject):
             headers["anthropic-version"] = "2023-06-01"
             payload = {
                 "model":      self.model,
-                "max_tokens": 4096,
+                "max_tokens": self._get_max_tokens(),
                 "system":     system,
                 "messages":   messages,
             }
@@ -201,7 +220,7 @@ class AgentWorker(QObject):
             payload = {
                 "model":       self.model,
                 "messages":    all_messages,
-                "max_tokens":  4096,
+                "max_tokens":  self._get_max_tokens(),
                 "temperature": 0.2,
                 "stream":      False,
             }
@@ -227,6 +246,14 @@ class AgentWorker(QObject):
 
     # ── Prompt builders ───────────────────────────────────────────────────
 
+    def _get_max_tokens(self) -> int:
+        """Get max tokens from settings, capped sensibly for agent use."""
+        if self._settings_manager:
+            budget = self._settings_manager.get_token_budget()
+            # Use at most half the budget for response, leave room for prompt
+            return min(2048, budget // 2)
+        return 1024
+
     def _build_system_prompt(self) -> str:
         return (
             "You are QuillAI, an AI coding assistant with tool access. "
@@ -234,6 +261,14 @@ class AgentWorker(QObject):
             "Use tools to look up symbols, read files, and search for patterns. "
             "Always investigate thoroughly before proposing changes. "
             "Emit write tool calls only after you have gathered all needed context. "
+            "IMPORTANT: When the user confirms a proposed change with 'yes', 'ok', "
+            "'proceed', 'do it', or similar — immediately emit the write tool calls. "
+            "Do NOT re-investigate. Do NOT explain again. Just emit the write tools. "
+            "Do not explain what you are about to do. "
+            "Emit tool calls immediately without preamble. "
+            "Think by using tools, not by writing text. "
+            "When the user confirms a change with 'yes', 'ok', 'proceed', or similar, "
+            "immediately emit the write tool calls — do not investigate again. "
             "\n\n"
             + TOOL_DEFINITIONS
         )
@@ -257,7 +292,6 @@ class AgentWorker(QObject):
             "run_shell":   "⚙",
             "patch_file":  "✏️",
             "write_file":  "✏️",
-            "shell_write": "⚙",
         }
 
         rows = []

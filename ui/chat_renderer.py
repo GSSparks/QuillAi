@@ -440,6 +440,7 @@ class ChatRenderer:
         # Agent mode — final answer already rendered, just clean up
         if getattr(self, '_skip_stream_finished', False):
             self._skip_stream_finished = False
+            self._agent_session_active = True  # keep agent mode for next turn
             self.current_ai_raw_text = ""
             self._stream_buffer      = ""
             self._stream_start_pos   = 0
@@ -684,8 +685,9 @@ class ChatRenderer:
     def load_project_chat(self):
         from PyQt6.QtGui import QTextCursor
         self.chat_panel.chat_history.clear()
-        self.current_ai_raw_text = ""
-        self._stream_start_pos   = 0
+        self.current_ai_raw_text   = ""
+        self._stream_start_pos     = 0
+        self._agent_session_active = False
         saved = self.memory_manager.load_chat_history()
         if saved:
             self.chat_panel.chat_history.setHtml(saved)
