@@ -106,6 +106,20 @@ Detection is automatic — no special syntax required from the AI. If a response
 After applying, the editor reloads the file automatically. The repo map is invalidated so the next chat prompt reflects the change.
  
 ---
+### Context Debugger
+
+The Context Debugger is a powerful tool for visualizing the AI's internal context and prompt construction in QuillAI. It provides a dockable panel that shows:
+
+- Context Tree: A structured view of the AI context, including model info, editor state, and wiki context.
+- Prompt: The exact prompt text sent to the AI model.
+Raw Context: The full JSON representation of the context.
+- Tools: A log of external tool calls made by the AI and their results.
+
+You can navigate through the history of context snapshots using the ◀ and ▶ buttons, and copy the current prompt to the clipboard for inspection or reuse.
+
+This debugger helps you understand how QuillAI builds context from your codebase and tools, making AI interactions more transparent and easier to troubleshoot.
+
+---
 
 ## Installation
 
