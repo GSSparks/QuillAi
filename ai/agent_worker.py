@@ -52,6 +52,7 @@ class AgentWorker(QObject):
         backend: str,
         repo_map=None,
         settings_manager=None,
+        plugin_manager=None,
     ):
         super().__init__()
         self.user_text    = user_text
@@ -63,6 +64,7 @@ class AgentWorker(QObject):
         self.backend      = backend.lower()
         self.repo_map         = repo_map
         self._settings_manager = settings_manager
+        self.plugin_manager = plugin_manager
         self._cancelled        = False
         self._tool_log    = []   # [(name, description, result_summary), ...]
         self._write_queue = []   # [{name, attrs, description}, ...]
@@ -136,7 +138,7 @@ class AgentWorker(QObject):
                 self._tool_log.append((name, desc, None))
                 self._emit_status_panel()
 
-                success, output = run_tool(name, tc["attrs"], self.project_root)
+                success, output = run_tool(name, tc["attrs"], self.project_root, self.plugin_manager)
                 summary = output[:100] + "..." if len(output) > 100 else output
                 # Track for dedup
                 seen_calls[call_key] = seen_calls.get(call_key, 0) + 1

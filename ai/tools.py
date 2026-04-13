@@ -42,11 +42,20 @@ Rules:
 
 # ── Tool execution ────────────────────────────────────────────────────────────
 
-def run_tool(name: str, attrs: dict, project_root: str) -> tuple[bool, str]:
+def run_tool(name: str, attrs: dict, project_root: str, plugin_manager=None) -> tuple[bool, str]:
     """
     Execute a tool and return (success, output).
     Write tools return (True, "queued") without executing.
     """
+    if plugin_manager:
+        try:
+            plugin_manager.emit(
+                "tool_called",
+                tool=name,
+                args=attrs.copy()
+            )
+        except Exception:
+            pass
     try:
         if name == "grep":
             return _tool_grep(attrs, project_root)
@@ -62,7 +71,29 @@ def run_tool(name: str, attrs: dict, project_root: str) -> tuple[bool, str]:
             return True, "queued"
         else:
             return False, f"Unknown tool: {name}"
+        if plugin_manager:
+            try:
+                plugin_manager.emit(
+                    "tool_result",
+                    tool=name,
+                    success=success,
+                    result=(output[:2000] if isinstance(output, str) else str(output))
+                )
+            except Exception:
+                pass
+    
+        return success, output
     except Exception as e:
+        if plugin_manager:
+            try:
+                plugin_manager.emit(
+                    "tool_result",
+                    tool=name,
+                    success=False,
+                    result=str(e)
+                )
+            except Exception:
+                pass
         return False, f"Tool error: {e}"
 
 

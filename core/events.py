@@ -84,3 +84,37 @@ kwargs:
     success (bool) — True if no failures
     summary (str)  — recap text
 """
+
+# ── AI Context events ─────────────────────────────────────────────────────
+
+EVT_CONTEXT_BUILT = "context_built"
+"""
+Emitted when AI context is fully assembled before a request.
+
+| kwarg    | type   | description                          |
+|----------|--------|--------------------------------------|
+| context  | dict   | Structured context object            |
+| prompt   | str    | Final prompt sent to the model       |
+| metadata | dict   | Optional debug info (tokens, timing) |
+"""
+
+EVT_TOOL_CALLED = "tool_called"
+"""
+Emitted when a tool is called by the AI.
+
+| kwarg    | type   | description                          |
+|----------|--------|--------------------------------------|
+| tool     | str    | Name of the tool called              |
+| args     | dict   | Arguments passed to the tool         |
+"""
+
+EVT_TOOL_RESULT = "tool_result"
+"""
+Emitted when a tool call returns a result.
+
+| kwarg    | type   | description                          |
+|----------|--------|--------------------------------------|
+| tool     | str    | Name of the tool                     |
+| success  | bool   | Whether the tool call succeeded      |
+| result   | str    | Output or error message from the tool|
+"""

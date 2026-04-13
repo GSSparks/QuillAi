@@ -600,13 +600,12 @@ class CodeEditor(QMainWindow, ChatRenderer):
 
     def create_worker(self, prompt, editor_text="", cursor_pos=0,
                       generate_function=False, is_edit=False, is_chat=False):
+    
         backend  = self.settings_manager.get_backend()
         model    = (self.settings_manager.get_chat_model() if is_chat
                     else self.settings_manager.get_inline_model())
         api_key  = self.settings_manager.get_api_key()
- 
-        # Build wiki context for all non-chat modes.                      
-        # Chat mode gets it through ContextEngine.build() instead.        
+    
         wiki_ctx = ""
         if not is_chat and hasattr(self, "wiki_context_builder") and self.wiki_context_builder:
             editor = self.current_editor()
@@ -614,8 +613,29 @@ class CodeEditor(QMainWindow, ChatRenderer):
             if fp:
                 from pathlib import Path
                 wiki_ctx = self.wiki_context_builder.for_file(Path(fp))
-                print(f"🗂️ Wiki: fp={fp}, repo_root={self.wiki_manager.repo_root}, ctx_len={len(wiki_ctx)}")
- 
+    
+        # BUILD DEBUG CONTEXT OBJECT
+        context_obj = {
+            "prompt": prompt,
+            "editor_text_len": len(editor_text) if editor_text else 0,
+            "cursor_pos": cursor_pos,
+            "generate_function": generate_function,
+            "is_edit": is_edit,
+            "is_chat": is_chat,
+            "backend": backend,
+            "model": model,
+            "wiki_context_len": len(wiki_ctx),
+            "has_wiki": bool(wiki_ctx),
+        }
+    
+        # EMIT EVENT
+        if hasattr(self, "plugin_manager"):
+            self.plugin_manager.emit(
+                "context_built",
+                context=context_obj,
+                prompt=prompt,
+            )
+    
         return AIWorker(
             prompt=prompt,
             editor_text=editor_text,
@@ -627,7 +647,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
             api_url=self.settings_manager.get_api_url(),
             api_key=api_key,
             backend=backend,
-            wiki_context=wiki_ctx,                                         
+            wiki_context=wiki_ctx,
         )
 
     # ── Language detection ────────────────────────────────────────────────
@@ -2487,6 +2507,7 @@ Instructions:
             backend      = self.settings_manager.get_backend(),
             repo_map         = getattr(self, 'repo_map', None),
             settings_manager = self.settings_manager,
+            plugin_manager   = self.plugin_manager,
         )
         self.chat_worker = worker
         worker.moveToThread(thread)
