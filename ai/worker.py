@@ -24,6 +24,26 @@ def _wiki_block(wiki_context: str) -> str:
     return f"\n\n<wiki_context>\n{wiki_context.strip()}\n</wiki_context>"
 
 
+def _build_headers(backend: str, api_key: str) -> dict:
+    """Return the correct auth headers for each backend."""
+    base = {
+        "Content-Type": "application/json",
+        "User-Agent": "QuillAI-IDE/1.0",
+    }
+    if not api_key:
+        return base
+
+    if backend == "claude":
+        # Anthropic uses x-api-key + version header, NOT Authorization: Bearer
+        base["x-api-key"] = api_key.strip()
+        base["anthropic-version"] = "2023-06-01"
+    else:
+        # llama.cpp and OpenAI-compatible endpoints
+        base["Authorization"] = f"Bearer {api_key.strip()}"
+
+    return base
+
+
 class AIWorker(QObject):
     update_ghost = pyqtSignal(str)
     function_ready = pyqtSignal(str)
@@ -42,7 +62,7 @@ class AIWorker(QObject):
         api_url: str = "",
         api_key: str = "",
         backend: str = "openai",
-        wiki_context: str = "",       
+        wiki_context: str = "",
     ):
         super().__init__()
 
@@ -56,14 +76,18 @@ class AIWorker(QObject):
         self.api_url = api_url.rstrip("/")
         self.api_key = api_key
         self.backend = backend.lower()
-        self.wiki_context = wiki_context  # ← NEW
+        self.wiki_context = wiki_context
 
         self._cancelled = False
 
     def cancel(self):
         self._cancelled = True
 
-    def build_messages(self):
+    def build_messages(self) -> tuple:
+        """Return (system_prompt: str, messages: list).
+        Keeping system separate lets each backend place it correctly:
+        Anthropic → top-level `system` param; OpenAI → role=system message.
+        """
         lang = self._detect_language()
         wiki = _wiki_block(self.wiki_context)
 
@@ -113,42 +137,26 @@ class AIWorker(QObject):
                 "over partial changes."
                 "When renaming a symbol or refactoring, you MUST write the complete, "
                 "full implementation of every function — never use pass, ..., or stubs. "
-                "The output must be production-ready code, not a skeleton. "          
+                "The output must be production-ready code, not a skeleton. "
                 "Use file_change when suggesting code changes to specific files. "
                 "Always write the complete full implementation, never stubs."
             )
-            # Wiki injected into user message so the model attends to it
-            # alongside the actual question, not buried in system.
             user_content = self.prompt + wiki
-            return [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_content},
-            ]
+            return system, [{"role": "user", "content": user_content}]
 
         before = self.editor_text[max(0, self.cursor_pos - 1000):self.cursor_pos]
         after = self.editor_text[self.cursor_pos:self.cursor_pos + 300]
 
         if self.is_edit:
-            return [
-                {
-                    "role": "system",
-                    "content": "Return ONLY clean Python code. No markdown. No explanation.",
-                },
-                {
-                    "role": "user",
-                    "content": self.prompt + wiki,
-                },
-            ]
+            return (
+                "Return ONLY clean Python code. No markdown. No explanation.",
+                [{"role": "user", "content": self.prompt + wiki}],
+            )
 
         elif self.generate_function:
-            return [
-                {
-                    "role": "system",
-                    "content": "Return ONLY valid Python code.",
-                },
-                {
-                    "role": "user",
-                    "content": f"""
+            return (
+                "Return ONLY valid Python code.",
+                [{"role": "user", "content": f"""
 Generate a complete Python function.
 
 Context BEFORE:
@@ -164,13 +172,10 @@ Rules:
 - Only Python code
 - No markdown
 - No explanation
-""",
-                },
-            ]
+"""}],
+            )
 
         else:
-            # Inline ghost — wiki prepended to context_before so FIM and
-            # chat-fallback paths both receive it naturally.
             wiki_prefix = wiki + "\n\n" if wiki else ""
             return [
                 {
@@ -194,7 +199,6 @@ Do NOT repeat any code from context_after.
             ]
 
     def _detect_language(self) -> str:
-        """Infer the language from the editor context."""
         context = (self.prompt + self.editor_text).lower()
         patterns = [
             ("Python",     ["def ", "import ", "class ", "elif ", "print("]),
@@ -211,77 +215,182 @@ Do NOT repeat any code from context_after.
                 return lang
         return ""
 
-    def run(self):
-        print(f"🚀 Worker created with api_url='{self.api_url}' backend='{self.backend}'")
+    def _parse_claude_stream(self, response) -> None:
+        """
+        Parse Anthropic's native SSE stream format.
+        Events: message_start, content_block_start, content_block_delta, message_stop
+        The actual text lives in delta.text inside content_block_delta events.
+        """
         raw_output = ""
         last_emitted = ""
 
+        for line in response.iter_lines():
+            if self._cancelled:
+                break
+            if not line:
+                continue
+
+            try:
+                decoded = line.decode("utf-8")
+            except Exception:
+                continue
+
+            # SSE lines are either "event: <type>" or "data: <json>"
+            if decoded.startswith("event:"):
+                event_type = decoded[6:].strip()
+                if event_type == "message_stop":
+                    break
+                continue
+
+            if not decoded.startswith("data: "):
+                continue
+
+            data = decoded[6:]
+            if data.strip() == "[DONE]":
+                break
+
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+
+            # Only content_block_delta carries text
+            if chunk.get("type") != "content_block_delta":
+                continue
+
+            content = chunk.get("delta", {}).get("text")
+            if not content:
+                continue
+
+            self._emit_content(content, raw_output, last_emitted)
+            raw_output += content
+            if self.generate_function or self.is_edit:
+                last_emitted = clean_code(raw_output)
+
+    def _parse_openai_stream(self, response) -> None:
+        """Parse OpenAI-compatible SSE stream (llama.cpp, OpenAI, inline FIM)."""
+        raw_output = ""
+        last_emitted = ""
+        is_local_fim = self.backend == "llama" and not self.generate_function \
+                       and not self.is_edit and not self.is_chat
+
+        for line in response.iter_lines():
+            if self._cancelled:
+                break
+            if not line:
+                continue
+
+            try:
+                decoded = line.decode("utf-8")
+            except Exception:
+                continue
+
+            if not decoded.startswith("data: "):
+                continue
+
+            data = decoded[6:]
+            if data.strip() == "[DONE]":
+                break
+
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+
+            if is_local_fim:
+                content = chunk.get("content")
+            else:
+                choices = chunk.get("choices", [])
+                content = choices[0].get("delta", {}).get("content") if choices else None
+
+            if not content:
+                continue
+
+            self._emit_content(content, raw_output, last_emitted)
+            raw_output += content
+            if self.generate_function or self.is_edit:
+                last_emitted = clean_code(raw_output)
+
+    def _emit_content(self, content: str, raw_output: str, last_emitted: str) -> None:
+        """Route a content chunk to the correct signal."""
+        current_raw = raw_output + content
+
+        if self.is_chat:
+            self.chat_update.emit(content)
+            return
+
+        cleaned = clean_code(current_raw)
+
+        if self.generate_function or self.is_edit:
+            delta = cleaned[len(last_emitted):] if cleaned.startswith(last_emitted) else cleaned
+            self.function_ready.emit(delta)
+        else:
+            # Inline ghost — strip overlap with existing text
+            recent = self.editor_text[max(0, self.cursor_pos - 100):self.cursor_pos]
+            overlap = 0
+            for i in range(min(len(recent), len(cleaned)), 0, -1):
+                if recent.endswith(cleaned[:i]):
+                    overlap = i
+                    break
+            self.update_ghost.emit(cleaned[overlap:])
+
+    def run(self):
+        print(f"🚀 Worker created with api_url='{self.api_url}' backend='{self.backend}'")
+
         try:
             is_inline = not self.generate_function and not self.is_edit and not self.is_chat
-            is_local = self.backend == "llama"
-            is_openai = self.backend == "openai"
+            is_local  = self.backend == "llama"
 
-            headers = {
-                "Content-Type": "application/json",
-                "User-Agent": "QuillAI-IDE/1.0",
-            }
+            headers = _build_headers(self.backend, self.api_key)
 
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key.strip()}"
+            # ── Routing ───────────────────────────────────────────
+            if is_inline and is_local:
+                target_url = self.api_url.replace("/v1/chat/completions", "/infill")
+                before = self.editor_text[max(0, self.cursor_pos - 1000):self.cursor_pos]
+                after  = self.editor_text[self.cursor_pos:self.cursor_pos + 300]
+                wiki   = _wiki_block(self.wiki_context)
+                payload = {
+                    "input_prefix": (wiki + "\n\n" + before) if wiki else before,
+                    "input_suffix": after,
+                    "temperature":  0.1,
+                    "stream":       True,
+                    "n_predict":    60,
+                    "stop":         ["\n\n", "```"],
+                }
+                print(f"👻 Using llama.cpp FIM → {target_url}")
+            else:
+                target_url = self.api_url
+                system_prompt, messages = self.build_messages()
 
-            # -------------------------------
-            # 🚀 ROUTING LOGIC
-            # -------------------------------
-            if is_inline:
-                if is_local:
-                    # ✅ llama.cpp FIM
-                    target_url = self.api_url.replace("/v1/chat/completions", "/infill")
-
-                    before = self.editor_text[max(0, self.cursor_pos - 1000):self.cursor_pos]
-                    after = self.editor_text[self.cursor_pos:self.cursor_pos + 300]
-
-                    # Prepend wiki context to FIM prefix when available
-                    wiki = _wiki_block(self.wiki_context)
-                    fim_prefix = (wiki + "\n\n" + before) if wiki else before
-
-                    print(f"👻 Using llama.cpp FIM → {target_url}")
-
+                if self.backend == "claude":
+                    # Anthropic: system is a top-level param, NOT a message role.
+                    # max_tokens is required (Anthropic rejects requests without it).
                     payload = {
-                        "input_prefix": fim_prefix,
-                        "input_suffix": after,
-                        "temperature": 0.1,
-                        "stream": True,
-                        "n_predict": 60,
-                        "stop": ["\n\n", "```"],
+                        "model":      self.model,
+                        "max_tokens": 8192,
+                        "messages":   messages,
+                        "stream":     True,
                     }
-
+                    if system_prompt:
+                        payload["system"] = system_prompt
                 else:
-                    # ⚠️ OpenAI fallback (no FIM support)
+                    # OpenAI-compatible: system goes as first message with role="system"
+                    full_messages = (
+                        [{"role": "system", "content": system_prompt}] + messages
+                        if system_prompt else messages
+                    )
+                    payload = {
+                        "model":       self.model,
+                        "messages":    full_messages,
+                        "temperature": 0.1 if is_inline else 0.7,
+                        "stream":      True,
+                    }
+                if is_inline:
                     print("⚠️ OpenAI inline fallback (no FIM support)")
 
-                    target_url = self.api_url
-                    payload = {
-                        "model": self.model,
-                        "messages": self.build_messages(),
-                        "temperature": 0.1,
-                        "stream": True,
-                    }
-
-            else:
-                # ✅ Chat / Function / Edit
-                target_url = self.api_url
-
-                payload = {
-                    "model": self.model,
-                    "messages": self.build_messages(),
-                    "temperature": 0.7 if not is_inline else 0.1,
-                    "stream": True,
-                }
-
-            print(f"🌐 Backend: {self.backend} | URL: {target_url} | Wiki context: {len(self.wiki_context)} chars")
+            print(f"🌐 Backend: {self.backend} | URL: {target_url} | Wiki: {len(self.wiki_context)} chars")
 
             timeout = 5 if is_inline else 120
-
             response = requests.post(
                 target_url,
                 json=payload,
@@ -292,88 +401,13 @@ Do NOT repeat any code from context_after.
 
             if response.status_code != 200:
                 print(f"❌ API Error {response.status_code}: {response.text}")
-                self.finished.emit()
                 return
 
-            # -------------------------------
-            # 📡 STREAM PARSING
-            # -------------------------------
-            for line in response.iter_lines():
-                if self._cancelled:
-                    break
-
-                if not line:
-                    continue
-
-                try:
-                    decoded = line.decode("utf-8")
-                except Exception:
-                    continue
-
-                if not decoded.startswith("data: "):
-                    continue
-
-                data = decoded[6:]
-
-                if data.strip() == "[DONE]":
-                    break
-
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-
-                if is_inline and is_local:
-                    content = chunk.get("content")
-                else:
-                    choices = chunk.get("choices", [])
-                    if choices:
-                        content = choices[0].get("delta", {}).get("content")
-                    else:
-                        content = None
-
-                if not content:
-                    continue
-
-                raw_output += content
-
-                # -------------------------------
-                # 💬 CHAT MODE
-                # -------------------------------
-                if self.is_chat:
-                    self.chat_update.emit(content)
-                    continue
-
-                cleaned = clean_code(raw_output)
-
-                # -------------------------------
-                # 🧠 FUNCTION / EDIT MODE
-                # -------------------------------
-                if self.generate_function or self.is_edit:
-                    if cleaned.startswith(last_emitted):
-                        delta = cleaned[len(last_emitted):]
-                    else:
-                        delta = cleaned
-
-                    last_emitted = cleaned
-                    self.function_ready.emit(delta)
-
-                # -------------------------------
-                # 👻 INLINE GHOST MODE
-                # -------------------------------
-                else:
-                    recent = self.editor_text[max(0, self.cursor_pos - 100):self.cursor_pos]
-
-                    overlap = 0
-                    max_overlap = min(len(recent), len(cleaned))
-
-                    for i in range(max_overlap, 0, -1):
-                        if recent.endswith(cleaned[:i]):
-                            overlap = i
-                            break
-
-                    ghost = cleaned[overlap:]
-                    self.update_ghost.emit(ghost)
+            # ── Stream parsing ────────────────────────────────────
+            if self.backend == "claude":
+                self._parse_claude_stream(response)
+            else:
+                self._parse_openai_stream(response)
 
         except requests.exceptions.Timeout:
             print("⏳ Request timed out.")

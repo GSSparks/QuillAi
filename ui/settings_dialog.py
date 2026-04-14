@@ -137,19 +137,19 @@ class SettingsDialog(QDialog):
 
     def _build_ai_tab(self) -> QWidget:
         tab, layout = self._tab_scroll()
-
+    
         # ── Local LLM ────────────────────────────────────────────
-        local_group = QGroupBox("Local LLM  (llama.cpp)")
-        local_form  = QFormLayout(local_group)
+        local_group = QGroupBox("Local LLM (llama.cpp)")
+        local_form = QFormLayout(local_group)
         local_form.setSpacing(8)
-
+    
         self.local_url = QLineEdit(self.sm.get("local_llm_url"))
         self.local_url.setPlaceholderText(
             "http://localhost:11434/v1/chat/completions")
-
+    
         self.local_model = QLineEdit(self.sm.get("active_model"))
         self.local_model.setPlaceholderText("qwen2.5-coder-7b")
-
+    
         self.token_budget = QSpinBox()
         self.token_budget.setRange(2000, 128000)
         self.token_budget.setSingleStep(1000)
@@ -159,64 +159,58 @@ class SettingsDialog(QDialog):
             "Lower = faster responses on slow hardware.\n"
             "Recommended: 8000-16000 for local, 28000 for cloud."
         )
-
+    
         local_form.addRow("Server URL:",     self.local_url)
         local_form.addRow("Model name:",     self.local_model)
         local_form.addRow("Context budget:", self.token_budget)
-
+    
         # ── OpenAI ───────────────────────────────────────────────
-        openai_group = QGroupBox("OpenAI  (or compatible)")
-        openai_form  = QFormLayout(openai_group)
+        openai_group = QGroupBox("OpenAI (or compatible)")
+        openai_form = QFormLayout(openai_group)
         openai_form.setSpacing(8)
-
+    
         self.cloud_url = QLineEdit(self.sm.get("cloud_llm_url"))
         self.cloud_url.setPlaceholderText(
             "https://api.openai.com/v1/chat/completions")
-
-        _oai_set = bool(self.sm.get('cloud_api_key') or
-                        self.sm.get_api_key())
+    
+        _oai_set = bool(self.sm.get_openai_key())
         self.openai_key = SecretLineEdit(
             text=self.sm.get_openai_key() if _oai_set else '',
             placeholder='● stored securely' if _oai_set else 'sk-...'
         )
-
-        self.openai_model = QLineEdit(self.sm.get("chat_model"))
+    
+        self.openai_model = QLineEdit(self.sm.get("openai_chat_model"))  # ← fixed key
         self.openai_model.setPlaceholderText("gpt-4o")
-
+    
         openai_form.addRow("API URL:",    self.cloud_url)
         openai_form.addRow("API Key:",    self.openai_key)
         openai_form.addRow("Chat model:", self.openai_model)
-
+    
         # ── Anthropic ────────────────────────────────────────────
-        claude_group = QGroupBox("Anthropic  (Claude)")
-        claude_form  = QFormLayout(claude_group)
+        claude_group = QGroupBox("Anthropic (Claude)")
+        claude_form = QFormLayout(claude_group)
         claude_form.setSpacing(8)
-
-        _ant_set = bool(self.sm.get('anthropic_api_key') or
-                        self.sm.get_api_key())
+    
+        _ant_set = bool(self.sm.get_anthropic_key())
         self.anthropic_key = SecretLineEdit(
             text=self.sm.get_anthropic_key() if _ant_set else '',
             placeholder='● stored securely' if _ant_set else 'sk-ant-...'
         )
-
+    
         self.claude_chat_model = QLineEdit(
-            self.sm.get("chat_model")
-            if self.sm.get_backend() == "claude"
-            else "claude-sonnet-4-6"
+            self.sm.get("claude_chat_model") or "claude-sonnet-4-6"  # ← fixed key, no backend check
         )
         self.claude_inline_model = QLineEdit(
-            self.sm.get("active_model")
-            if self.sm.get_backend() == "claude"
-            else "claude-haiku-4-5-20251001"
+            self.sm.get("claude_inline_model") or "claude-haiku-4-5-20251001"  # ← fixed key
         )
-
+    
         self._key_hint = QLabel("Get your key at console.anthropic.com")
-
+    
         claude_form.addRow("API Key:",      self.anthropic_key)
         claude_form.addRow("Chat model:",   self.claude_chat_model)
         claude_form.addRow("Inline model:", self.claude_inline_model)
         claude_form.addRow("",              self._key_hint)
-
+    
         layout.addWidget(local_group)
         layout.addWidget(openai_group)
         layout.addWidget(claude_group)
@@ -424,17 +418,19 @@ class SettingsDialog(QDialog):
         self.sm.set("active_model",   self.local_model.text().strip())
         self.sm.set_token_budget(self.token_budget.value())
         self.sm.set("cloud_llm_url",  self.cloud_url.text().strip())
+    
+        # OpenAI — its own key
         if self.openai_key.text().strip():
             self.sm.set_api_key('openai', self.openai_key.text().strip())
-        self.sm.set("chat_model",     self.openai_model.text().strip())
+        self.sm.set("openai_chat_model", self.openai_model.text().strip())
+    
+        # Anthropic — its own key, always saved independently
         if self.anthropic_key.text().strip():
             self.sm.set_api_key('anthropic', self.anthropic_key.text().strip())
-        self.sm.set("terminal_clean_shell",
-                    self.terminal_clean_shell.isChecked())
-
-        if self.sm.get_backend() == "claude":
-            self.sm.set("active_model", self.claude_inline_model.text().strip())
-            self.sm.set("chat_model",   self.claude_chat_model.text().strip())
+        self.sm.set("claude_chat_model",   self.claude_chat_model.text().strip())
+        self.sm.set("claude_inline_model", self.claude_inline_model.text().strip())
+    
+        self.sm.set("terminal_clean_shell", self.terminal_clean_shell.isChecked())
 
         if self.project_settings and self.project_settings.has_project():
             tok = self.gitlab_token.text().strip()

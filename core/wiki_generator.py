@@ -260,7 +260,12 @@ class WikiGenerator:
             "User-Agent": "QuillAI-IDE/1.0",
         }
         if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key.strip()}"
+            if self.backend == "claude":
+                # Anthropic requires x-api-key, not Authorization: Bearer
+                headers["x-api-key"] = self.api_key.strip()
+                headers["anthropic-version"] = "2023-06-01"
+            else:
+                headers["Authorization"] = f"Bearer {self.api_key.strip()}"
 
         payload = {
             "model": self.model,

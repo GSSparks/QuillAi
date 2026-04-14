@@ -32,7 +32,7 @@ from ai.tools import (
     has_agent_done, strip_tool_calls,
 )
 
-MAX_ITERATIONS = 10
+MAX_ITERATIONS = 20
 
 
 class AgentWorker(QObject):
@@ -183,10 +183,18 @@ class AgentWorker(QObject):
 
             # If there were tool results, feed them back
             if tool_results:
+                # Cap individual outputs to avoid context explosion
+                capped = []
+                for r in tool_results:
+                    capped.append(r[:3000] + "...\n</tool_result>" if len(r) > 3000 else r)
                 messages.append({
                     "role":    "user",
-                    "content": "\n\n".join(tool_results),
+                    "content": "\n\n".join(capped),
                 })
+
+            # Keep history from exploding — retain first user msg + last 6 exchanges
+            if len(messages) > 14:
+                messages = messages[:1] + messages[-13:]
 
             # If done or no more tool calls, stream the clean final answer
             if done or not read_calls:
@@ -202,7 +210,11 @@ class AgentWorker(QObject):
                 self._emit_status_panel(done=True)
                 return
 
-        # Hit iteration limit
+        # Hit iteration limit — emit whatever the last response contained
+        if response_text and not has_agent_done(response_text):
+            clean = strip_tool_calls(response_text).strip()
+            if clean:
+                self.chat_update.emit("\n\n" + clean)
         self.chat_update.emit(
             "\n\n⚠ Reached maximum tool call limit. "
             "Here's what I found so far."

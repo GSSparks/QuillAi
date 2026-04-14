@@ -7,6 +7,7 @@ from pygments import highlight
 from pygments.lexers import get_lexer_by_name, guess_lexer, TextLexer
 from pygments.formatters import HtmlFormatter
 from pygments.util import ClassNotFound
+from PyQt6.QtCore import pyqtSlot
 import ast
 from pathlib import Path
 
