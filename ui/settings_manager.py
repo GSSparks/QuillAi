@@ -137,25 +137,21 @@ class SettingsManager:
         return self.get("active_model")
 
     def get_chat_model(self):
-        """Model for chat requests. Falls back to a sensible default per backend."""
-        explicit = self.get("chat_model")
-        if explicit:
-            return explicit
+        """Model for chat requests — backend-aware, reads correct key per backend."""
         backend = self.get_backend()
-        if backend == "openai":
-            return "gpt-4o-mini"
         if backend == "claude":
-            return "claude-sonnet-4-6"
-        return self.get("active_model")
+            return self.get("claude_chat_model") or "claude-sonnet-4-6"
+        if backend == "openai":
+            return self.get("openai_chat_model") or "gpt-4o-mini"
+        # llama / local — use active_model (the local model name field)
+        return self.get("active_model") or ""
 
     def get_inline_model(self):
-        """Model for inline completions. Prefers a fast/cheap model per backend."""
-        explicit = self.get("inline_model")
-        if explicit:
-            return explicit
+        """Model for inline completions — backend-aware, reads correct key per backend."""
         backend = self.get_backend()
-        if backend == "openai":
-            return "gpt-4o-mini"
         if backend == "claude":
-            return "claude-haiku-4-5-20251001"
-        return self.get("active_model")
+            return self.get("claude_inline_model") or "claude-haiku-4-5-20251001"
+        if backend == "openai":
+            return self.get("openai_chat_model") or "gpt-4o-mini"
+        # llama / local
+        return self.get("active_model") or ""
