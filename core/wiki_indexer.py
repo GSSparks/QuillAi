@@ -153,6 +153,14 @@ class WikiIndexer:
                                 self._mm.review_facts_for_file(rel, wiki_page)
                         except Exception as e:
                             print(f"[WikiIndexer] fact review failed for {rel}: {e}")
+                    # Extract FAQ entries from newly generated wiki page
+                    if self._faq_manager:
+                        try:
+                            wiki_page = self._wm._read_page(rel)
+                            if wiki_page:
+                                self._faq_manager.process_wiki_page_async(rel, wiki_page)
+                        except Exception as e:
+                            print(f"[WikiIndexer] faq extract failed for {rel}: {e}")
                 else:
                     print(f"[WikiIndexer] – {rel} (already current)")
             except Exception as exc:
