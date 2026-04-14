@@ -97,6 +97,7 @@ When the AI responds with code that belongs in a specific file, an apply bar app
  
 - **Single function/class** — applied instantly using AST-precise replacement. Only the target symbol is replaced; surrounding code is untouched. Works for new functions too — appended automatically if the symbol doesn't exist yet.
 - **Full file rewrite** — opens a side-by-side diff review dialog before writing anything. Accept or discard.
+- **Multi-file changes** — when the AI proposes changes across multiple files at once, a unified review dialog shows a side-by-side diff for each file. Check or uncheck individual files, review every change, then apply selected or all at once.
 - **Perl subroutines** — brace-counting replacement for `sub name { ... }` blocks.
 - **YAML, shell, config files** — full file replace with diff review.
 - **↩ Undo** — restores the previous version instantly. One level deep.
@@ -110,14 +111,12 @@ After applying, the editor reloads the file automatically. The repo map is inval
 
 The Context Debugger is a powerful tool for visualizing the AI's internal context and prompt construction in QuillAI. It provides a dockable panel that shows:
 
-- Context Tree: A structured view of the AI context, including model info, editor state, and wiki context.
-- Prompt: The exact prompt text sent to the AI model.
-Raw Context: The full JSON representation of the context.
-- Tools: A log of external tool calls made by the AI and their results.
+- **Context Tree** — a structured view of the AI context, including model info, editor state, and wiki context
+- **Prompt** — the exact prompt text sent to the AI model
+- **Raw Context** — the full JSON representation of the context
+- **Tools** — a live log of external tool calls made by the AI and their results, updating in real time as the agent works
 
 You can navigate through the history of context snapshots using the ◀ and ▶ buttons, and copy the current prompt to the clipboard for inspection or reuse.
-
-This debugger helps you understand how QuillAI builds context from your codebase and tools, making AI interactions more transparent and easier to troubleshoot.
 
 ---
 
@@ -171,7 +170,7 @@ python main.py
 ## Features
 
 ### Privacy-first AI backends
-- **🏠 Local (llama.cpp)** — FIM completions via a local llama.cpp server. Zero latency, zero cost, zero data sharing. Recommended: Qwen2.5-Coder.
+- **🏠 Local (llama.cpp / Ollama)** — FIM completions via a local llama.cpp server or any OpenAI-compatible local endpoint. Zero latency, zero cost, zero data sharing. Recommended: Qwen2.5-Coder.
 - **☁️ OpenAI / compatible** — any OpenAI-style API including OpenRouter, LM Studio, Ollama, and others
 - **🟠 Anthropic (Claude)** — native Claude API with separate models for chat and inline completions
 
@@ -190,18 +189,20 @@ plugins/features/
     └── my_feature.py    # Widget implementation
 ```
 
-Plugins communicate via a named event bus (`file_opened`, `file_saved`, `project_opened`, and more — see `EVENTS.md`). Disabling a plugin is as simple as setting `enabled = False` in its class body. The following panels are implemented as plugins:
+Plugins communicate via a named event bus (`file_opened`, `file_saved`, `project_opened`, and more — see `EVENTS.md`). Individual plugins can be enabled or disabled at runtime from **File → Settings → Plugins** without restarting. The following panels are implemented as plugins:
 
 - **Terminal** — embedded terminal dock
 - **Import Graph** — dependency graph visualization
 - **Symbol Outline** — LSP-powered class/method tree
 - **Markdown Preview** — live preview with scroll sync
+- **Code Folding** — fold/unfold functions and classes in the gutter
+- **Context Debugger** — visualize AI context and tool calls in real time
 
 ### Intent-aware inline completions
-Completions are informed by your whole session — recent chat exchanges, pinned memory facts, files you've been editing, and functions you've been working in. Ghost text appears at natural pause points. **`Tab`** to accept, **`Ctrl+Right`** for word-by-word, **`Ctrl+Space`** to trigger manually.
+Completions are informed by your whole session — recent chat exchanges, pinned memory facts, files you've been editing, and functions you've been working in. Ghost text appears at natural pause points. **`Tab`** to accept, **`Ctrl+Right`** for word-by-word, **`Ctrl+Space`** to trigger manually. For non-LSP files, **`Ctrl+Space`** opens an AI-powered completion popup with ranked suggestions.
 
 ### Project-aware AI chat
-The chat panel understands your entire project: active file and the symbol you're working in, all open tabs, direct and transitive imports (up to 3 levels deep), LSP hover docs and live diagnostics, a structural repo map of the whole codebase, your wiki knowledge base, and your memory facts. Responses stream live with syntax highlighting and markdown rendering. Code blocks have a one-click copy button.
+The chat panel understands your entire project: active file and the symbol you're working in, all open tabs, direct and transitive imports (up to 3 levels deep), LSP hover docs and live diagnostics, a structural repo map of the whole codebase, your wiki knowledge base, recent git diff context, and your memory facts. Responses stream live with syntax highlighting and markdown rendering. Code blocks have a one-click copy button.
 
 ### Wiki knowledge base
 QuillAI builds and maintains a structured Markdown wiki of your entire codebase, stored at `~/.config/quillai/wiki/<project>/`. Each source file gets its own wiki page containing a summary, key symbols table, intra-project dependencies, dependents, and architectural notes — generated by the AI and kept automatically up to date.
@@ -216,8 +217,18 @@ The wiki is injected into every AI prompt as structured context, giving the mode
 **Wiki menu** (`Wiki` in the menu bar):
 - **Update Stale Pages** (`Ctrl+Shift+U`) — triggers an immediate rescan for anything that has changed
 - **Rebuild All Pages…** — clears all hashes and regenerates every page from scratch
+- **Export FAQ → Markdown** — exports the project FAQ to a Markdown document
 
 Wiki pages are plain Markdown files — you can read them directly at `~/.config/quillai/wiki/<project>/`. An `index.md` at the top level gives a repo-level overview and module index, regenerated automatically as the wiki grows.
+
+### FAQ knowledge layer
+QuillAI automatically builds a per-project FAQ alongside the wiki — a curated, living knowledge base of how-to answers, architectural decisions, and codebase gotchas.
+
+Entries are extracted automatically from chat conversations and wiki pages, classified by type (`howto`, `concept`, `decision`, `gotcha`), and kept current: when a source file changes and its wiki page is updated, all FAQ entries referencing that file are re-evaluated by the AI and either confirmed, updated, or marked stale. Entries with low confidence are pruned automatically; manually saved entries are never touched.
+
+The FAQ is injected into every AI prompt alongside the wiki, giving the model knowledge that goes beyond file structure — the *why* behind design decisions and the *how* of common tasks.
+
+Export the full FAQ as a Markdown document via **Wiki → Export FAQ → Markdown**.
 
 ### LSP integration
 QuillAI connects to language servers automatically when installed, giving you IDE-grade code intelligence across multiple languages:
@@ -303,6 +314,7 @@ Each project remembers which files you had open and where your cursor was. Switc
 - Minimap with click-to-navigate and viewport highlight
 - Smooth scrolling with ease-out animation
 - Git blame in the gutter — toggle per-file to see commit hash and author per line
+- Code folding — fold/unfold functions, classes, and blocks from the gutter
 - Bracket match highlighting
 - Indent guides, auto-closing brackets, smart auto-indent
 - Color swatch inline for hex color values — click to open color picker
@@ -317,7 +329,7 @@ Chat and Memory live in a sliding panel on the right edge. Hover to expand, pin 
 Opens automatically when editing `.md` files. Live preview with full CommonMark support. Scroll position syncs with the editor cursor — the preview follows as you move through the document. Floatable — drag it wherever you want on screen.
 
 ### Source control (Git)
-Changed files tree, selective staging with checkboxes, inline diff viewer, commit/push/discard — plus AI-generated commit messages from your staged diff.
+Changed files tree, selective staging with checkboxes, inline diff viewer, commit/push/discard — plus AI-generated commit messages from your staged diff. Recent git diffs are automatically injected into chat context for debugging queries.
 
 ### Find & Replace / Find in Files
 - **`Ctrl+F`** — live find/replace with match count
@@ -338,8 +350,12 @@ Changed files tree, selective staging with checkboxes, inline diff viewer, commi
 ./server -m your-model.gguf --port 11434 -c 8192
 ```
 
-Then in QuillAI settings (`Ctrl+,`):
-- Server URL: `http://localhost:11434/v1/chat/completions`
+**Ollama:**
+```bash
+ollama serve
+```
+
+Then in QuillAI settings (`Ctrl+,`), set the Server URL to `http://localhost:11434/v1/chat/completions` and the model name to whichever model you have pulled (e.g. `qwen2.5-coder:7b`).
 
 **Recommended models:**
 - Chat: `Qwen2.5-Coder-32B-Q4_K_M` (32GB VRAM) or `Qwen2.5-Coder-7B-Q4_K_M` (8GB VRAM)
@@ -353,9 +369,9 @@ Open **File → Settings** (`Ctrl+,`):
 
 | Section | Setting | Description |
 |---|---|---|
-| Local LLM | Server URL | llama.cpp or compatible endpoint |
-| Local LLM | Inline model | Fast model for ghost text |
-| Local LLM | Chat model | Larger model for chat |
+| Local LLM | Server URL | llama.cpp, Ollama, or compatible endpoint |
+| Local LLM | Model name | Model identifier for chat and completions |
+| Local LLM | Context budget | Max tokens per request |
 | OpenAI | API URL | Defaults to `api.openai.com` |
 | OpenAI | API Key | `sk-...` |
 | OpenAI | Chat model | e.g. `gpt-4o` |
@@ -372,7 +388,7 @@ All settings stored locally at `~/.config/quillai/settings.json`.
 | Key | Action |
 |---|---|
 | `Ctrl+P` | Command palette |
-| `Ctrl+Space` | Trigger inline AI completion |
+| `Ctrl+Space` | Trigger inline AI completion / completion popup |
 | `Tab` | Accept full ghost text suggestion |
 | `Ctrl+Right` | Accept next word of suggestion |
 | `Ctrl+Shift+Space` | Open snippet palette |
@@ -439,16 +455,20 @@ quillai/
 ├── EVENTS.md                      # Plugin event bus reference
 ├── ai/
 │   ├── worker.py                  # AIWorker — all LLM backends and streaming
+│   ├── agent_worker.py            # AgentWorker — agentic tool-use loop
 │   ├── context_engine.py          # Context assembly — symbols, imports, LSP, repo map, wiki
 │   ├── lsp_client.py              # Generic JSON-RPC LSP client
 │   ├── lsp_manager.py             # Multi-server LSP registry and routing
 │   ├── lsp_context.py             # Formats LSP hover/diagnostics for chat context
 │   ├── repo_map.py                # AST-based structural project map (Python + Ansible)
+│   ├── tools.py                   # Agent tool definitions and execution
 │   └── embedder.py                # Embedding router (local sentence-transformers / OpenAI)
 ├── core/
 │   ├── plugin_base.py             # FeaturePlugin ABC — activate(), deactivate(), event helpers
 │   ├── plugin_manager.py          # Auto-discovery, loading, event bus, dock registry
 │   ├── events.py                  # Named constants for all plugin bus events
+│   ├── faq_manager.py             # Per-project FAQ — extraction, staleness, export
+│   ├── patch_applier.py           # AST-precise function replacement and undo
 │   ├── wiki_manager.py            # Wiki filing system — pages, hashes, dependencies, index
 │   ├── wiki_generator.py          # LLM prompt → Markdown wiki page
 │   ├── wiki_indexer.py            # Background daemon thread — crawls repo, processes stale files
@@ -471,17 +491,13 @@ quillai/
 │   │   └── perl_plugin.py
 │   ├── features/                  # Auto-discovered feature plugins
 │   │   ├── terminal/              # Embedded terminal dock (Ctrl+`)
-│   │   │   ├── main.py            #   TerminalPlugin
-│   │   │   └── terminal.py        #   TerminalDock, FallbackTerminal, QtermWidget
 │   │   ├── import_graph/          # Import dependency graph visualization
-│   │   │   ├── main.py            #   ImportGraphPlugin
-│   │   │   └── import_graph.py    #   GraphDockWidget, GraphCanvas, force simulation
 │   │   ├── symbol_outline/        # LSP-powered symbol outline panel
-│   │   │   ├── main.py            #   SymbolOutlinePlugin
-│   │   │   └── symbol_outline.py  #   SymbolOutlineDock
-│   │   └── markdown_preview/      # Live markdown preview with scroll sync
-│   │       ├── main.py            #   MarkdownPreviewPlugin
-│   │       └── markdown_preview.py #  MarkdownPreviewDock
+│   │   ├── markdown_preview/      # Live markdown preview with scroll sync
+│   │   ├── code_folding/          # Code folding in the editor gutter
+│   │   ├── context_debugger/      # AI context and tool call visualizer
+│   │   ├── pipeline_viewer/       # Visual CI/CD pipeline editor
+│   │   └── inventory_explorer/    # Ansible inventory browser
 │   └── themes/                    # Theme definitions
 │       ├── gruvbox_dark.py
 │       ├── vscode_dark.py
@@ -496,6 +512,9 @@ quillai/
 └── ui/
     ├── menu.py                    # Application menus and recent projects
     ├── chat_renderer.py           # Chat rendering, streaming, syntax highlighting
+    ├── agent_write_dialog.py      # Agent write ops confirmation
+    ├── multi_file_diff_dialog.py  # Multi-file diff review and apply
+    ├── diff_apply_dialog.py       # Single-file AI rewrite diff preview
     ├── command_palette.py         # Ctrl+P command palette
     ├── lsp_editor.py              # LspEditorMixin — hover, go-to-def, squiggles, completions
     ├── breadcrumb_bar.py          # File › class › method breadcrumb navigation
@@ -513,7 +532,6 @@ quillai/
     ├── snippet_palette.py         # Snippet palette
     ├── settings_manager.py        # Settings persistence
     ├── settings_dialog.py         # Settings UI
-    ├── diff_apply_dialog.py       # AI rewrite diff preview
     └── theme.py                   # Theme engine — stylesheet builders for all widgets
 ```
 
@@ -562,6 +580,7 @@ All user data is stored locally:
 | Sessions | `~/.config/quillai/sessions/` |
 | Snippets | `~/.config/quillai/snippets.json` |
 | Wiki knowledge base | `~/.config/quillai/wiki/` |
+| FAQ knowledge base | `~/.config/quillai/faq/` |
 | Autosave | `~/.config/quillai/autosave/` |
 
 When using a local backend, no data is transmitted anywhere. When using a cloud backend, only the content you explicitly send is transmitted to that provider — nothing else.
@@ -571,16 +590,17 @@ When using a local backend, no data is transmitted anywhere. When using a cloud 
 ## Roadmap
 
 ### Planned
-- [ ] Code folding
-- [ ] AI completion popup (Ctrl+Space for non-LSP files)
 - [ ] Drag-and-drop tabs between split panes
-- [ ] Git diff context in chat — auto-inject recent changes for debug queries
 - [ ] Terminal stderr capture — pipe last error into chat context automatically
 - [ ] Completion feedback loop — use acceptance data to influence suggestion ranking
-- [ ] Plugin settings UI — enable/disable plugins at runtime from Settings dialog
-- [ ] Wiki FAQ system — conversational knowledge layer built alongside the wiki
 
 ### Completed
+- [x] Wiki FAQ system — per-project FAQ auto-extracted from conversations and wiki pages; entries classified by type, kept current via staleness review, exported as Markdown documentation
+- [x] Plugin settings UI — enable/disable plugins at runtime from Settings dialog without restarting
+- [x] Code folding — fold/unfold functions, classes, and blocks from the gutter
+- [x] AI completion popup — `Ctrl+Space` opens ranked AI suggestions for non-LSP files
+- [x] Git diff context in chat — recent staged and unstaged diffs injected into chat context automatically for debugging queries
+- [x] Multi-file diff review — agent changes across multiple files shown in a unified side-by-side review dialog; check/uncheck individual files before applying
 - [x] Wiki knowledge base — per-project Markdown wiki auto-generated and kept current in the background; injected into every AI prompt as structured codebase context
 - [x] Plugin system — auto-discovery, event bus, dock registry; terminal, import graph, symbol outline, and markdown preview all implemented as plugins
 - [x] Split editor panes — horizontal and vertical, auto-collapse on last tab close
