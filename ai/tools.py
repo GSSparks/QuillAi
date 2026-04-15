@@ -27,13 +27,26 @@ READ TOOLS (no confirmation needed):
   <tool_call name="run_shell" command="...">Run a read-only shell command (git log, wc, etc)</tool_call>
 
 WRITE TOOLS (batched and confirmed by user at end):
-  <tool_call name="patch_file" path="..." old="..." new="...">Replace exact text in a file</tool_call>
-  <tool_call name="write_file" path="..." content="...">Write entire file content</tool_call>
+  <tool_call name="patch_file" path="..." start_line="N" end_line="M">replacement lines</tool_call>
+  <tool_call name="write_file" path="...">COMPLETE FILE CONTENT HERE — every line, no placeholders</tool_call>
   <tool_call name="shell_write" command="...">Run a write shell command (sed -i, mv, etc)</tool_call>
 
-Rules:
+FILE EDITING RULES — follow strictly:
+- ALWAYS run: run_shell command="wc -l <file>" before reading any file
+- Read the ENTIRE file before proposing any changes (use multiple read_file calls if needed)
+- For files with FEWER than 150 lines: use write_file — put the ENTIRE new file content
+  as the tag body. Every line. No summaries, no placeholders, no "rest of file unchanged".
+- For files with 150+ lines: use patch_file with start_line/end_line from the read_file output
+  - start_line and end_line are the line numbers shown in the read_file output
+  - The content between the tags replaces lines start_line through end_line inclusive
+  - Never guess line numbers — only use numbers from an actual read_file result
+- Never use patch_file with old/new string matching
+- Never reconstruct or guess file content from memory
+
+General rules:
 - Use read tools freely to investigate before proposing changes
-- Emit ALL write tool calls at the end, after investigation is complete
+- Emit ALL write tool calls immediately once investigation is complete
+- Do NOT wait for user confirmation before emitting write tools — the review dialog handles that
 - Never emit write tools mid-investigation
 - After all tool calls, provide your final answer/explanation
 - Use <agent_done/> when you have finished all tool calls and given your answer
@@ -41,6 +54,92 @@ Rules:
 
 
 # ── Tool execution ────────────────────────────────────────────────────────────
+
+# ── Write tool implementations ───────────────────────────────────────────────
+
+def _tool_patch_file_by_line(attrs: dict, root: str) -> tuple[bool, str]:
+    """
+    Replace lines start_line..end_line (1-indexed, inclusive) with new content.
+    The replacement text is the tag body (attrs["_body"]).
+    """
+    import os
+    path       = attrs.get("path", "")
+    start_line = attrs.get("start_line")
+    end_line   = attrs.get("end_line")
+    body       = attrs.get("_body", "").strip("\n")
+
+    if not path:
+        return False, "patch_file: path is required"
+    if start_line is None or end_line is None:
+        return False, "patch_file: start_line and end_line are required"
+
+    try:
+        start_line = int(start_line)
+        end_line   = int(end_line)
+    except (TypeError, ValueError):
+        return False, "patch_file: start_line and end_line must be integers"
+
+    abs_path = os.path.normpath(os.path.join(root, path))
+    if not abs_path.startswith(os.path.normpath(root)):
+        return False, "patch_file: path must be within project root"
+    if not os.path.exists(abs_path):
+        return False, f"patch_file: {path} not found"
+
+    try:
+        original_lines = open(abs_path, "r", encoding="utf-8").readlines()
+        total = len(original_lines)
+
+        if start_line < 1 or end_line > total or start_line > end_line:
+            return False, (
+                f"patch_file: line range {start_line}-{end_line} invalid "
+                f"for file with {total} lines"
+            )
+
+        # Preserve trailing newline on replacement
+        replacement = body + "\n" if body and not body.endswith("\n") else body
+        new_lines = (
+            original_lines[:start_line - 1] +
+            [replacement] +
+            original_lines[end_line:]
+        )
+        with open(abs_path, "w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+
+        return True, (
+            f"patched {path} lines {start_line}-{end_line} "
+            f"({end_line - start_line + 1} lines replaced)"
+        )
+    except Exception as e:
+        return False, f"patch_file error: {e}"
+
+
+def _tool_write_file(attrs: dict, root: str) -> tuple[bool, str]:
+    """Write complete file content."""
+    import os
+    path    = attrs.get("path", "")
+    # Prefer tag body (_body) over content attribute
+    # Also unescape literal \n in case agent used attribute form
+    content = attrs.get("_body") or attrs.get("content", "")
+    if content and "\\n" in content and "\n" not in content:
+        content = content.replace("\\n", "\n").replace("\\t", "\t")
+    from ai.worker import clean_code
+    content = clean_code(content)
+
+    if not path:
+        return False, "write_file: path is required"
+
+    abs_path = os.path.normpath(os.path.join(root, path))
+    if not abs_path.startswith(os.path.normpath(root)):
+        return False, "write_file: path must be within project root"
+
+    try:
+        from pathlib import Path as _Path
+        _Path(abs_path).parent.mkdir(parents=True, exist_ok=True)
+        _Path(abs_path).write_text(content, encoding="utf-8")
+        return True, f"wrote {path} ({len(content)} chars)"
+    except Exception as e:
+        return False, f"write_file error: {e}"
+
 
 def run_tool(name: str, attrs: dict, project_root: str, plugin_manager=None) -> tuple[bool, str]:
     """
@@ -67,7 +166,17 @@ def run_tool(name: str, attrs: dict, project_root: str, plugin_manager=None) -> 
             return _tool_find_symbol(attrs, project_root)
         elif name == "run_shell":
             return _tool_run_shell(attrs, project_root)
-        elif name in ("patch_file", "write_file", "shell_write"):
+        elif name == "patch_file":
+            if "start_line" not in attrs and "end_line" not in attrs:
+                return False, (
+                    "patch_file requires start_line and end_line attributes. "
+                    "Use run_shell wc -l to get line count, read_file to see "
+                    "line numbers, then patch_file with start_line and end_line."
+                )
+            return _tool_patch_file_by_line(attrs, project_root)
+        elif name == "write_file":
+            return _tool_write_file(attrs, project_root)
+        elif name == "shell_write":
             return True, "queued"
         else:
             return False, f"Unknown tool: {name}"
@@ -171,9 +280,10 @@ def _tool_read_file(attrs: dict, root: str) -> tuple[bool, str]:
         start = max(1, start)
         end   = min(len(lines), end or len(lines))
 
-        # Cap at 200 lines per read
-        if end - start > 200:
-            end = start + 200
+        # No hard cap — agent controls chunking via start/end
+        # Soft cap at 300 lines to avoid flooding context
+        if end - start > 300:
+            end = start + 300
 
         selected = lines[start-1:end]
         numbered = "".join(f"{start+i:4d}  {l}" for i, l in enumerate(selected))
@@ -282,6 +392,10 @@ _RE_TOOL_CALL = re.compile(
     r'<tool_call\s+([^>]*?)(?:/>|>(.*?)</tool_call>)',
     re.DOTALL,
 )
+_RE_TOOL_CALL_SELF = re.compile(
+    r'<tool_call\s([^>]*?)/>',
+    re.DOTALL,
+)
 
 _RE_AGENT_DONE = re.compile(r'<agent_done\s*/>', re.IGNORECASE)
 
@@ -301,13 +415,16 @@ def parse_tool_calls(text: str) -> list[dict]:
             continue
         # Content inside tag overrides attribute with same name
         if content:
-            # Use content as the primary value for relevant attrs
             if name == "grep":
                 attrs.setdefault("pattern", content)
-            elif name in ("read_file", "find_files", "find_symbol",
-                          "write_file", "patch_file"):
-                if "content" not in attrs and name == "write_file":
+            elif name == "write_file":
+                # Prefer tag body over content attribute
+                attrs["_body"] = content
+                if "content" not in attrs:
                     attrs["content"] = content
+            elif name == "patch_file":
+                # Tag body is the replacement content for the line range
+                attrs["_body"] = content
         results.append({"name": name, "attrs": attrs})
     return results
 

@@ -158,9 +158,12 @@ class WikiIndexer:
                         try:
                             wiki_page = self._wm._read_page(rel)
                             if wiki_page:
+                                # Extract new entries from fresh wiki page
                                 self._faq_manager.process_wiki_page_async(rel, wiki_page)
+                                # Review existing entries for staleness
+                                self._faq_manager.review_faq_for_file(rel, wiki_page)
                         except Exception as e:
-                            print(f"[WikiIndexer] faq extract failed for {rel}: {e}")
+                            print(f"[WikiIndexer] faq failed for {rel}: {e}")
                 else:
                     print(f"[WikiIndexer] – {rel} (already current)")
             except Exception as exc:

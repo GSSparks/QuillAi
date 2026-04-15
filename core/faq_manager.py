@@ -9,15 +9,42 @@ Storage: ~/.config/quillai/faq/<project_name>_<hash>.json
 
 Each entry:
 {
-    "id":        "uuid4",
-    "question":  "How do I add a new plugin?",
-    "answer":    "Create a folder under plugins/features/...",
-    "tags":      ["plugin", "architecture"],
-    "source":    "conversation|manual|wiki",
-    "created":   "2026-04-09",
-    "updated":   "2026-04-09",
-    "use_count": 3
+    "id":           "uuid4[:8]",
+    "question":     "How do I add a new plugin?",
+    "answer":       "Create a folder under plugins/features/...",
+    "type":         "howto|concept|decision|gotcha",
+    "tags":         ["plugin", "architecture"],
+    "source":       "conversation|manual|wiki",
+    "source_files": ["plugins/features/context_debugger/main.py"],
+    "source_commit": "a3f2c1d",
+    "created":      "2026-04-09",
+    "updated":      "2026-04-09",
+    "use_count":    3,
+    "confidence":   1.0,
+    "stale":        false
 }
+
+Entry types
+-----------
+howto      "How do I add/create/implement X?"
+concept    "How does X work?" / "What is X?"
+decision   "Why does X work this way?"
+gotcha     "Watch out for X" / common traps and non-obvious constraints
+
+Staleness
+---------
+When a source file changes (detected by WikiIndexer), all FAQ entries
+that reference that file are re-evaluated against the new wiki page.
+Entries that are no longer accurate get confidence lowered; entries
+below 0.3 confidence are pruned on next save. Manual entries are
+never auto-pruned.
+
+Pruning priority (when over MAX_FAQ)
+-------------------------------------
+1. stale=True, source != manual
+2. confidence < 0.5, source != manual
+3. lowest use_count
+4. oldest updated date
 """
 
 from __future__ import annotations
@@ -26,6 +53,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import threading
 import uuid
 from datetime import date
@@ -36,13 +64,21 @@ from PyQt6.QtCore import QObject, pyqtSignal as _pyqtSignal
 
 
 FAQ_DIR = os.path.join(os.path.expanduser("~"), ".config", "quillai", "faq")
-MAX_FAQ  = 200
+MAX_FAQ  = 500   # higher cap — smart pruning handles quality control
+
+# Entry types
+ENTRY_TYPES = ("howto", "concept", "decision", "gotcha")
+
+# Confidence thresholds
+CONF_PRUNE    = 0.25   # entries below this get pruned on next save
+CONF_STALE    = 0.45   # entries below this get marked stale
+CONF_DECAY    = 0.20   # how much confidence drops when source file changes
 
 
 # ── Signals ───────────────────────────────────────────────────────────────────
 
 class _FAQSignals(QObject):
-    faq_changed = _pyqtSignal()   # any entry added/removed/updated
+    faq_changed = _pyqtSignal()
 
     _instance = None
 
@@ -59,25 +95,27 @@ faq_signals = _FAQSignals.instance()
 # ── LLM prompts ───────────────────────────────────────────────────────────────
 
 _EXTRACT_FAQ_PROMPT = """\
-Analyze this conversation exchange and determine if it contains a clear
-how-to answer worth saving as a FAQ entry for this codebase.
+Analyze this conversation exchange and determine if it contains knowledge
+worth saving as a FAQ entry for this specific codebase.
 
-A good FAQ entry answers questions like:
-- "How do I add/create/implement X?"
-- "Why does X work this way?"
-- "What is the pattern for X?"
-- "Where does X live in the codebase?"
+Entry types:
+- "howto"    : procedural — "How do I add/create/implement X?"
+- "concept"  : architectural — "How does X work?" / "What is X?"
+- "decision" : rationale — "Why does X work this way?"
+- "gotcha"   : trap or non-obvious constraint — "Watch out for X"
 
 Rules:
-- Only extract if there is a clear, reusable question AND a substantive answer
-- The answer must be specific to THIS codebase, not generic programming advice
-- Phrase the question as someone would naturally ask it
+- Only extract if there is a CLEAR, REUSABLE question AND a substantive answer
+- The answer must be SPECIFIC TO THIS CODEBASE, not generic programming advice
+- Phrase the question as a developer would naturally ask it
 - Keep the answer concise but complete (2-10 sentences or steps)
-- Extract tags (1-4 keywords) describing the topic
+- Extract 1-4 lowercase keyword tags
+- List specific source FILES the answer is about (relative file paths like "plugins/languages/python_plugin.py", not directories, or [] if none)
 - If nothing is worth saving, return null
 
 Return ONLY valid JSON, no markdown, no explanation:
-{{"question": "...", "answer": "...", "tags": ["tag1", "tag2"]}}
+{{"question": "...", "answer": "...", "type": "howto|concept|decision|gotcha", \
+"tags": ["tag1"], "source_files": ["path/to/file.py"]}}
 OR: null
 
 USER: {user_text}
@@ -85,44 +123,122 @@ ASSISTANT: {ai_response}
 """
 
 _WIKI_FAQ_PROMPT = """\
-Analyze this wiki page for a source file and extract any FAQ-worthy
-how-to knowledge that a developer working with this codebase would find useful.
+Analyze this wiki page for a source file and extract FAQ-worthy knowledge
+that a developer working on this codebase would find useful.
 
-Focus on:
-- Non-obvious patterns or conventions used in this file
-- How to extend or modify this component
-- Common pitfalls or design decisions worth knowing
-- Integration points with other parts of the system
+Entry types:
+- "howto"    : how to extend, modify, or use this component
+- "concept"  : how this component works, its design, its role
+- "decision" : why design choices were made
+- "gotcha"   : non-obvious constraints, traps, required patterns
 
 Rules:
-- Only extract genuinely useful, non-obvious knowledge
+- Only extract genuinely useful, NON-OBVIOUS knowledge
+- Skip things that are obvious from reading the code
 - Phrase as natural questions a developer would ask
 - Keep answers concise (2-8 sentences)
-- Extract 1-4 tags per entry
-- Return empty list if nothing worth saving
+- Extract 1-4 lowercase tags per entry
+- source_files should always include the file this wiki page documents
+- Return empty list [] if nothing worth saving
 
 Return ONLY valid JSON array, no markdown:
-[{{"question": "...", "answer": "...", "tags": ["tag1"]}}]
+[{{"question": "...", "answer": "...", "type": "howto|concept|decision|gotcha", \
+"tags": ["tag1"], "source_files": ["{source_rel}"]}}]
 """
 
 _DEDUP_PROMPT = """\
 A new FAQ entry candidate needs to be checked against existing entries.
 
 Candidate:
+  Type: {entry_type}
   Q: {question}
   A: {answer}
 
-Existing entries:
+Existing entries (index: question | first 150 chars of answer):
 {existing}
 
-Decide:
-- "keep"      : genuinely new, not covered by any existing entry
-- "duplicate" : an existing entry already covers this
-- "update:N"  : the candidate is better/more complete than entry N — replace it
+Determine:
+- "keep"      : genuinely new knowledge not covered by any existing entry
+- "duplicate" : an existing entry already covers this well enough
+- "update:N"  : the candidate is more accurate/complete than entry N — replace it
 
-Return ONLY valid JSON:
-{{"action": "keep|duplicate|update", "index": null}}
+Be strict: only mark "duplicate" if the existing entry would answer the same
+question equally well. If the candidate has meaningfully different or more
+specific information, choose "keep" or "update".
+
+Return ONLY valid JSON, no markdown:
+{{"action": "keep|duplicate|update", "index": null_or_integer}}
 """
+
+_STALENESS_PROMPT = """\
+A source file has been updated. Review this FAQ entry and determine if it
+is still accurate given the new wiki page for that file.
+
+FAQ Entry:
+  Q: {question}
+  A: {answer}
+
+Updated wiki page for {source_file}:
+{wiki_text}
+
+Determine:
+- "valid"    : the answer is still accurate
+- "outdated" : the answer is no longer accurate or misleading
+- "update"   : the answer is mostly right but needs updating — provide new answer
+
+Return ONLY valid JSON, no markdown:
+{{"status": "valid|outdated|update", "new_answer": null_or_string}}
+"""
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _git_commit(project_path: str) -> str:
+    """Return short HEAD commit hash, or empty string if not a git repo."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=project_path,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _smart_prune(entries: list[dict], limit: int) -> list[dict]:
+    """
+    Prune entries down to `limit` using priority order:
+    1. Remove stale non-manual entries first
+    2. Remove low-confidence non-manual entries
+    3. Remove lowest use_count
+    4. Remove oldest updated
+    Manual entries are never auto-pruned.
+    """
+    if len(entries) <= limit:
+        return entries
+
+    def sort_key(e):
+        is_manual   = e.get("source") == "manual"
+        is_stale    = e.get("stale", False)
+        confidence  = e.get("confidence", 1.0)
+        use_count   = e.get("use_count", 0)
+        updated     = e.get("updated", "2000-01-01")
+        # Manual entries score highest (never pruned)
+        # Others: stale=bad, low confidence=bad, low use=bad, old=bad
+        return (
+            is_manual,        # True sorts last (kept)
+            not is_stale,     # stale=True sorts first (pruned first)
+            confidence,       # low confidence pruned before high
+            use_count,        # low use_count pruned before high
+            updated,          # old entries pruned before recent
+        )
+
+    entries.sort(key=sort_key)
+    # Keep the top `limit` entries (highest scores)
+    return entries[-limit:]
 
 
 # ── FAQManager ────────────────────────────────────────────────────────────────
@@ -151,20 +267,39 @@ class FAQManager:
         if path and os.path.exists(path):
             try:
                 with open(path, "r", encoding="utf-8") as f:
-                    self._entries = json.load(f)
+                    raw = json.load(f)
+                self._entries = [self._migrate_entry(e) for e in raw]
             except Exception:
                 self._entries = []
+
+    def _migrate_entry(self, e: dict) -> dict:
+        """Ensure older entries have all new fields with safe defaults."""
+        e.setdefault("type",         "howto")
+        e.setdefault("source_files", [])
+        e.setdefault("source_commit","")
+        e.setdefault("confidence",   1.0)
+        e.setdefault("stale",        False)
+        e.setdefault("use_count",    0)
+        return e
 
     def _save(self):
         path = self._faq_file()
         if not path:
             return
         with self._lock:
+            # Prune before saving
+            self._entries = _smart_prune(self._entries, MAX_FAQ)
+            # Remove entries below confidence threshold (non-manual only)
+            self._entries = [
+                e for e in self._entries
+                if e.get("source") == "manual"
+                or e.get("confidence", 1.0) >= CONF_PRUNE
+            ]
             try:
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump(self._entries, f, indent=2)
-            except Exception as e:
-                print(f"[FAQManager] save failed: {e}")
+            except Exception as ex:
+                print(f"[FAQManager] save failed: {ex}")
 
     def set_project(self, project_path: str):
         self.project_path = project_path
@@ -179,7 +314,7 @@ class FAQManager:
             return ""
         try:
             return self.llm_fn(prompt).strip()
-        except Exception as e:
+        except Exception:
             return ""
 
     def _parse_json(self, text: str):
@@ -192,17 +327,23 @@ class FAQManager:
 
     # ── Deduplication ─────────────────────────────────────────────────────
 
-    def _deduplicate(self, question: str, answer: str) -> tuple[str, int]:
+    def _deduplicate(self, question: str, answer: str,
+                     entry_type: str = "howto") -> tuple[str, int]:
         """Returns ('keep'|'duplicate'|'update', index)."""
         if not self._entries or not self.llm_fn:
             return "keep", -1
 
+        # Build richer comparison: question + answer preview
         existing = "\n".join(
-            f"  [{i}] Q: {e['question'][:80]}"
-            for i, e in enumerate(self._entries[:20])
+            f"  [{i}] {e.get('type','?')} | {e['question'][:80]} | "
+            f"{e['answer'][:150]}"
+            for i, e in enumerate(self._entries[:30])
         )
         prompt = _DEDUP_PROMPT.format(
-            question=question, answer=answer, existing=existing
+            entry_type=entry_type,
+            question=question,
+            answer=answer,
+            existing=existing,
         )
         raw  = self._call_llm(prompt)
         data = self._parse_json(raw)
@@ -211,13 +352,26 @@ class FAQManager:
 
         action = data.get("action", "keep")
         idx    = data.get("index")
+        # Normalise "update:N" style responses
+        if isinstance(action, str) and action.startswith("update"):
+            parts = action.split(":")
+            if len(parts) == 2 and parts[1].isdigit():
+                idx = int(parts[1])
+            action = "update"
         return action, (idx if isinstance(idx, int) else -1)
 
     # ── Public API ────────────────────────────────────────────────────────
 
-    def add_entry(self, question: str, answer: str,
-                  tags: list = None, source: str = "manual",
-                  deduplicate: bool = True) -> bool:
+    def add_entry(
+        self,
+        question:     str,
+        answer:       str,
+        tags:         list        = None,
+        source:       str         = "manual",
+        entry_type:   str         = "howto",
+        source_files: list        = None,
+        deduplicate:  bool        = True,
+    ) -> bool:
         """
         Add a FAQ entry. Runs deduplication if llm_fn is set.
         Returns True if entry was added/updated.
@@ -226,41 +380,48 @@ class FAQManager:
         answer   = answer.strip()
         if not question or not answer:
             return False
+        if entry_type not in ENTRY_TYPES:
+            entry_type = "howto"
+
+        commit = _git_commit(self.project_path) if self.project_path else ""
 
         if deduplicate:
-            action, idx = self._deduplicate(question, answer)
+            action, idx = self._deduplicate(question, answer, entry_type)
             if action == "duplicate":
                 return False
-            if action == "update" and idx >= 0 and idx < len(self._entries):
+            if action == "update" and 0 <= idx < len(self._entries):
                 self._entries[idx].update({
-                    "question": question,
-                    "answer":   answer,
-                    "tags":     tags or [],
-                    "updated":  date.today().isoformat(),
-                    "source":   source,
+                    "question":      question,
+                    "answer":        answer,
+                    "tags":          tags or [],
+                    "type":          entry_type,
+                    "updated":       date.today().isoformat(),
+                    "source":        source,
+                    "source_files":  source_files or [],
+                    "source_commit": commit,
+                    "confidence":    1.0,
+                    "stale":         False,
                 })
                 self._save()
                 faq_signals.faq_changed.emit()
                 return True
 
         entry = {
-            "id":        str(uuid.uuid4())[:8],
-            "question":  question,
-            "answer":    answer,
-            "tags":      tags or [],
-            "source":    source,
-            "created":   date.today().isoformat(),
-            "updated":   date.today().isoformat(),
-            "use_count": 0,
+            "id":            str(uuid.uuid4())[:8],
+            "question":      question,
+            "answer":        answer,
+            "type":          entry_type,
+            "tags":          tags or [],
+            "source":        source,
+            "source_files":  source_files or [],
+            "source_commit": commit,
+            "created":       date.today().isoformat(),
+            "updated":       date.today().isoformat(),
+            "use_count":     0,
+            "confidence":    1.0,
+            "stale":         False,
         }
         self._entries.append(entry)
-
-        # Prune if over limit
-        if len(self._entries) > MAX_FAQ:
-            # Keep highest use_count entries
-            self._entries.sort(key=lambda e: e.get("use_count", 0), reverse=True)
-            self._entries = self._entries[:MAX_FAQ]
-
         self._save()
         faq_signals.faq_changed.emit()
         return True
@@ -271,13 +432,17 @@ class FAQManager:
         faq_signals.faq_changed.emit()
 
     def update_entry(self, entry_id: str, question: str = None,
-                     answer: str = None, tags: list = None):
+                     answer: str = None, tags: list = None,
+                     entry_type: str = None):
         for e in self._entries:
             if e.get("id") == entry_id:
-                if question: e["question"] = question.strip()
-                if answer:   e["answer"]   = answer.strip()
-                if tags is not None: e["tags"] = tags
-                e["updated"] = date.today().isoformat()
+                if question:    e["question"]  = question.strip()
+                if answer:      e["answer"]    = answer.strip()
+                if tags is not None:  e["tags"] = tags
+                if entry_type:  e["type"]      = entry_type
+                e["updated"]    = date.today().isoformat()
+                e["stale"]      = False
+                e["confidence"] = 1.0
                 break
         self._save()
         faq_signals.faq_changed.emit()
@@ -286,23 +451,29 @@ class FAQManager:
         return list(self._entries)
 
     def search(self, query: str, limit: int = 5) -> list[dict]:
-        """Return entries matching query by keyword overlap."""
+        """Return entries matching query by keyword overlap, weighted by confidence."""
         q_words = set(re.findall(r"\w+", query.lower()))
         if not q_words:
             return []
 
         scored = []
         for entry in self._entries:
-            text  = (entry["question"] + " " + entry["answer"] + " " +
-                     " ".join(entry.get("tags", []))).lower()
+            if entry.get("stale") and entry.get("confidence", 1.0) < CONF_STALE:
+                continue   # skip low-confidence stale entries from context
+            text  = (
+                entry["question"] + " " +
+                entry["answer"]   + " " +
+                " ".join(entry.get("tags", []))
+            ).lower()
             score = sum(1 for w in q_words if w in text)
+            score *= entry.get("confidence", 1.0)   # weight by confidence
             if score > 0:
                 scored.append((score, entry))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         results = [e for _, e in scored[:limit]]
 
-        # Increment use_count for returned entries
+        # Increment use_count
         ids = {e["id"] for e in results}
         for entry in self._entries:
             if entry.get("id") in ids:
@@ -314,23 +485,82 @@ class FAQManager:
 
     def build_context(self, query: str, max_chars: int = 2000) -> str:
         """Build a context string of relevant FAQ entries for injection."""
-        matches = self.search(query, limit=3)
+        matches = self.search(query, limit=5)
         if not matches:
             return ""
 
         parts = ["[FAQ — Codebase Knowledge]"]
         used  = 0
         for entry in matches:
-            block = (
-                f"Q: {entry['question']}\n"
-                f"A: {entry['answer']}"
-            )
+            block = f"Q: {entry['question']}\nA: {entry['answer']}"
             if used + len(block) > max_chars:
                 break
             parts.append(block)
             used += len(block)
 
         return "\n\n".join(parts) if len(parts) > 1 else ""
+
+    # ── Staleness review ──────────────────────────────────────────────────
+
+    def review_faq_for_file(self, source_rel: str, wiki_text: str):
+        """
+        Called by WikiIndexer after a file's wiki page is updated.
+        Re-evaluates all FAQ entries that reference source_rel.
+        Runs synchronously (called from WikiIndexer's background thread).
+        """
+        affected = [
+            e for e in self._entries
+            if source_rel in e.get("source_files", [])
+            and e.get("source") != "manual"
+        ]
+        if not affected:
+            return
+
+        for entry in affected:
+            self._review_single_entry(entry, source_rel, wiki_text)
+
+        self._save()
+        faq_signals.faq_changed.emit()
+
+    def _review_single_entry(self, entry: dict, source_file: str,
+                              wiki_text: str):
+        """Re-evaluate one entry against an updated wiki page."""
+        if not self.llm_fn:
+            # No LLM — just decay confidence and mark stale
+            entry["confidence"] = max(0.0, entry.get("confidence", 1.0) - CONF_DECAY)
+            entry["stale"]      = entry["confidence"] < CONF_STALE
+            return
+
+        prompt = _STALENESS_PROMPT.format(
+            question=entry["question"],
+            answer=entry["answer"],
+            source_file=source_file,
+            wiki_text=wiki_text[:3000],
+        )
+        raw  = self._call_llm(prompt)
+        data = self._parse_json(raw)
+        if not isinstance(data, dict):
+            return
+
+        status     = data.get("status", "valid")
+        new_answer = data.get("new_answer")
+
+        if status == "valid":
+            # Reinforce confidence slightly
+            entry["confidence"] = min(1.0, entry.get("confidence", 1.0) + 0.05)
+            entry["stale"]      = False
+
+        elif status == "outdated":
+            entry["confidence"] = max(0.0, entry.get("confidence", 1.0) - CONF_DECAY)
+            entry["stale"]      = True
+            entry["updated"]    = date.today().isoformat()
+
+        elif status == "update" and new_answer:
+            entry["answer"]        = new_answer.strip()
+            entry["confidence"]    = 0.85   # slightly below 1.0 — LLM-updated
+            entry["stale"]         = False
+            entry["updated"]       = date.today().isoformat()
+            entry["source_commit"] = _git_commit(self.project_path or "")
 
     # ── Async extraction from conversations ──────────────────────────────
 
@@ -350,18 +580,21 @@ class FAQManager:
             ai_response=ai_response[:3000],
         )
         raw  = self._call_llm(prompt)
-        if not raw or raw.lower() == "null":
+        if not raw or raw.lower().strip() == "null":
             return
         data = self._parse_json(raw)
         if not isinstance(data, dict):
             return
-        q = data.get("question", "").strip()
-        a = data.get("answer",   "").strip()
-        t = data.get("tags",     [])
+        q  = data.get("question",     "").strip()
+        a  = data.get("answer",       "").strip()
+        t  = data.get("tags",         [])
+        et = data.get("type",         "howto")
+        sf = data.get("source_files", [])
         if q and a:
-            self.add_entry(q, a, tags=t, source="conversation")
+            self.add_entry(q, a, tags=t, source="conversation",
+                           entry_type=et, source_files=sf)
 
-    # ── Extraction from wiki pages ────────────────────────────────────────
+    # ── Async extraction from wiki pages ─────────────────────────────────
 
     def process_wiki_page_async(self, source_rel: str, wiki_text: str):
         """Extract FAQ entries from a newly generated wiki page."""
@@ -374,11 +607,8 @@ class FAQManager:
         ).start()
 
     def _extract_from_wiki(self, source_rel: str, wiki_text: str):
-        # Only process files with substantial Notes or architectural content
-        if "## Notes" not in wiki_text and "## Architecture" not in wiki_text:
-            return
-
-        prompt = _WIKI_FAQ_PROMPT + f"\n\nSOURCE: {source_rel}\n\n{wiki_text[:4000]}"
+        prompt = _WIKI_FAQ_PROMPT.replace("{source_rel}", source_rel)
+        prompt += f"\n\nSOURCE: {source_rel}\n\n{wiki_text[:4000]}"
         raw  = self._call_llm(prompt)
         data = self._parse_json(raw)
         if not isinstance(data, list):
@@ -386,8 +616,116 @@ class FAQManager:
         for item in data:
             if not isinstance(item, dict):
                 continue
-            q = item.get("question", "").strip()
-            a = item.get("answer",   "").strip()
-            t = item.get("tags",     [])
+            q  = item.get("question",     "").strip()
+            a  = item.get("answer",       "").strip()
+            t  = item.get("tags",         [])
+            et = item.get("type",         "howto")
+            sf = item.get("source_files", [source_rel])
             if q and a:
-                self.add_entry(q, a, tags=t, source="wiki")
+                self.add_entry(q, a, tags=t, source="wiki",
+                               entry_type=et, source_files=sf)
+
+    # ── Markdown export ───────────────────────────────────────────────────
+
+    def export_markdown(self, output_path: str = None) -> str:
+        """
+        Export all non-stale FAQ entries as a Markdown document.
+        Groups entries by type. Returns the markdown string and
+        optionally writes to output_path.
+        """
+        today    = date.today().isoformat()
+        project  = os.path.basename(
+            (self.project_path or "").rstrip("/\\")
+        ) or "Project"
+
+        sections = {
+            "howto":    ("🛠️ How-To", []),
+            "concept":  ("🧠 Concepts & Architecture", []),
+            "decision": ("🤔 Design Decisions", []),
+            "gotcha":   ("⚠️ Gotchas & Traps", []),
+        }
+
+        for entry in sorted(self._entries,
+                            key=lambda e: e.get("use_count", 0), reverse=True):
+            if entry.get("stale") and entry.get("confidence", 1.0) < CONF_STALE:
+                continue  # skip low-confidence stale entries from docs
+            et = entry.get("type", "howto")
+            if et in sections:
+                sections[et][1].append(entry)
+
+        lines = [
+            f"# {project} — Developer FAQ",
+            f"",
+            f"> Auto-generated by QuillAI on {today}.  ",
+            f"> Entries are extracted from conversations, wiki pages, and manual saves.",
+            f"",
+            f"---",
+            f"",
+        ]
+
+        # Table of contents
+        lines.append("## Contents\n")
+        for et, (heading, entries) in sections.items():
+            if entries:
+                anchor = heading.lower()
+                anchor = re.sub(r"[^\w\s-]", "", anchor)
+                anchor = re.sub(r"\s+", "-", anchor.strip())
+                lines.append(f"- [{heading}](#{anchor}) ({len(entries)} entries)")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+        for et, (heading, entries) in sections.items():
+            if not entries:
+                continue
+
+            lines.append(f"## {heading}")
+            lines.append("")
+
+            for entry in entries:
+                lines.append(f"### {entry['question']}")
+                lines.append("")
+                lines.append(entry["answer"])
+                lines.append("")
+
+                # Metadata footer
+                meta = []
+                if entry.get("tags"):
+                    meta.append("**Tags:** " + ", ".join(
+                        f"`{t}`" for t in entry["tags"]
+                    ))
+                if entry.get("source_files"):
+                    files = ", ".join(
+                        f"`{f}`" for f in entry["source_files"]
+                    )
+                    meta.append(f"**Source:** {files}")
+                conf = entry.get("confidence", 1.0)
+                if conf < 0.9:
+                    meta.append(f"**Confidence:** {conf:.0%}")
+                if entry.get("stale"):
+                    meta.append("⚠️ *may be outdated*")
+
+                if meta:
+                    lines.append("  \n".join(meta))
+                    lines.append("")
+
+                lines.append("---")
+                lines.append("")
+
+        md = "\n".join(lines)
+
+        if output_path:
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_path).write_text(md, encoding="utf-8")
+            print(f"[FAQManager] exported {len(self._entries)} entries → {output_path}")
+
+        return md
+
+    def export_markdown_default(self) -> Optional[str]:
+        """Export to ~/.config/quillai/faq/<project>_faq.md"""
+        if not self.project_path:
+            return None
+        name = os.path.basename(self.project_path.rstrip("/\\"))
+        h    = hashlib.md5(self.project_path.encode()).hexdigest()[:8]
+        path = os.path.join(FAQ_DIR, f"{name}_{h}_faq.md")
+        return self.export_markdown(path)

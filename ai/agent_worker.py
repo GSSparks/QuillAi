@@ -26,20 +26,31 @@ import re
 import requests
 from PyQt6.QtCore import QObject, pyqtSignal
 
+import re as _re
 from ai.tools import (
     TOOL_DEFINITIONS, run_tool, is_write_tool,
     describe_tool_call, parse_tool_calls,
     has_agent_done, strip_tool_calls,
 )
 
+# Strip <file_change> tags from agent responses — write_ops handles those
+_RE_FILE_CHANGE = _re.compile(
+    r'<file_change\s[^>]*>.*?</file_change>',
+    _re.DOTALL,
+)
+
+def _strip_file_changes(text: str) -> str:
+    return _RE_FILE_CHANGE.sub("", text).strip()
+
 MAX_ITERATIONS = 20
 
 
 class AgentWorker(QObject):
-    chat_update  = pyqtSignal(str)
-    tool_status  = pyqtSignal(str)   # emits HTML for status panel
-    write_ops    = pyqtSignal(list)  # emits pending write ops
-    finished     = pyqtSignal()
+    chat_update   = pyqtSignal(str)
+    tool_status   = pyqtSignal(str)   # emits HTML for status panel
+    write_ops     = pyqtSignal(list)  # emits pending write ops
+    history_ready = pyqtSignal(list)  # emits final messages for next turn
+    finished      = pyqtSignal()
 
     def __init__(
         self,
@@ -53,6 +64,7 @@ class AgentWorker(QObject):
         repo_map=None,
         settings_manager=None,
         plugin_manager=None,
+        prior_messages: list = None,  # conversation history from previous agent turn
     ):
         super().__init__()
         self.user_text    = user_text
@@ -62,10 +74,11 @@ class AgentWorker(QObject):
         self.api_url      = api_url.rstrip("/")
         self.api_key      = api_key
         self.backend      = backend.lower()
-        self.repo_map         = repo_map
+        self.repo_map          = repo_map
         self._settings_manager = settings_manager
-        self.plugin_manager = plugin_manager
+        self.plugin_manager    = plugin_manager
         self._cancelled        = False
+        self._prior_messages   = prior_messages or []
         self._tool_log    = []   # [(name, description, result_summary), ...]
         self._write_queue = []   # [{name, attrs, description}, ...]
 
@@ -84,9 +97,10 @@ class AgentWorker(QObject):
 
     def _agent_loop(self):
         system = self._build_system_prompt()
-        messages = [
-            {"role": "user", "content": self._build_user_message()}
-        ]
+        # Seed with prior conversation history, then append new user turn
+        # Keep last 10 messages to avoid context explosion
+        messages = list(self._prior_messages[-10:]) if self._prior_messages else []
+        messages.append({"role": "user", "content": self._build_user_message()})
 
         seen_calls: dict = {}  # call_key -> attempt count
         no_tool_streak: int = 0  # consecutive iterations with no new tool calls
@@ -166,7 +180,7 @@ class AgentWorker(QObject):
                 if no_tool_streak >= 2:
                     clean = strip_tool_calls(response_text)
                     if clean:
-                        self.chat_update.emit(clean)
+                        self.chat_update.emit(_strip_file_changes(clean))
                     if self._write_queue:
                         self.write_ops.emit(self._write_queue)
                     self._emit_status_panel(done=True)
@@ -200,7 +214,7 @@ class AgentWorker(QObject):
             if done or not read_calls:
                 clean = strip_tool_calls(response_text)
                 if clean:
-                    self.chat_update.emit(clean)
+                    self.chat_update.emit(_strip_file_changes(clean))
 
                 # Emit write ops for confirmation if any
                 if self._write_queue:
@@ -208,6 +222,7 @@ class AgentWorker(QObject):
 
                 # Finalize status panel
                 self._emit_status_panel(done=True)
+                self.history_ready.emit(messages)
                 return
 
         # Hit iteration limit — emit whatever the last response contained
@@ -220,6 +235,7 @@ class AgentWorker(QObject):
             "Here's what I found so far."
         )
         self._emit_status_panel(done=True)
+        self.history_ready.emit(messages)
 
     # ── Model call ────────────────────────────────────────────────────────
 
@@ -290,10 +306,21 @@ class AgentWorker(QObject):
             "You can investigate the codebase using tools before answering. "
             "Use tools to look up symbols, read files, and search for patterns. "
             "\n\n"
-            "patch_file RULE: The 'old' attribute MUST be copied verbatim "
-            "from a read_file result — exact whitespace, exact indentation. "
-            "Never guess or reconstruct the old text from memory. "
-            "If you haven't read the file yet, read it first. "
+            "INVESTIGATION RULES:\n"
+            "- ANY request to add, modify, fix, or implement features in the codebase "
+            "REQUIRES reading the relevant files first — no exceptions. "
+            "- Never propose code changes without reading the actual current file content. "
+            "- Never use placeholders like '# ... existing code ...' or 'pass' in write_file content. "
+            "- Always write complete, literal file content when using write_file. "
+            "\n\n"
+            "FILE EDITING RULES (strictly enforced):\n"
+            "1. Run: run_shell command='wc -l <file>' before reading any file.\n"
+            "2. Read the ENTIRE file before proposing changes.\n"
+            "3. Files < 150 lines: use write_file with complete new content.\n"
+            "4. Files >= 150 lines: use patch_file with start_line and end_line.\n"
+            "   - Use ONLY line numbers from an actual read_file result.\n"
+            "   - The tag body is the replacement content for those lines.\n"
+            "5. NEVER guess line numbers or reconstruct code from memory.\n"
             "\n\n"
             "STOP RULES — follow these strictly:\n"
             "1. As soon as you have enough information to answer, STOP calling tools "
@@ -308,8 +335,6 @@ class AgentWorker(QObject):
             "\n\n"
             "WRITE RULES:\n"
             "- Emit write tool calls only after investigation is complete. "
-            "- When user confirms with 'yes', 'ok', 'proceed' — immediately emit "
-            "write tool calls without re-investigating. "
             "\n\n"
             + TOOL_DEFINITIONS
         )
@@ -336,7 +361,7 @@ class AgentWorker(QObject):
 
         if self._write_queue:
             rows.append("")
-            rows.append(f"✏️ {len(self._write_queue)} write operation(s) pending confirmation")
+            rows.append(f"✏️ {len(self._write_queue)} write operation(s) ready to review")
 
         count   = len(self._tool_log)
         summary = f"✓ {count} tool call{'s' if count != 1 else ''}" if done else f"⟳ {count} tool call{'s' if count != 1 else ''}..."

@@ -29,7 +29,8 @@ _undo_stack: dict[str, str] = {}
 # ---------------------------------------------------------------------------
 
 def apply_function(file_path: str, new_source: str,
-                   parent_widget=None) -> tuple[bool, str]:
+                   parent_widget=None,
+                   skip_dialog: bool = False) -> tuple[bool, str]:
     """
     Replace the first function or class in *new_source* that exists in
     *file_path*, using AST to locate the exact line range.
@@ -47,6 +48,8 @@ def apply_function(file_path: str, new_source: str,
         return False, f"Could not read {file_path}: {e}"
 
     # Find the name of the top-level symbol in new_source
+    from ai.worker import clean_code
+    new_source = clean_code(new_source)
     sym_name = _top_level_name(new_source)
     if not sym_name:
         return False, "Could not identify a function or class in the provided code."
@@ -119,17 +122,18 @@ def apply_function(file_path: str, new_source: str,
 
 
 def apply_full(file_path: str, new_source: str,
-               parent_widget=None) -> tuple[bool, str]:
+               parent_widget=None,
+               skip_dialog: bool = False) -> tuple[bool, str]:
     """
-    Show DiffApplyDialog for *file_path* vs *new_source*.
-    Writes the file if accepted.
+    Write new_source to file_path.
+    Shows DiffApplyDialog unless skip_dialog=True.
     Returns (success, message).
     """
-    from ui.diff_apply_dialog import DiffApplyDialog
+    from ai.worker import clean_code
+    new_source = clean_code(new_source)
 
     path = Path(file_path)
     if not path.exists():
-        # New file — write directly without diff
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(new_source, encoding="utf-8")
@@ -142,6 +146,15 @@ def apply_full(file_path: str, new_source: str,
     except Exception as e:
         return False, f"Could not read {file_path}: {e}"
 
+    if skip_dialog:
+        _undo_stack[str(path.resolve())] = original
+        try:
+            path.write_text(new_source, encoding="utf-8")
+            return True, f"Applied full rewrite to {path.name}."
+        except Exception as e:
+            return False, f"Could not write {file_path}: {e}"
+
+    from ui.diff_apply_dialog import DiffApplyDialog
     dlg = DiffApplyDialog(original, new_source, parent_widget)
     if dlg.exec() and dlg.accepted_code is not None:
         _undo_stack[str(path.resolve())] = original

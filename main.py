@@ -211,6 +211,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self._ai_response_buffer = ""
         self._last_user_message = ""
         self._agent_session_active = False
+        self._agent_history: list = []   # message history across agent turns
         self.last_worker = None
         self.chat_worker = None
         self.active_threads = []
@@ -2483,13 +2484,8 @@ Instructions:
             or any(_lower.startswith(c) for c in _confirmations)
         )
         if _is_confirm:
-            user_text = (
-                "The user has confirmed. You MUST now emit patch_file or write_file "
-                "tool calls immediately to make the change. "
-                "Do NOT investigate again. Do NOT ask for more confirmation. "
-                "Emit the write tool calls NOW.\n\n"
-                f"User said: {user_text}"
-            )
+            # Write ops dialog handles confirmation — just pass through as normal message
+            pass
         root = (
             self.git_dock.repo_path
             if hasattr(self, 'git_dock') and self.git_dock.repo_path
@@ -2508,10 +2504,15 @@ Instructions:
             repo_map         = getattr(self, 'repo_map', None),
             settings_manager = self.settings_manager,
             plugin_manager   = self.plugin_manager,
+            prior_messages   = getattr(self, '_agent_history', []),
         )
         self.chat_worker = worker
         worker.moveToThread(thread)
         worker.chat_update.connect(self.append_chat_stream, Qt.ConnectionType.QueuedConnection)
+        worker.history_ready.connect(
+            lambda msgs: setattr(self, "_agent_history", msgs),
+            Qt.ConnectionType.QueuedConnection
+        )
         worker.tool_status.connect(self.append_agent_status, Qt.ConnectionType.QueuedConnection)
         worker.write_ops.connect(self._on_agent_write_ops, Qt.ConnectionType.QueuedConnection)
         worker.finished.connect(

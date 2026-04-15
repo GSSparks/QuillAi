@@ -537,6 +537,12 @@ def _setup_wiki_menu(window):
 
     wiki_menu.addSeparator()
 
+    export_faq_action = QAction("Export FAQ → Markdown", window)
+    export_faq_action.triggered.connect(lambda: _faq_export(window))
+    wiki_menu.addAction(export_faq_action)
+
+    wiki_menu.addSeparator()
+
     # ── Status — populated dynamically on open ────────────────────────────
     def _populate_status():
         # Remove old dynamic actions
@@ -631,6 +637,27 @@ def _wiki_rebuild_all(window):
 
 
 # ── Help ──────────────────────────────────────────────────────────────────────
+
+def _faq_export(window):
+    fm = getattr(window, 'faq_manager', None)
+    if not fm:
+        window.statusBar().showMessage("FAQ manager not available.", 3000)
+        return
+    import os
+    path = fm.export_markdown_default()
+    if path and os.path.exists(path):
+        window.statusBar().showMessage(f"FAQ exported → {path}", 5000)
+        # Offer to open in editor
+        from PyQt6.QtWidgets import QMessageBox
+        reply = QMessageBox.question(
+            window, "FAQ Exported",
+            f"FAQ exported to:\n{path}\n\nOpen in editor?",
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            window.open_file(path)
+    else:
+        window.statusBar().showMessage("FAQ export failed — no entries?", 3000)
+
 
 def _setup_help_menu(window):
     help_menu = window.menuBar().addMenu("Help")

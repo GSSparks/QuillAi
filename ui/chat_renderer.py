@@ -102,6 +102,10 @@ def _extract_file_changes(text: str) -> tuple[str, list[tuple[str, str, str]]]:
         path = m.group(1)
         mode = m.group(2)
         code = m.group(3).strip()
+        # Warn if code contains placeholders — agent read files before proposing
+        placeholders = ["# ...", "# existing", "pass  #", "...existing..."]
+        if any(p in code for p in placeholders):
+            print(f"[file_change warning] {path} may contain placeholders: {[p for p in placeholders if p in code]}")
         changes.append((path, mode, code))
         # Keep code visible as a fenced block with file path as header
         ext = path.rsplit('.', 1)[-1] if '.' in path else ''
@@ -301,22 +305,79 @@ class ChatRenderer:
             self.chat_history._agent_panel_pos = None  # reset so panel updates in place
 
     def _on_agent_write_ops(self, ops: list):
-        """Show write ops confirmation dialog after agent finishes."""
-        from ui.agent_write_dialog import AgentWriteDialog
+        """Show multi-file diff dialog for agent write operations."""
+        from ui.multi_file_diff_dialog import MultiFileDiffDialog
         root = (
             self.git_dock.repo_path
             if hasattr(self, 'git_dock') and self.git_dock.repo_path
             else os.getcwd()
         )
-        dialog = AgentWriteDialog(ops, root, parent=self)
+        # Convert agent write ops to (path, mode, code) tuples
+        changes = []
+        rejected_patches = []
+        applied_direct   = []  # patch_file ops applied immediately
+        for op in ops:
+            name  = op.get("name", "")
+            attrs = op.get("attrs", {})
+            if name == "write_file":
+                path = attrs.get("path", "")
+                code = attrs.get("content", "")
+                if path:
+                    changes.append((path, "full", code))
+            elif name == "patch_file":
+                path = attrs.get("path", "")
+                sl   = attrs.get("start_line")
+                el   = attrs.get("end_line")
+                body = attrs.get("_body", "")
+                if not path:
+                    continue
+                if not sl or not el:
+                    # Old-format patch_file without line numbers — reject
+                    rejected_patches.append(
+                        f"{path} (missing start_line/end_line — agent must use wc -l then read_file)"
+                    )
+                    continue
+                from ai.worker import clean_code
+                abs_path = str((Path(root) / path).resolve())
+                # Apply directly via run_tool
+                from ai.tools import run_tool as _run_tool
+                ok, msg = _run_tool("patch_file", attrs, root)
+                if ok:
+                    changes.append((path, "patch_done",
+                        f"Patched lines {sl}-{el} in {path}"))
+                    applied_direct.append(abs_path)
+                else:
+                    rejected_patches.append(f"{path}: {msg}")
+        if rejected_patches:
+            from PyQt6.QtWidgets import QMessageBox
+            names = chr(10).join(rejected_patches)
+            QMessageBox.warning(
+                self, 'Patch Context Too Short',
+                'The agent provided insufficient context for:' + chr(10) + names + chr(10) + chr(10) +
+                'Ask the agent to re-read the file and patch again '
+                'using at least 3 lines of context in the old field.'
+            )
+        # Reload any directly-applied patch_file ops
+        for abs_path in applied_direct:
+            self._reload_file_in_editors(abs_path)
+            if hasattr(self, "repo_map") and self.repo_map:
+                self.repo_map.invalidate(abs_path)
+        if not changes:
+            if applied_direct:
+                n = len(applied_direct)
+                self.statusBar().showMessage(
+                    f"Agent applied {n} patch{'es' if n != 1 else ''}.", 5000
+                )
+            return
+        dialog = MultiFileDiffDialog(changes, root, parent=self)
         if dialog.exec():
             for abs_path in dialog.applied_paths:
                 self._reload_file_in_editors(abs_path)
-                if hasattr(self, 'repo_map') and self.repo_map:
+                if hasattr(self, "repo_map") and self.repo_map:
                     self.repo_map.invalidate(abs_path)
-            n = len(dialog.applied_paths)
+            n = len(dialog.applied_paths) + len(applied_direct)
             self.statusBar().showMessage(
-                f"Agent applied {n} change{'s' if n != 1 else ''}.", 5000
+                f"Agent applied {n} file{'s' if n != 1 else ''}.", 5000
             )
 
     def append_chat_stream(self, text: str):
@@ -714,6 +775,10 @@ class ChatRenderer:
             self._handle_save_faq_link(url_str[8:])
 
     def _reload_file_in_editors(self, abs_path: str):
+        for pane in self.split_container.all_panes():
+            for i in range(pane.count()):
+                editor = pane.widget(i)
+                fp = getattr(editor, "file_path", None)
         try:
             with open(abs_path, 'r', encoding='utf-8') as f:
                 new_content = f.read()
@@ -792,6 +857,8 @@ class ChatRenderer:
         abs_path = str((Path(root) / file_path).resolve()) if root else file_path
 
         from core.patch_applier import apply_function, apply_full, apply_perl_function
+        from ai.worker import clean_code
+        code = clean_code(code)  # strip markdown fences if AI wrapped the code
         if mode == "function":
             ok, msg = apply_function(abs_path, code, parent_widget=self)
         elif mode == "perl_function":
