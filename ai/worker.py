@@ -34,11 +34,11 @@ def _build_headers(backend: str, api_key: str) -> dict:
         return base
 
     if backend == "claude":
-        # Anthropic uses x-api-key + version header, NOT Authorization: Bearer
         base["x-api-key"] = api_key.strip()
         base["anthropic-version"] = "2023-06-01"
+    elif backend == "gemini":
+        pass  # Gemini key goes as ?key= query param, not a header
     else:
-        # llama.cpp and OpenAI-compatible endpoints
         base["Authorization"] = f"Bearer {api_key.strip()}"
 
     return base
@@ -267,6 +267,45 @@ Do NOT repeat any code from context_after.
             if self.generate_function or self.is_edit:
                 last_emitted = clean_code(raw_output)
 
+    def _parse_gemini_stream(self, response) -> None:
+        """
+        Parse Gemini SSE stream.
+        Each data chunk is a JSON object with candidates[0].content.parts[0].text
+        """
+        raw_output = ""
+        last_emitted = ""
+
+        for line in response.iter_lines():
+            if self._cancelled:
+                break
+            if not line:
+                continue
+            try:
+                decoded = line.decode("utf-8")
+            except Exception:
+                continue
+            if not decoded.startswith("data: "):
+                continue
+            data = decoded[6:]
+            if data.strip() == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            try:
+                content = (
+                    chunk["candidates"][0]["content"]["parts"][0]["text"]
+                )
+            except (KeyError, IndexError):
+                continue
+            if not content:
+                continue
+            self._emit_content(content, raw_output, last_emitted)
+            raw_output += content
+            if self.generate_function or self.is_edit:
+                last_emitted = clean_code(raw_output)
+
     def _parse_openai_stream(self, response) -> None:
         """Parse OpenAI-compatible SSE stream (llama.cpp, OpenAI, inline FIM)."""
         raw_output = ""
@@ -360,6 +399,9 @@ Do NOT repeat any code from context_after.
                 print(f"👻 Using llama.cpp FIM → {target_url}")
             else:
                 target_url = self.api_url
+                # Gemini requires API key as query param
+                if self.backend == "gemini" and self.api_key:
+                    target_url = f"{target_url}?key={self.api_key.strip()}"
                 system_prompt, messages = self.build_messages()
 
                 if self.backend == "claude":
@@ -373,6 +415,22 @@ Do NOT repeat any code from context_after.
                     }
                     if system_prompt:
                         payload["system"] = system_prompt
+                elif self.backend == "gemini":
+                    # Gemini uses contents[] with parts[], system_instruction separate
+                    contents = []
+                    for m in messages:
+                        role = "user" if m["role"] == "user" else "model"
+                        contents.append({"role": role, "parts": [{"text": m["content"]}]})
+                    payload = {
+                        "contents": contents,
+                        "generationConfig": {
+                            "temperature": 0.1 if is_inline else 0.7,
+                        },
+                    }
+                    if system_prompt:
+                        payload["system_instruction"] = {"parts": [{"text": system_prompt}]}
+                    # Gemini streaming uses :streamGenerateContent endpoint
+                    target_url = target_url.replace(":generateContent", ":streamGenerateContent")
                 else:
                     # OpenAI-compatible: system goes as first message with role="system"
                     full_messages = (
@@ -406,6 +464,8 @@ Do NOT repeat any code from context_after.
             # ── Stream parsing ────────────────────────────────────
             if self.backend == "claude":
                 self._parse_claude_stream(response)
+            elif self.backend == "gemini":
+                self._parse_gemini_stream(response)
             else:
                 self._parse_openai_stream(response)
 

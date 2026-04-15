@@ -211,9 +211,32 @@ class SettingsDialog(QDialog):
         claude_form.addRow("Inline model:", self.claude_inline_model)
         claude_form.addRow("",              self._key_hint)
     
+        # ── Gemini ───────────────────────────────────────────────
+        gemini_group = QGroupBox("Google Gemini")
+        gemini_form = QFormLayout(gemini_group)
+        gemini_form.setSpacing(8)
+
+        _gem_set = bool(self.sm.get_gemini_key())
+        self.gemini_key = SecretLineEdit(
+            text=self.sm.get_gemini_key() if _gem_set else "",
+            placeholder="● stored securely" if _gem_set else "AIza..."
+        )
+
+        self.gemini_chat_model = QLineEdit(
+            self.sm.get("gemini_chat_model") or "gemini-2.0-flash"
+        )
+        self.gemini_chat_model.setPlaceholderText("gemini-2.0-flash")
+
+        self._gemini_key_hint = QLabel("Get your key at aistudio.google.com")
+
+        gemini_form.addRow("API Key:",    self.gemini_key)
+        gemini_form.addRow("Chat model:", self.gemini_chat_model)
+        gemini_form.addRow("",            self._gemini_key_hint)
+
         layout.addWidget(local_group)
         layout.addWidget(openai_group)
         layout.addWidget(claude_group)
+        layout.addWidget(gemini_group)
         layout.addStretch()
         return tab
 
@@ -429,6 +452,9 @@ class SettingsDialog(QDialog):
             self.sm.set_api_key('anthropic', self.anthropic_key.text().strip())
         self.sm.set("claude_chat_model",   self.claude_chat_model.text().strip())
         self.sm.set("claude_inline_model", self.claude_inline_model.text().strip())
+        if self.gemini_key.text().strip():
+            self.sm.set_api_key('gemini', self.gemini_key.text().strip())
+        self.sm.set("gemini_chat_model", self.gemini_chat_model.text().strip())
     
         self.sm.set("terminal_clean_shell", self.terminal_clean_shell.isChecked())
 

@@ -553,8 +553,8 @@ Respond with ONLY the commit message."""
         thread = QThread()
         worker = AIWorker(
             prompt=prompt, editor_text="", cursor_pos=0, is_chat=True,
-            model=self.parent_window.settings_manager.get_chat_model(),
-            api_url=self.parent_window.settings_manager.get_api_url(),
+            model=self.parent_window.settings_manager.get_active_model(),
+            api_url=self.parent_window.settings_manager.get_llm_url(),
             api_key=self.parent_window.settings_manager.get_api_key(),
             backend=self.parent_window.settings_manager.get_backend(),
         )

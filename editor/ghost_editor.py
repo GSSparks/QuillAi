@@ -549,8 +549,8 @@ Answer concisely. If you include code, use a single fenced code block."""
             editor_text="",
             cursor_pos=0,
             is_chat=True,
-            model=self.settings_manager.get_chat_model(),
-            api_url=self.settings_manager.get_api_url(),
+            model=self.settings_manager.get_active_model(),
+            api_url=self.settings_manager.get_llm_url(),
             api_key=self.settings_manager.get_api_key(),
             backend=self.settings_manager.get_backend(),
         )
@@ -1475,7 +1475,7 @@ Answer concisely. If you include code, use a single fenced code block."""
 
         if self.settings_manager:
             model = self.settings_manager.get_inline_model()
-            api_url = self.settings_manager.get_api_url()
+            api_url = self.settings_manager.get_llm_url()
             api_key = self.settings_manager.get_api_key()
             backend = self.settings_manager.get_backend()
 

@@ -255,6 +255,21 @@ class AgentWorker(QObject):
                 "system":     system,
                 "messages":   messages,
             }
+        elif self.backend == "gemini":
+            url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{self.model}:generateContent?key={self.api_key.strip()}"
+            )
+            contents = []
+            for m in messages:
+                role = "user" if m["role"] == "user" else "model"
+                contents.append({"role": role, "parts": [{"text": m["content"]}]})
+            payload = {
+                "contents": contents,
+                "generationConfig": {"temperature": 0.2},
+            }
+            if system:
+                payload["system_instruction"] = {"parts": [{"text": system}]}
         else:
             if self.backend == "openai":
                 url = self.api_url or "https://api.openai.com/v1/chat/completions"
@@ -274,11 +289,17 @@ class AgentWorker(QObject):
         try:
             resp = requests.post(url, json=payload, headers=headers, timeout=120)
             if resp.status_code != 200:
+                print(f"[AgentWorker] API error {resp.status_code}: {resp.text[:200]}")
                 return ""
             data = resp.json()
             if self.backend == "claude":
                 blocks = data.get("content", [])
                 return " ".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+            elif self.backend == "gemini":
+                try:
+                    return data["candidates"][0]["content"]["parts"][0]["text"]
+                except (KeyError, IndexError):
+                    return ""
             else:
                 choices = data.get("choices", [])
                 if not choices:

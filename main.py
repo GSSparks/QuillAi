@@ -153,9 +153,9 @@ class CodeEditor(QMainWindow, ChatRenderer):
         def _llm_fn(prompt: str) -> str:
             import requests
             response = requests.post(
-                self.settings_manager.get_api_url(),
+                self.settings_manager.get_llm_url(),
                 json={
-                    "model": self.settings_manager.get_chat_model(),
+                    "model": self.settings_manager.get_active_model(),
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
                     "max_tokens": 500,
@@ -316,7 +316,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.ai_mode_btn = QPushButton("🏠 LOCAL")
         self.ai_mode_btn.setCheckable(False)
         self.ai_mode_btn.setFlat(True)
-        self.ai_mode_btn.setFixedWidth(90)
+        self.ai_mode_btn.setFixedWidth(110)
         self.ai_mode_btn.clicked.connect(self.toggle_ai_mode)
         self.update_mode_label(self.settings_manager.get_backend())
         self.status_bar.addPermanentWidget(self.ai_mode_btn)
@@ -579,12 +579,9 @@ class CodeEditor(QMainWindow, ChatRenderer):
 
     def toggle_ai_mode(self):
         current = self.settings_manager.get_backend()
-        if current == "llama":
-            backend = "openai"
-        elif current == "openai":
-            backend = "claude"
-        else:
-            backend = "llama"
+        cycle = ["llama", "openai", "claude", "gemini"]
+        next_idx = (cycle.index(current) + 1) % len(cycle) if current in cycle else 0
+        backend = cycle[next_idx]
         self.settings_manager.set_backend(backend)
         self.update_mode_label(backend)
         self.statusBar().showMessage(f"AI Mode: {backend}", 3000)
@@ -594,6 +591,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
             "llama":  "🏠 LOCAL",
             "openai": "☁️  OPENAI",
             "claude": "🟠 CLAUDE",
+            "gemini": "💎 GEMINI",
         }
         self.ai_mode_btn.setText(labels.get(backend, "🏠 LOCAL"))
 
@@ -603,7 +601,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
                       generate_function=False, is_edit=False, is_chat=False):
     
         backend  = self.settings_manager.get_backend()
-        model    = (self.settings_manager.get_chat_model() if is_chat
+        model    = (self.settings_manager.get_active_model() if is_chat
                     else self.settings_manager.get_inline_model())
         api_key  = self.settings_manager.get_api_key()
     
@@ -645,7 +643,7 @@ class CodeEditor(QMainWindow, ChatRenderer):
             is_edit=is_edit,
             is_chat=is_chat,
             model=model,
-            api_url=self.settings_manager.get_api_url(),
+            api_url=self.settings_manager.get_llm_url(),
             api_key=api_key,
             backend=backend,
             wiki_context=wiki_ctx,
@@ -1864,8 +1862,8 @@ Instructions:
     
         self.wiki_manager = WikiManager(
             repo_root=Path(project_root),
-            model=self.settings_manager.get_chat_model(),
-            api_url=self.settings_manager.get_api_url(),
+            model=self.settings_manager.get_active_model(),
+            api_url=self.settings_manager.get_llm_url(),
             api_key=self.settings_manager.get_api_key(),
             backend=self.settings_manager.get_backend(),
         )
@@ -2497,8 +2495,8 @@ Instructions:
             user_text    = user_text,
             context      = context,
             project_root = root,
-            model        = self.settings_manager.get_chat_model(),
-            api_url      = self.settings_manager.get_api_url(),
+            model        = self.settings_manager.get_active_model(),
+            api_url      = self.settings_manager.get_llm_url(),
             api_key      = self.settings_manager.get_api_key(),
             backend      = self.settings_manager.get_backend(),
             repo_map         = getattr(self, 'repo_map', None),
