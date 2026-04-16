@@ -81,6 +81,10 @@ def _query_wants_diff(text: str) -> bool:
         'bug i introduced', 'regression', 'since my last',
         'what i modified', 'what was modified', 'uncommitted',
         'staged', 'unstaged', 'working tree',
+        'just added', 'just changed', 'just modified',
+        'i added', 'i changed', 'i modified', 'i wrote',
+        'not working after', 'stopped working', 'broke after',
+        'something i did', 'error after', 'failing after',
     ]
     return any(t in text for t in triggers)
 
