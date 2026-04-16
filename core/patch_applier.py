@@ -131,6 +131,9 @@ def apply_full(file_path: str, new_source: str,
     """
     from ai.worker import clean_code
     new_source = clean_code(new_source)
+    # Ensure file ends with newline
+    if new_source and not new_source.endswith("\n"):
+        new_source += "\n"
 
     path = Path(file_path)
     if not path.exists():
