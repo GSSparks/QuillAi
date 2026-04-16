@@ -123,6 +123,16 @@ class TerminalView(QWidget):
         else:
             args = [shell, '-i']
     
+        # Write inputrc before fork so parent can clean it up
+        import tempfile as _tmpfile
+        _rc = _tmpfile.NamedTemporaryFile(
+            mode="w", suffix=".inputrc", delete=False
+        )
+        _rc.write("set enable-bracketed-paste off\n")
+        _rc.write("set bell-style none\n")
+        _rc.close()
+        self._inputrc_path = _rc.name
+
         self._pid, self._master_fd = pty.fork()
     
         if self._pid == 0:
@@ -142,13 +152,16 @@ class TerminalView(QWidget):
             env.pop('READLINE_LINE', None)  
             env.pop('BASH_ENV', None)
             
-            # Use a minimal inputrc that doesn't interfere with our PTY
-            env['INPUTRC'] = '/dev/null'
+            # Use pre-created inputrc (created before fork in parent)
+            env['INPUTRC'] = self._inputrc_path
     
             os.execvpe(shell, args, env)
             os._exit(1)
     
         # ── Parent ────────────────────────────────────────────────────
+        # Clean up temp inputrc now that child has inherited it
+        try: os.unlink(self._inputrc_path)
+        except OSError: pass
         flags = fcntl.fcntl(self._master_fd, fcntl.F_GETFL)
         fcntl.fcntl(self._master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
     
@@ -196,7 +209,7 @@ class TerminalView(QWidget):
         """Disable bracketed paste mode inherited from parent shell."""
         if self._master_fd is not None:
             try:
-                os.write(self._master_fd, b'\x1b[?2004l\n')
+                os.write(self._master_fd, b'\x1b[?2004l')
             except OSError:
                 pass        
         

@@ -205,6 +205,8 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self._is_loading = False
         self.inline_completion_enabled = True
         self.current_error_text = ""
+        self._terminal_output_buffer: list[str] = []  # rolling buffer
+        self._terminal_error_text = ""               # last detected error block
         self.current_ai_raw_text = ""
         self._stream_start_pos = 0
         self._stream_buffer = ""
@@ -319,6 +321,14 @@ class CodeEditor(QMainWindow, ChatRenderer):
         self.ai_mode_btn.setFixedWidth(110)
         self.ai_mode_btn.clicked.connect(self.toggle_ai_mode)
         self.update_mode_label(self.settings_manager.get_backend())
+
+        self.terminal_error_btn = QPushButton("💡 Terminal Error")
+        self.terminal_error_btn.setFlat(True)
+        self.terminal_error_btn.setFixedWidth(130)
+        self.terminal_error_btn.setVisible(False)
+        self.terminal_error_btn.clicked.connect(self._explain_terminal_error)
+
+        self.status_bar.addPermanentWidget(self.terminal_error_btn)
         self.status_bar.addPermanentWidget(self.ai_mode_btn)
         self.hide_loading_indicator()
 
@@ -344,6 +354,9 @@ class CodeEditor(QMainWindow, ChatRenderer):
 
         # Single theme-change handler for main-window-owned widgets
         theme_signals.theme_changed.connect(self._apply_theme_to_widgets)
+        # Subscribe to terminal output for error detection
+        from core.events import EVT_TERMINAL_OUTPUT
+        self.plugin_manager.subscribe(EVT_TERMINAL_OUTPUT, self._on_terminal_output)
 
         self.process = QProcess(self)
         self.process.readyReadStandardOutput.connect(self.handle_stdout)
@@ -2141,6 +2154,60 @@ Instructions:
         self.output_editor.appendPlainText(f">>> Running {os.path.basename(script_path)}...\n")
         self.process.start(sys.executable, [script_path])
 
+    @staticmethod
+    def _strip_ansi(text: str) -> str:
+        """Remove ANSI escape codes from terminal output."""
+        import re as _re
+        return _re.sub(r'\x1b\[[0-9;]*[mABCDEFGHJKLMSTfhinrsu]|'
+                        r'\x1b\([A-Z]|\x1b\[\?[0-9;]*[lh]', "", text)
+
+    def _on_terminal_output(self, text: str = "", **kwargs):
+        """Accumulate terminal output and detect errors."""
+        if not text:
+            return
+        # Strip ANSI before storing and checking
+        clean = self._strip_ansi(text)
+        # Rolling buffer — keep last 200 lines
+        self._terminal_output_buffer.extend(clean.splitlines())
+        if len(self._terminal_output_buffer) > 200:
+            self._terminal_output_buffer = self._terminal_output_buffer[-200:]
+
+        # Detect error patterns on clean text
+        error_triggers = [
+            "Traceback (most recent call last)",
+            "Error:", "error:", "ERROR:",
+            "Exception:", "FAILED", "fatal:",
+            "command not found", "No such file or directory",
+            "Permission denied",
+        ]
+        if any(trigger in clean for trigger in error_triggers):
+            # Grab last 50 lines as the error context
+            self._terminal_error_text = "\n".join(
+                self._terminal_output_buffer[-50:]
+            )
+            self.terminal_error_btn.setVisible(True)
+
+    def _explain_terminal_error(self):
+        """Send terminal error to chat for explanation."""
+        if not self._terminal_error_text.strip():
+            return
+        self.terminal_error_btn.setVisible(False)
+        self.chat_panel.expand()
+        self.chat_panel.switch_to_chat()
+
+        error_text = self._terminal_error_text[:4000]
+        self._terminal_error_text = ""
+        prompt = (
+            f"I got an error in my terminal. Can you explain what went wrong and how to fix it?\n\n"
+            f"[Terminal Output]\n{error_text}\n\n"
+            "Please:\n"
+            "- Explain the error clearly\n"
+            "- Identify the root cause\n"
+            "- Show how to fix it\n"
+            "- Include corrected code if applicable\n"
+        )
+        self._on_chat_message(prompt)
+
     def handle_stderr(self):
         data = self.process.readAllStandardError()
         stderr = bytes(data).decode("utf8")
@@ -2157,23 +2224,15 @@ Instructions:
         self.explain_error_btn.hide()
 
         user_text = "My script crashed with an error. Can you explain what went wrong and how to fix it?"
-        context   = self.build_chat_context(
-            user_text,
-            self.current_editor().toPlainText() if self.current_editor() else ""
+        prompt = (
+            f"{user_text}\n\n"
+            f"[Error Trace]\n{self.current_error_text[:8000]}\n\n"
+            "Please:\n"
+            "- Explain the error clearly\n"
+            "- Identify the root cause\n"
+            "- Show how to fix it\n"
+            "- Include corrected code if possible\n"
         )
-        prompt = f"""{user_text}
-
-[Error Trace]
-{self.current_error_text[:8000]}
-
-{context}
-
-Instructions:
-- Explain the error clearly
-- Identify the root cause
-- Show how to fix it
-- Include corrected code if possible
-"""
         self._last_user_message = user_text
         self._append_user_message(user_text)
         self._ai_response_buffer = ""
