@@ -134,6 +134,7 @@ class AnsibleParser:
         # ── PLAY ──────────────────────────────────────────────────────────
         m = self._RE_PLAY.match(raw)
         if m:
+            self._close_json(events)  # force-close any pending JSON
             self._flush_task_event(events)
             self._current_play = m.group(1)
             self._in_recap     = False
@@ -148,6 +149,7 @@ class AnsibleParser:
         # ── TASK ──────────────────────────────────────────────────────────
         m = self._RE_TASK.match(raw)
         if m:
+            self._close_json(events)  # force-close any pending JSON
             self._flush_task_event(events)
             self._current_task = m.group(1)
             self._task_hosts   = {}
@@ -199,8 +201,7 @@ class AnsibleParser:
             host = m.group(1)
             hr = HostResult(host=host, status="ok")
             self._task_hosts[host] = hr
-            if self._task_event:
-                self._task_event.host_results[host] = hr
+            self._ensure_task_event().host_results[host] = hr
             return events
 
         m = self._RE_CHANGED.match(raw)
@@ -208,14 +209,15 @@ class AnsibleParser:
             host = m.group(1)
             hr = HostResult(host=host, status="changed")
             self._task_hosts[host] = hr
-            if self._task_event:
-                self._task_event.host_results[host] = hr
+            self._ensure_task_event().host_results[host] = hr
             return events
 
         m = self._RE_SKIPPING.match(raw)
         if m:
             host = m.group(1)
-            self._task_hosts[host] = HostResult(host=host, status="skipped")
+            hr = HostResult(host=host, status="skipped")
+            self._task_hosts[host] = hr
+            self._ensure_task_event().host_results[host] = hr
             return events
 
         m = self._RE_ERROR.match(raw)
@@ -268,6 +270,22 @@ class AnsibleParser:
 
         return events
 
+    def _close_json(self, events: list):
+        """Force-close any in-progress JSON capture and flush it."""
+        if self._capturing_json and self._json_buf.strip():
+            self._capturing_json = False
+            self._json_depth = 0
+            # Try to close any unclosed braces
+            buf = self._json_buf.strip()
+            depth = buf.count("{") - buf.count("}")
+            if depth > 0:
+                buf += "}" * depth
+                self._json_buf = buf
+            self._flush_json(events)
+        self._capturing_json = False
+        self._json_buf = ""
+        self._json_depth = 0
+
     def _flush_json(self, events: list):
         """Parse accumulated JSON blob and update host result."""
         try:
@@ -307,8 +325,22 @@ class AnsibleParser:
             self._task_event.host_results[host] = hr
             self._task_event.detail = f"Host: {host}\n{msg_short}"
 
-        elif self._task_event:
-            self._task_event.host_results[host] = hr
+        else:
+            # ok/changed — ensure task event exists and add host result
+            self._ensure_task_event().host_results[host] = hr
+
+    def _ensure_task_event(self) -> "RunEvent":
+        """Return current task event, creating one if needed."""
+        if self._task_event is None:
+            self._task_event = RunEvent(
+                tool      = "ansible",
+                severity  = Severity.INFO,
+                title     = self._current_task or "Task",
+                task_name = self._current_task,
+                play_name = self._current_play,
+                file_hint = self._task_to_file_hint(self._current_task),
+            )
+        return self._task_event
 
     def _flush_task_event(self, events: list):
         """Emit accumulated task event if any."""

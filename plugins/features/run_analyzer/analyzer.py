@@ -38,7 +38,7 @@ class RunAnalyzer:
         self._had_failure = False
 
     def feed(self, text: str):
-        clean = _RE_ANSI.sub('', text)
+        clean = _RE_ANSI.sub('', text).replace('\r', '')
         self._buf += clean
         while '\n' in self._buf:
             line, self._buf = self._buf.split('\n', 1)
@@ -55,6 +55,8 @@ class RunAnalyzer:
         if self._tool is None:
             if re.search(r'ansible-playbook|ansible ', line):
                 self._tool = "ansible"
+            elif re.search(r'PLAY \[|TASK \[|^ok:|^changed:|^failed:|^fatal:', line):
+                self._tool = "ansible"
             elif re.search(r'\bterraform\b|\btofu\b', line):
                 self._tool = "terraform"
 
@@ -64,10 +66,9 @@ class RunAnalyzer:
         elif self._tool == "terraform":
             events = self._terraform.feed_line(line)
         else:
-            events = (
-                self._ansible.feed_line(line) or
-                self._terraform.feed_line(line)
-            )
+            events = self._ansible.feed_line(line)
+            if not events:
+                events = self._terraform.feed_line(line)
 
         for event in events:
             self._on_event(event)

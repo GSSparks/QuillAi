@@ -428,16 +428,17 @@ class RunAnalyzerPanel(QDockWidget):
 
         # Task result — update matrix
         task = event.task_name or event.title
-        if event.host_results:
-            for host, hr in event.host_results.items():
-                self._matrix.add_host(host)
-                self._matrix.update_cell(task, host, hr.status, event)
-        elif event.severity == Severity.ERROR:
-            # Non-verbose error — extract host from detail
-            host = self._extract_host(event.detail)
-            if host:
-                self._matrix.add_host(host)
-                self._matrix.update_cell(task, host, "failed", event)
+        if task and not task.startswith("Play:") and not task.startswith("Recap:"):
+            if event.host_results:
+                for host, hr in event.host_results.items():
+                    self._matrix.add_host(host)
+                    self._matrix.update_cell(task, host, hr.status, event)
+            elif event.severity == Severity.ERROR:
+                # Non-verbose error without host_results — extract from detail
+                host = self._extract_host(event.detail)
+                if host:
+                    self._matrix.add_host(host)
+                    self._matrix.update_cell(task, host, "failed", event)
 
         if event.severity == Severity.ERROR:
             if not self.isVisible():
