@@ -1952,17 +1952,16 @@ Instructions:
         cursor.insertText(text)
 
     def _sort_lines(self, reverse: bool = False):
-        """Sort selected lines alphabetically."""
         editor = self.current_editor()
         if not editor:
             return
         cursor = editor.textCursor()
         if not cursor.hasSelection():
             return
-        text  = cursor.selectedText()
-        lines = text.split(' ')
+        text = cursor.selectedText()
+        lines = text.split('\u2029')
         lines.sort(key=str.casefold, reverse=reverse)
-        cursor.insertText(' '.join(lines))
+        cursor.insertText('\u2029'.join(lines))
 
     def _toggle_show_whitespace(self):
         """Toggle whitespace character display."""
