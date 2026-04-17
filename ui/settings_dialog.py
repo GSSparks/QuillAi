@@ -163,6 +163,10 @@ class SettingsDialog(QDialog):
         local_form.addRow("Server URL:",     self.local_url)
         local_form.addRow("Model name:",     self.local_model)
         local_form.addRow("Context budget:", self.token_budget)
+
+        self.trim_whitespace = QCheckBox("Trim trailing whitespace on save")
+        self.trim_whitespace.setChecked(self.sm.get_trim_trailing_whitespace())
+        local_form.addRow("", self.trim_whitespace)
     
         # ── OpenAI ───────────────────────────────────────────────
         openai_group = QGroupBox("OpenAI (or compatible)")
@@ -440,6 +444,7 @@ class SettingsDialog(QDialog):
         self.sm.set("local_llm_url",  self.local_url.text().strip())
         self.sm.set("active_model",   self.local_model.text().strip())
         self.sm.set_token_budget(self.token_budget.value())
+        self.sm.set_trim_trailing_whitespace(self.trim_whitespace.isChecked())
         self.sm.set("cloud_llm_url",  self.cloud_url.text().strip())
     
         # OpenAI — its own key

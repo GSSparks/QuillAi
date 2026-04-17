@@ -27,6 +27,7 @@ class SettingsManager:
             "use_cloud_for_chat": False,
             "theme":             "dark",
             "token_budget":      16000,
+            "trim_trailing_whitespace": False,
         }
 
         self.settings = self.load_settings()
@@ -65,6 +66,13 @@ class SettingsManager:
 
     def get_backend(self):
         return self.settings.get("backend", "llama")
+
+    def get_trim_trailing_whitespace(self) -> bool:
+        return bool(self.settings.get("trim_trailing_whitespace", False))
+
+    def set_trim_trailing_whitespace(self, value: bool):
+        self.settings["trim_trailing_whitespace"] = bool(value)
+        self.save_settings()
 
     def get_token_budget(self) -> int:
         return int(self.settings.get("token_budget", 16000))

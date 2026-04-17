@@ -1529,6 +1529,11 @@ Instructions:
             # Temporarily stop watching so our own save doesn't trigger reload
             if editor.file_path in self._file_watcher.files():
                 self._file_watcher.removePath(editor.file_path)
+            if self.settings_manager.get_trim_trailing_whitespace():
+                _lines = code.splitlines()
+                code = "\n".join(l.rstrip() for l in _lines)
+                if code and not code.endswith("\n"):
+                    code += "\n"
             with open(editor.file_path, "w", encoding="utf-8") as f:
                 f.write(code)
 
@@ -1929,6 +1934,43 @@ Instructions:
         )
         self.wiki_watcher.start()
 
+    def _transform_case(self, mode: str):
+        """Transform selected text: upper / lower / title."""
+        editor = self.current_editor()
+        if not editor:
+            return
+        cursor = editor.textCursor()
+        if not cursor.hasSelection():
+            return
+        text = cursor.selectedText()
+        if mode == "upper":
+            text = text.upper()
+        elif mode == "lower":
+            text = text.lower()
+        elif mode == "title":
+            text = text.title()
+        cursor.insertText(text)
+
+    def _sort_lines(self, reverse: bool = False):
+        """Sort selected lines alphabetically."""
+        editor = self.current_editor()
+        if not editor:
+            return
+        cursor = editor.textCursor()
+        if not cursor.hasSelection():
+            return
+        text  = cursor.selectedText()
+        lines = text.split(' ')
+        lines.sort(key=str.casefold, reverse=reverse)
+        cursor.insertText(' '.join(lines))
+
+    def _toggle_show_whitespace(self):
+        """Toggle whitespace character display."""
+        editor = self.current_editor()
+        if editor and hasattr(editor, 'toggle_show_whitespace'):
+            editor.toggle_show_whitespace()
+
+
     def _on_chat_message(self, user_text: str):
         self._last_user_message = user_text
         self._append_user_message(user_text)
@@ -2141,6 +2183,11 @@ Instructions:
 
         code = editor.toPlainText()
         if editor.file_path:
+            if self.settings_manager.get_trim_trailing_whitespace():
+                _lines = code.splitlines()
+                code = "\n".join(l.rstrip() for l in _lines)
+                if code and not code.endswith("\n"):
+                    code += "\n"
             with open(editor.file_path, "w", encoding="utf-8") as f:
                 f.write(code)
             script_path = editor.file_path

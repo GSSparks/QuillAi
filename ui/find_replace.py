@@ -1,3 +1,4 @@
+import re
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLineEdit,
                              QPushButton, QCheckBox)
 from PyQt6.QtGui import QTextDocument, QTextCursor
@@ -51,6 +52,10 @@ class FindReplaceWidget(QWidget):
         self.word_checkbox.setToolTip("Match Whole Word")
         self.word_checkbox.stateChanged.connect(self.on_search_text_changed)
 
+        self.regex_checkbox = QCheckBox(".*")
+        self.regex_checkbox.setToolTip("Use Regular Expression")
+        self.regex_checkbox.stateChanged.connect(self.on_search_text_changed)
+
         self.match_label = QPushButton("")
         self.match_label.setFlat(True)
         self.match_label.setEnabled(False)
@@ -70,6 +75,7 @@ class FindReplaceWidget(QWidget):
         find_layout.addWidget(self.find_input)
         find_layout.addWidget(self.case_checkbox)
         find_layout.addWidget(self.word_checkbox)
+        find_layout.addWidget(self.regex_checkbox)
         find_layout.addWidget(self.match_label)
         find_layout.addWidget(self.prev_btn)
         find_layout.addWidget(self.next_btn)
@@ -109,6 +115,8 @@ class FindReplaceWidget(QWidget):
         editor = self.main_window.current_editor()
         if not editor or not query:
             return 0
+        if self.is_regex():
+            return len(self._regex_find_all(editor.toPlainText(), query))
         options = self.get_search_options()
         document = editor.document()
         count = 0
@@ -135,6 +143,29 @@ class FindReplaceWidget(QWidget):
             editor.setTextCursor(cursor)
             return
 
+        if self.is_regex():
+            # Validate regex first
+            try:
+                re.compile(query)
+            except re.error:
+                self.match_label.setText("bad regex")
+                self.set_find_state("no_match")
+                return
+            matches = self._regex_find_all(editor.toPlainText(), query)
+            if matches:
+                self.match_label.setText(f"{len(matches)} found")
+                self.set_find_state("match")
+                s, e = matches[0]
+                cursor = editor.textCursor()
+                cursor.setPosition(s)
+                cursor.setPosition(e, QTextCursor.MoveMode.KeepAnchor)
+                editor.setTextCursor(cursor)
+                editor.ensureCursorVisible()
+            else:
+                self.match_label.setText("no match")
+                self.set_find_state("no_match")
+            return
+
         options = self.get_search_options()
         document = editor.document()
         start_cursor = QTextCursor(document)
@@ -156,7 +187,11 @@ class FindReplaceWidget(QWidget):
 
     # ── Search options ────────────────────────────────────────────────────
 
+    def is_regex(self) -> bool:
+        return self.regex_checkbox.isChecked()
+
     def get_search_options(self, backward=False):
+        """Returns QTextDocument.FindFlag options for non-regex search."""
         options = None
         if self.case_checkbox.isChecked():
             options = QTextDocument.FindFlag.FindCaseSensitively
@@ -168,6 +203,34 @@ class FindReplaceWidget(QWidget):
                        if options else QTextDocument.FindFlag.FindBackward)
         return options
 
+    def get_re_flags(self) -> int:
+        """Returns re module flags for regex search."""
+        flags = re.MULTILINE
+        if not self.case_checkbox.isChecked():
+            flags |= re.IGNORECASE
+        return flags
+
+    def _regex_find_all(self, text: str, pattern: str) -> list:
+        """Return list of (start, end) for all regex matches."""
+        try:
+            return [(m.start(), m.end()) for m in
+                    re.finditer(pattern, text, self.get_re_flags())]
+        except re.error:
+            return []
+
+    def _regex_find_from(self, text: str, pattern: str, pos: int,
+                         backward: bool = False) -> tuple | None:
+        """Return (start, end) of next/prev regex match from pos."""
+        matches = self._regex_find_all(text, pattern)
+        if not matches:
+            return None
+        if backward:
+            candidates = [(s, e) for s, e in matches if e <= pos]
+            return candidates[-1] if candidates else matches[-1]
+        else:
+            candidates = [(s, e) for s, e in matches if s >= pos]
+            return candidates[0] if candidates else matches[0]
+
     # ── Find / replace actions ────────────────────────────────────────────
 
     def do_find(self, backward=False) -> bool:
@@ -178,20 +241,47 @@ class FindReplaceWidget(QWidget):
         if not query:
             return False
 
-        options = self.get_search_options(backward)
-        found = (editor.find(query, options)
-                 if options is not None else editor.find(query))
+        if self.is_regex():
+            text = editor.toPlainText()
+            pos  = editor.textCursor().position()
+            if backward:
+                pos = editor.textCursor().selectionStart()
+            else:
+                pos = editor.textCursor().selectionEnd()
+            match = self._regex_find_from(text, query, pos, backward)
+            if match:
+                s, e = match
+                cursor = editor.textCursor()
+                cursor.setPosition(s)
+                cursor.setPosition(e, QTextCursor.MoveMode.KeepAnchor)
+                editor.setTextCursor(cursor)
+                editor.ensureCursorVisible()
+                total = len(self._regex_find_all(text, query))
+                self.match_label.setText(f"{total} found")
+                self.set_find_state("match")
+                return True
+            self.set_find_state("no_match")
+            return False
 
-        if not found:
-            cursor = editor.textCursor()
-            cursor.movePosition(
-                QTextCursor.MoveOperation.End
-                if backward else QTextCursor.MoveOperation.Start
-            )
-            editor.setTextCursor(cursor)
-            found = (editor.find(query, options)
-                     if options is not None else editor.find(query))
-        return found
+        options = self.get_search_options(backward)
+        document = editor.document()
+        cursor  = editor.textCursor()
+        found   = (document.find(query, cursor, options)
+                   if options else document.find(query, cursor))
+        if found.isNull():
+            # Wrap around
+            wrap = QTextCursor(document)
+            if backward:
+                wrap.movePosition(QTextCursor.MoveOperation.End)
+            found = (document.find(query, wrap, options)
+                     if options else document.find(query, wrap))
+        if not found.isNull():
+            editor.setTextCursor(found)
+            editor.ensureCursorVisible()
+            self.set_find_state("match")
+            return True
+        self.set_find_state("no_match")
+        return False
 
     def find_next(self):
         self.do_find(backward=False)
@@ -203,42 +293,61 @@ class FindReplaceWidget(QWidget):
         editor = self.main_window.current_editor()
         if not editor:
             return
+        query       = self.find_input.text()
+        replacement = self.replace_input.text()
         cursor = editor.textCursor()
         if cursor.hasSelection():
-            cursor.insertText(self.replace_input.text())
-        self.find_next()
+            if self.is_regex():
+                try:
+                    subst = re.sub(query, replacement,
+                                  cursor.selectedText(),
+                                  flags=self.get_re_flags())
+                    cursor.insertText(subst)
+                except re.error:
+                    pass
+            else:
+                cursor.insertText(replacement)
+        self.do_find()
         self.on_search_text_changed()
 
     def replace_all(self):
         editor = self.main_window.current_editor()
         if not editor:
             return
-        query = self.find_input.text()
+        query       = self.find_input.text()
+        replacement = self.replace_input.text()
         if not query:
             return
-
-        cursor = editor.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
-        editor.setTextCursor(cursor)
-
-        count = 0
-        options = self.get_search_options()
-
-        cursor.beginEditBlock()
-        while True:
-            found = (editor.find(query, options)
-                     if options is not None else editor.find(query))
-            if not found:
-                break
-            editor.textCursor().insertText(self.replace_input.text())
-            count += 1
-        cursor.endEditBlock()
-
-        if count > 0:
-            self.main_window.statusBar().showMessage(
-                f"Replaced {count} occurrences.", 4000
-            )
-        self.on_search_text_changed()
+        text = editor.toPlainText()
+        if self.is_regex():
+            try:
+                new_text, count = re.subn(query, replacement, text,
+                                          flags=self.get_re_flags())
+            except re.error:
+                self.match_label.setText("bad regex")
+                return
+        else:
+            flags   = 0 if self.case_checkbox.isChecked() else re.IGNORECASE
+            escaped = re.escape(query)
+            if self.word_checkbox.isChecked():
+                escaped = r"\b" + escaped + r"\b"
+            new_text, count = re.subn(escaped, re.escape(replacement)
+                                      .replace(r"\\", r"\\"),
+                                      text, flags=flags)
+            # Use literal replacement for non-regex
+            new_text, count = re.subn(escaped, lambda m: replacement,
+                                      text, flags=flags)
+        if count:
+            cursor = editor.textCursor()
+            cursor.beginEditBlock()
+            cursor.select(QTextCursor.SelectionType.Document)
+            cursor.insertText(new_text)
+            cursor.endEditBlock()
+            self.match_label.setText(f"{count} replaced")
+            self.set_find_state("match")
+        else:
+            self.match_label.setText("no match")
+            self.set_find_state("no_match")
 
     def focus_find(self):
         self.find_input.selectAll()

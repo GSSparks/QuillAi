@@ -356,6 +356,32 @@ def _setup_edit_menu(window):
     settings_action.triggered.connect(window.show_settings_dialog)
     edit_menu.addAction(settings_action)
 
+    edit_menu.addSeparator()
+
+    upper_act = QAction("Transform to UPPERCASE", window)
+    upper_act.triggered.connect(lambda: window._transform_case("upper"))
+    edit_menu.addAction(upper_act)
+    lower_act = QAction("Transform to lowercase", window)
+    lower_act.triggered.connect(lambda: window._transform_case("lower"))
+    edit_menu.addAction(lower_act)
+    title_act = QAction("Transform to Title Case", window)
+    title_act.triggered.connect(lambda: window._transform_case("title"))
+    edit_menu.addAction(title_act)
+
+    edit_menu.addSeparator()
+    sort_act = QAction("Sort Lines", window)
+    sort_act.triggered.connect(window._sort_lines)
+    edit_menu.addAction(sort_act)
+    sort_rev_act = QAction("Sort Lines (Reverse)", window)
+    sort_rev_act.triggered.connect(lambda: window._sort_lines(reverse=True))
+    edit_menu.addAction(sort_rev_act)
+
+    edit_menu.addSeparator()
+    ws_act = QAction("Show Whitespace", window)
+    ws_act.setCheckable(True)
+    ws_act.triggered.connect(window._toggle_show_whitespace)
+    edit_menu.addAction(ws_act)
+
 
 # ── View ──────────────────────────────────────────────────────────────────────
 

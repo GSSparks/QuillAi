@@ -224,6 +224,7 @@ class GhostEditor(LspEditorMixin, QPlainTextEdit):
         self._scroll_timer   = QTimer(self)
         self._scroll_timer.setInterval(12)   # ~83fps — smooth but not wasteful
         self._scroll_timer.timeout.connect(self._smooth_scroll_tick)
+        self._show_whitespace = False
 
         self.current_line_selection = []
         self.lint_selections = []
@@ -831,6 +832,25 @@ Answer concisely. If you include code, use a single fenced code block."""
         self.minimap.setTextCursor(m_cursor)
 
     # ── Highlighting & linting ────────────────────────────────────────────
+
+    def toggle_show_whitespace(self):
+        from PyQt6.QtGui import QTextOption
+        self._show_whitespace = not getattr(self, '_show_whitespace', False)
+        opt = self.document().defaultTextOption()
+        if self._show_whitespace:
+            opt.setFlags(
+                opt.flags() |
+                QTextOption.Flag.ShowTabsAndSpaces |
+                QTextOption.Flag.ShowLineAndParagraphSeparators
+            )
+        else:
+            opt.setFlags(
+                opt.flags() &
+                ~QTextOption.Flag.ShowTabsAndSpaces &
+                ~QTextOption.Flag.ShowLineAndParagraphSeparators
+            )
+        self.document().setDefaultTextOption(opt)
+        self.viewport().update()
 
     def highlight_current_line(self):
         self.current_line_selection = []
