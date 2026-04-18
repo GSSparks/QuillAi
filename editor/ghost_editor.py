@@ -1,3 +1,25 @@
+"""
+ghost_editor.py
+
+This module defines the main code editor component for the application, providing a feature-rich environment for editing source code. It includes advanced capabilities such as AI-powered code completion, inline chat, syntax highlighting, minimap, line numbering, and integrated UI interactions.
+
+Core components and features:
+- GhostEditor: The primary editor widget supporting AI code suggestions, inline chat, context-aware actions, and various productivity tools.
+- SnippetManager: Handles management and insertion of code snippets.
+- LineNumberArea: Renders line numbers and manages related user interactions.
+- MinimapArea: Displays a minimap for quick navigation within the code.
+
+Features include:
+- AI-assisted code generation and completion
+- Inline chat and code explanation
+- Minimap and interactive line number gutter
+- Git blame integration and error highlighting
+- Syntax highlighting and color swatch for color codes
+- Snippet insertion and advanced editing commands
+- Context-aware jump bar and breadcrumb navigation
+
+This module is central to the application's code editing experience and serves as the main interface for editing and interacting with source code.
+"""
 from PyQt6.QtWidgets import QPlainTextEdit, QWidget, QTextEdit, QMenu, QLabel
 from PyQt6.QtGui import QPainter, QColor, QFontMetrics, QTextCursor, QFont, QTextFormat, QAction, QTextCharFormat, QTextBlockFormat, QTextOption, QIcon
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect, QSize, QTimer

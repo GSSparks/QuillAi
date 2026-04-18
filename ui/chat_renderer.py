@@ -721,6 +721,19 @@ class ChatRenderer:
                 f'</td></tr></table>'
             )
         for file_path, mode, code in changes:
+            # Strip absolute project root prefix if present
+            _root = None
+            if hasattr(self, "git_dock") and self.git_dock.repo_path:
+                _root = self.git_dock.repo_path.rstrip("/")
+            if _root and file_path.startswith(_root + "/"):
+                file_path = file_path[len(_root)+1:]
+            elif file_path.startswith("/"):
+                # Try to make relative to cwd
+                import os as _os
+                try:
+                    file_path = _os.path.relpath(file_path)
+                except ValueError:
+                    pass
             encoded = base64.b64encode(
                 f"{file_path}|{mode}|{code}".encode("utf-8")
             ).decode("utf-8")
