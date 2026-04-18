@@ -30,16 +30,25 @@ EDITOR_WRITE_TRIGGERS = re.compile(
 
 
 def wants_editor_write(text: str) -> bool:
-    """Return True if the message looks like a request to write code."""
+    """Return True if the message looks like a request to write code at a specific location."""
+    import re as _re
     t = text.lower().strip()
-    # Must have a write verb AND some target indicator
+    # Must have a write verb
     has_verb = bool(EDITOR_WRITE_TRIGGERS.search(t))
-    has_target = any(w in t for w in [
-        'here', 'function', 'method', 'class', 'docstring', 'comment',
-        'import', 'above', 'below', 'after', 'before', 'at the', 'end of',
-        'top of', 'bottom of', 'this file', 'the file',
+    # Must reference a specific symbol or location — not a whole-file request
+    has_specific_target = any(w in t for w in [
+        'here', 'above', 'below', 'after', 'before',
+        'at the top', 'at the bottom', 'at line',
+    ]) or bool(_re.search(
+        r'(?:to|for|in)\s+(?:the\s+)?(?:def\s+|class\s+)?[\w_]{3,}\s*(?:function|method|class)',
+        t
+    ))
+    # Exclude whole-file requests
+    is_whole_file = any(w in t for w in [
+        'this file', 'the file', 'this script', 'the script',
+        'this module', 'the module', 'ghost_editor', '.py script',
     ])
-    return has_verb and has_target
+    return has_verb and has_specific_target and not is_whole_file
 
 
 class AIEditorWorker(QObject):
