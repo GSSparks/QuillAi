@@ -36,6 +36,14 @@ def _query_wants_diff(text: str) -> bool:
 class ChatMixin:
 
     def _on_chat_message(self, user_text: str):
+        # Check if this is an editor write request
+        from ai.ai_editor_worker import wants_editor_write
+        editor = self.current_editor()
+        if (editor and editor.file_path
+                and wants_editor_write(user_text)):
+            self._launch_ai_editor(user_text)
+            return
+
         self._last_user_message = user_text
         self._append_user_message(user_text)
         self.memory_manager.add_turn("user", user_text)
@@ -214,3 +222,96 @@ class ChatMixin:
         except Exception as e:
             print(f"[GitLab] context error: {e}")
             return ""
+
+    def _launch_ai_editor(self, user_text: str):
+        """Launch AIEditorWorker to stream code directly into the editor."""
+        from ai.ai_editor_worker import AIEditorWorker
+        from PyQt6.QtCore import QThread, Qt
+
+        editor = self.current_editor()
+        if not editor:
+            return
+
+        file_content = editor.toPlainText()
+        file_path    = editor.file_path or ""
+
+        # Show "AI is typing..." indicator
+        self._show_ai_typing_indicator(user_text)
+
+        import threading
+        from PyQt6.QtCore import QTimer
+
+        worker = AIEditorWorker(
+            user_request = user_text,
+            file_content = file_content,
+            file_path    = file_path,
+            model        = self.settings_manager.get_active_model(),
+            api_url      = self.settings_manager.get_llm_url(),
+            api_key      = self.settings_manager.get_api_key(),
+            backend      = self.settings_manager.get_backend(),
+        )
+        self._ai_editor_worker = worker  # prevent GC
+
+        def on_insertion_ready(pos):
+            QTimer.singleShot(0, lambda: (
+                self.current_editor().start_ai_cursor(pos)
+                if self.current_editor() else None
+            ))
+
+        def on_chunk(text):
+            QTimer.singleShot(0, lambda t=text: (
+                self.current_editor().insert_ai_chunk(t)
+                if self.current_editor() else None
+            ))
+
+        def on_finished():
+            def _done():
+                ed = self.current_editor()
+                if ed:
+                    ed.stop_ai_cursor()
+                self._hide_ai_typing_indicator()
+                self.append_chat_stream("\n\u2713 Done \u2014 code inserted.")
+                self.chat_stream_finished()
+            QTimer.singleShot(0, _done)
+
+        def on_error(msg):
+            def _err():
+                ed = self.current_editor()
+                if ed:
+                    ed.stop_ai_cursor()
+                self._hide_ai_typing_indicator()
+                self.statusBar().showMessage(f"AI editor error: {msg}", 5000)
+            QTimer.singleShot(0, _err)
+
+        worker.insertion_ready.connect(on_insertion_ready)
+        worker.chunk_ready.connect(on_chunk)
+        worker.finished.connect(on_finished)
+        worker.error.connect(on_error)
+
+        def _run():
+            worker._run_impl()
+
+        self._ai_editor_thread = threading.Thread(target=_run, daemon=True)
+        self._ai_editor_thread.start()
+    def _show_ai_typing_indicator(self, user_text: str):
+        """Show iMessage-style 'AI is typing...' indicator in the chat."""
+        self._append_user_message(user_text)
+        # Animate dots in status bar
+        if not hasattr(self, "_ai_typing_timer"):
+            from PyQt6.QtCore import QTimer
+            self._ai_typing_timer  = QTimer(self)
+            self._ai_typing_dots   = 0
+            self._ai_typing_timer.timeout.connect(self._tick_ai_typing)
+        self._ai_typing_dots = 0
+        self._ai_typing_timer.start(400)
+        self.statusBar().showMessage("AI is typing·", 0)
+
+    def _tick_ai_typing(self):
+        self._ai_typing_dots = (self._ai_typing_dots + 1) % 4
+        dots = "·" * (self._ai_typing_dots + 1)
+        self.statusBar().showMessage(f"AI is typing{dots}", 0)
+
+    def _hide_ai_typing_indicator(self):
+        if hasattr(self, "_ai_typing_timer"):
+            self._ai_typing_timer.stop()
+        self.statusBar().showMessage("", 0)

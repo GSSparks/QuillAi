@@ -193,6 +193,13 @@ class GhostEditor(LspEditorMixin, QPlainTextEdit):
         self.function_output = ""
         self._insert_mode = False   # False = insert (default), True = overwrite
 
+        # ── AI cursor state ──────────────────────────────────────────────
+        self._ai_cursor_pos     = 0       # document char position
+        self._ai_cursor_visible = False   # blink state
+        self._ai_cursor_active  = False   # currently streaming
+        self._ai_insert_pos     = 0       # where next chunk goes
+        self._ai_blink_timer    = None    # set up on demand
+
         font = QFont(QFONT_CODE)
         font.setPointSize(10)
         font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
@@ -832,6 +839,44 @@ Answer concisely. If you include code, use a single fenced code block."""
         self.minimap.setTextCursor(m_cursor)
 
     # ── Highlighting & linting ────────────────────────────────────────────
+
+    # ── AI cursor API ─────────────────────────────────────────────────────
+
+    def start_ai_cursor(self, pos: int):
+        """Activate the AI cursor at document position pos."""
+        self._ai_cursor_pos    = pos
+        self._ai_insert_pos    = pos
+        self._ai_cursor_active = True
+        self._ai_cursor_visible = True
+        # Set up blink timer
+        if self._ai_blink_timer is None:
+            from PyQt6.QtCore import QTimer
+            self._ai_blink_timer = QTimer(self)
+            self._ai_blink_timer.timeout.connect(self._blink_ai_cursor)
+        self._ai_blink_timer.start(500)
+        self.viewport().update()
+
+    def stop_ai_cursor(self):
+        """Deactivate the AI cursor."""
+        self._ai_cursor_active  = False
+        self._ai_cursor_visible = False
+        if self._ai_blink_timer:
+            self._ai_blink_timer.stop()
+        self.viewport().update()
+
+    def _blink_ai_cursor(self):
+        self._ai_cursor_visible = not self._ai_cursor_visible
+        self.viewport().update()
+
+    def insert_ai_chunk(self, text: str):
+        """Insert a streamed chunk at the AI cursor position."""
+        cursor = QTextCursor(self.document())
+        cursor.setPosition(self._ai_insert_pos)
+        cursor.insertText(text)
+        self._ai_insert_pos    += len(text)
+        self._ai_cursor_pos     = self._ai_insert_pos
+        self._ai_cursor_visible = True
+        self.viewport().update()
 
     def toggle_show_whitespace(self):
         from PyQt6.QtGui import QTextOption
@@ -1936,6 +1981,21 @@ Answer concisely. If you include code, use a single fenced code block."""
             block = block.next()
             top = bottom
             bottom = top + round(self.blockBoundingRect(block).height())
+
+        # ── AI cursor ────────────────────────────────────────────────────
+        if self._ai_cursor_active and self._ai_cursor_visible:
+            ai_cursor = QTextCursor(self.document())
+            ai_cursor.setPosition(
+                min(self._ai_cursor_pos, self.document().characterCount() - 1)
+            )
+            ai_rect = self.cursorRect(ai_cursor)
+            from PyQt6.QtGui import QPen
+            pen = QPen(QColor(self._t.get('accent', '#fe8019')), 2)
+            painter.setPen(pen)
+            painter.drawLine(
+                ai_rect.left(), ai_rect.top(),
+                ai_rect.left(), ai_rect.bottom(),
+            )
 
         if self.ghost_text:
             painter.setPen(QColor(self._t['ghost_text']))
