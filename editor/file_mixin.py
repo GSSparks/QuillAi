@@ -40,9 +40,27 @@ class FileMixin:
             try:
                 content  = Path(file_path).read_text(encoding="utf-8")
                 filename = os.path.basename(file_path)
-                editor_to_focus = self.add_new_tab(filename, content, file_path)
-                self._apply_editor_mode(editor_to_focus,
-                                        os.path.splitext(file_path)[1].lower())
+                # If only one untitled empty tab exists, reuse it
+                pane = self.split_container.active_pane()
+                if pane.count() == 1:
+                    only = pane.widget(0)
+                    if (getattr(only, "file_path", None) is None
+                            and only.toPlainText().strip() == ""
+                            and pane.tabText(0).rstrip("*") in ("Untitled", "\u21a9 Untitled")):
+                        only.setPlainText(content)
+                        only.set_original_state(content)
+                        only.file_path = file_path
+                        pane.setTabText(0, filename)
+                        from editor.highlighter import registry
+                        ext = os.path.splitext(file_path)[1].lower()
+                        only.highlighter = registry.get_highlighter(only.document(), ext)
+                        editor_to_focus = only
+                        pane.setCurrentIndex(0)
+                if not editor_to_focus:
+                    editor_to_focus = self.add_new_tab(filename, content, file_path)
+                if editor_to_focus:
+                    self._apply_editor_mode(editor_to_focus,
+                                            os.path.splitext(file_path)[1].lower())
             except Exception as e:
                 print(f"Could not open file: {e}")
                 return
