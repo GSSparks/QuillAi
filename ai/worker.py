@@ -181,14 +181,12 @@ Rules:
 
         else:
             wiki_prefix = wiki + "\n\n" if wiki else ""
-            return [
-                {
-                    "role": "system",
-                    "content": "Return ONLY the missing code at the cursor. No markdown.",
-                },
-                {
-                    "role": "user",
-                    "content": f"""
+            return (
+                "Return ONLY the missing code at the cursor. No markdown.",
+                [
+                    {
+                        "role": "user",
+                        "content": f"""
 <context_before>
 {wiki_prefix}{before}
 </context_before>
@@ -199,8 +197,9 @@ Rules:
 Only output the exact missing code between contexts.
 Do NOT repeat any code from context_after.
 """,
-                },
-            ]
+                    },
+                ]
+            )
 
     def _detect_language(self) -> str:
         context = (self.prompt + self.editor_text).lower()
