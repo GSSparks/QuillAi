@@ -1,3 +1,20 @@
+"""
+context_engine.py
+
+This module implements the ContextEngine class, which is responsible for building and managing the context required for AI-powered features in the code editor. The ContextEngine analyzes user input, active code, open files, cursor position, and language server protocol (LSP) data to generate a relevant context for code completion, intent detection, symbol extraction, and cross-file reasoning.
+
+Key responsibilities:
+- Build and assemble context from active code, user text, open tabs, LSP diagnostics, and repository mapping for injection into AI prompts.
+- Detect user intent from natural language input.
+- Extract relevant symbols (functions, classes) from code via AST analysis.
+- Expand function context to include called functions, cross-file dependencies, and imports.
+- Parse and resolve import statements and provide a windowed view of code around the cursor for focused context.
+- Search the project for files and symbols relevant to a given query.
+- Interface with memory management and settings to optimize token usage.
+
+This module is central to the application's AI workflow, providing structured code and project context to backend models for enhanced code intelligence and assistance.
+"""
+
 import ast
 import os
 
