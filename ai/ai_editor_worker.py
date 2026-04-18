@@ -35,20 +35,33 @@ def wants_editor_write(text: str) -> bool:
     t = text.lower().strip()
     # Must have a write verb
     has_verb = bool(EDITOR_WRITE_TRIGGERS.search(t))
-    # Must reference a specific symbol or location — not a whole-file request
-    has_specific_target = any(w in t for w in [
-        'here', 'above', 'below', 'after', 'before',
-        'at the top', 'at the bottom', 'at line',
-    ]) or bool(_re.search(
-        r'(?:to|for|in)\s+(?:the\s+)?(?:def\s+|class\s+)?[\w_]{3,}\s*(?:function|method|class)',
-        t
-    ))
+    if not has_verb:
+        return False
     # Exclude whole-file requests
     is_whole_file = any(w in t for w in [
         'this file', 'the file', 'this script', 'the script',
-        'this module', 'the module', 'ghost_editor', '.py script',
+        'this module', 'the module', '.py script', '.py file',
     ])
-    return has_verb and has_specific_target and not is_whole_file
+    if is_whole_file:
+        return False
+    # Exclude explanation/analysis requests
+    is_question = any(w in t for w in [
+        'what does', 'how does', 'explain', 'why does',
+        'what is', 'how is', 'tell me', 'show me',
+        'what are', 'list all', 'find all', 'search',
+    ])
+    if is_question:
+        return False
+    # Has a specific target: location word OR a symbol name
+    has_location = any(w in t for w in [
+        'here', 'above', 'below', 'after', 'before',
+        'at the top', 'at the bottom', 'at line',
+    ])
+    has_symbol = bool(_re.search(
+        r'(?:to|for|in|into)\s+(?:the\s+)?(?:def\s+|class\s+)?[\w_]{2,}',
+        t
+    ))
+    return has_location or has_symbol
 
 
 class AIEditorWorker(QObject):
